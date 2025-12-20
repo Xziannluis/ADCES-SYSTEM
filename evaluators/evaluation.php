@@ -556,9 +556,20 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 </div>
 
                                 <div class="d-flex justify-content-center">
-                                    <button type="button" class="btn" style="color: white; background-color: #31b5c9ff;">
+                                    <button
+                                        type="button"
+                                        id="generateAI"
+                                        class="btn"
+                                        style="color: white; background-color: #31b5c9ff;"
+                                    >
                                         <i class="fas fa-magic me-2"></i> Generate AI Recommendation
                                     </button>
+                                </div>
+
+                                <div class="mt-2" id="aiDebugPanel" style="display:none; max-width: 900px; margin: 0 auto;">
+                                    <div class="alert alert-info py-2 mb-0" style="font-size: 0.9rem;">
+                                        <strong>AI status:</strong> <span id="aiDebugText">Idle</span>
+                                    </div>
                                 </div>
 
                                 
@@ -566,23 +577,17 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 <div class="row mt-4">
                                     <div class="col-md-6">
                                         <div class="input-group">
-                                            <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="border-color: #ccc;">
+                                            <span class="input-group-text" style="border-color: #ccc; background: #fff; font-weight: 600;">
                                                 STRENGTHS:
-                                            </button>
-                                            <ul class="dropdown-menu">
-                                                <li><a class="dropdown-item">*AI COMMENTS*</a></li>
-                                            </ul>
+                                            </span>
                                             <textarea class="form-control" id="strengths" name="strengths" rows="3" placeholder="List the teacher's strengths observed during the evaluation"></textarea>
                                         </div>
                                     </div>
                                     <div class="col-md-6">
                                         <div class="input-group">
-                                            <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="border-color: #ccc;">
+                                            <span class="input-group-text" style="border-color: #ccc; background: #fff; font-weight: 600;">
                                                 AREAS FOR IMPROVEMENT:
-                                            </button>
-                                            <ul class="dropdown-menu">
-                                                <li><a class="dropdown-item">*AI COMMENTS*</a></li>
-                                            </ul>
+                                            </span>
                                             <textarea class="form-control" id="improvementAreas" name="improvement_areas" rows="3" placeholder="List areas where the teacher can improve"></textarea>
                                         </div>
                                     </div>
@@ -591,23 +596,17 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 <div class="row mt-3">
                                     <div class="col-md-6">
                                         <div class="input-group">
-                                            <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="border-color: #ccc;">
+                                            <span class="input-group-text" style="border-color: #ccc; background: #fff; font-weight: 600;">
                                                 RECOMMENDATIONS:
-                                            </button>
-                                            <ul class="dropdown-menu">
-                                                <li><a class="dropdown-item">*AI COMMENTS*</a></li>
-                                            </ul>
+                                            </span>
                                             <textarea class="form-control" id="recommendations" name="recommendations" rows="3" placeholder="Provide specific recommendations for improvement"></textarea>
                                         </div>
                                     </div>
                                         <div class="col-md-6">
                                             <div class="input-group">
-                                                <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" style="border-color: #ccc;">
+                                                <span class="input-group-text" style="border-color: #ccc; background: #fff; font-weight: 600;">
                                                     AGREEMENT:
-                                                </button>
-                                                <ul class="dropdown-menu">
-                                                    <li><a class="dropdown-item">*AI COMMENTS*</a></li>
-                                                </ul>
+                                                </span>
                                             <textarea class="form-control" id="agreement" name="agreement" rows="3" placeholder="State agreement or additional notes"></textarea>
                                             </div>
                                         </div>
@@ -774,6 +773,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     e.target.name.includes('assessment')
                 )) {
                     calculateAverages();
+
+                    // Auto-generate disabled to prevent stacking multiple pending AI requests.
+                    // Use the "Generate AI Recommendation" button instead.
                 }
             });
 
@@ -786,6 +788,14 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             document.getElementById('downloadPDF').addEventListener('click', function() {
                 exportToPDF();
             });
+
+            // Generate AI button
+            const genBtn = document.getElementById('generateAI');
+            if (genBtn) {
+                genBtn.addEventListener('click', function() {
+                    generateAINarratives({ force: true, showAlerts: true });
+                });
+            }
         }
 
         function startEvaluation(teacherId) {
@@ -1288,7 +1298,184 @@ if($_POST && isset($_POST['submit_evaluation'])) {
         function initializeEvaluationForm() {
             setupAutoSave();
             calculateAverages();
-            generateAIRecommendations();
+            // Auto-generate narrative feedback (Strengths / Improvements / Recommendations)
+            generateAINarratives({ force: false, showAlerts: false });
+        }
+
+    let aiGenerateTimeout;
+    let aiLastFailed = false;
+    let aiInFlight = false;
+
+        async function generateAINarratives(options = {}) {
+            const { force = false, showAlerts = false } = options;
+
+            // Prevent stacking multiple pending requests (seen in Network panel)
+            if (aiInFlight) {
+                if (showAlerts) alert('AI generation is already running. Please wait...');
+                return;
+            }
+
+            // If the last AI call failed, don't keep auto-calling unless user forces it.
+            if (!force && aiLastFailed) return;
+
+            // Fields we fill
+            const strengthsEl = document.getElementById('strengths');
+            const improvementsEl = document.getElementById('improvementAreas');
+            const recommendationsEl = document.getElementById('recommendations');
+            const genBtn = document.getElementById('generateAI');
+            const aiDebugPanel = document.getElementById('aiDebugPanel');
+            const aiDebugText = document.getElementById('aiDebugText');
+
+            const setAIDebug = (msg, variant = 'info') => {
+                if (!aiDebugPanel || !aiDebugText) return;
+                aiDebugPanel.style.display = 'block';
+                const alertEl = aiDebugPanel.querySelector('.alert');
+                if (alertEl) {
+                    alertEl.className = `alert alert-${variant} py-2 mb-0`;
+                }
+                aiDebugText.textContent = msg;
+            };
+
+            // If the form doesn't have these fields, do nothing.
+            if (!strengthsEl || !improvementsEl || !recommendationsEl) return;
+
+            // Gather current form state
+            const payload = getFormData();
+
+            // Only generate if we have at least some numeric signal.
+            // Note: ratings are only added to payload when a radio is checked.
+            const hasAnyRating = ['communications', 'management', 'assessment'].some(cat => {
+                const obj = payload.ratings && payload.ratings[cat];
+                return obj && Object.keys(obj).length > 0;
+            });
+
+            if (!hasAnyRating && !payload.faculty_name && !payload.subject_observed) {
+                return;
+            }
+
+            const isPlaceholderDots = (v) => {
+                const t = (v || '').trim();
+                if (!t) return true;
+                // Treat punctuation-only placeholders (e.g. '...', '.....', '---', '…') as empty
+                const withoutPunct = t.replace(/[\s\.\-•—_…]+/g, '');
+                return withoutPunct.length === 0;
+            };
+
+            // Don't overwrite evaluator-written narrative unless forced.
+            // But do overwrite placeholder dots.
+            if (!force) {
+                const existingNarrativeRaw = (strengthsEl.value || '').trim() || (improvementsEl.value || '').trim() || (recommendationsEl.value || '').trim();
+                if (existingNarrativeRaw && !isPlaceholderDots(existingNarrativeRaw)) return;
+            }
+
+            // If user explicitly clicks Generate, require at least some ratings.
+            if (force && !hasAnyRating) {
+                if (showAlerts) alert('Please select at least one rating before generating AI feedback.');
+                return;
+            }
+
+            const originalBtnHtml = genBtn ? genBtn.innerHTML : '';
+            if (genBtn) {
+                genBtn.disabled = true;
+                genBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Generating...';
+            }
+            setAIDebug('Sending request to AI service...', 'info');
+
+            const controller = new AbortController();
+            const timeoutMs = 120000; // 120s
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+            try {
+                aiInFlight = true;
+                const res = await fetch('../controllers/ai_generate.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal
+                });
+
+                const data = await res.json();
+                console.log('[AI] proxy response:', data);
+                if (!data.success) {
+                    console.warn('AI generation failed:', data);
+                    aiLastFailed = true;
+                    setAIDebug(data.message || 'AI generation failed.', 'warning');
+                    if (showAlerts) {
+                        // Show the most useful details available from the PHP proxy
+                        const parts = [];
+                        if (data.message) parts.push(data.message);
+                        if (data.ai_url) parts.push(`URL: ${data.ai_url}`);
+                        if (data.status) parts.push(`Status: ${data.status}`);
+                        if (data.error) parts.push(`Error: ${data.error}`);
+                        alert(parts.length ? parts.join('\n') : 'AI generation failed.');
+                    }
+                    return;
+                }
+
+                aiLastFailed = false;
+                setAIDebug('AI responded successfully.', 'success');
+
+                // The PHP proxy returns {success:true, data:{...python...}}
+                // But tolerate alt shapes in case we ever call the python endpoint directly.
+                const out = (data && data.data && typeof data.data === 'object') ? data.data : (data || {});
+                console.log('[AI] model output:', out);
+
+                // Tolerate alternate key names (older versions / minor python changes)
+                const strengthsText = (typeof out.strengths === 'string') ? out.strengths
+                    : (typeof out.strength === 'string') ? out.strength
+                    : (typeof out.strengths_text === 'string') ? out.strengths_text
+                    : '';
+                const improvementsText = (typeof out.improvement_areas === 'string') ? out.improvement_areas
+                    : (typeof out.improvements === 'string') ? out.improvements
+                    : (typeof out.areas_for_improvement === 'string') ? out.areas_for_improvement
+                    : (typeof out.areas_of_improvement === 'string') ? out.areas_of_improvement
+                    : '';
+                const recommendationsText = (typeof out.recommendations === 'string') ? out.recommendations
+                    : (typeof out.recommendation === 'string') ? out.recommendation
+                    : (typeof out.suggestions === 'string') ? out.suggestions
+                    : '';
+
+                if (!strengthsText && !improvementsText && !recommendationsText) {
+                    setAIDebug('AI response missing expected text fields (check Console -> [AI] logs).', 'warning');
+                }
+
+                // Only overwrite non-empty evaluator-written text unless forced.
+                // But always overwrite placeholders.
+                const canWrite = (el) => force || isPlaceholderDots(el.value);
+                if (strengthsText.trim() && canWrite(strengthsEl)) strengthsEl.value = strengthsText.trim();
+                if (improvementsText.trim() && canWrite(improvementsEl)) improvementsEl.value = improvementsText.trim();
+                if (recommendationsText.trim() && canWrite(recommendationsEl)) recommendationsEl.value = recommendationsText.trim();
+
+                // If we still have dots after a successful call, explain why.
+                if (showAlerts) {
+                    const stillDots = isPlaceholderDots(strengthsEl.value) && isPlaceholderDots(improvementsEl.value) && isPlaceholderDots(recommendationsEl.value);
+                    const allEmpty = !strengthsText.trim() && !improvementsText.trim() && !recommendationsText.trim();
+                    if (stillDots && allEmpty) {
+                        setAIDebug('AI returned empty text. Add indicator comments and try again.', 'warning');
+                        alert('AI returned empty text. Please add at least 1-2 comments on the indicators, then click Generate again. (Check Console -> [AI] logs for details.)');
+                    }
+                }
+            } catch (err) {
+                console.warn('AI generation error:', err);
+                if (err && (err.name === 'AbortError')) {
+                    setAIDebug('AI request timed out. Try again (or wait for the AI service to finish loading models).', 'warning');
+                    if (showAlerts) {
+                        alert('AI request timed out after 120 seconds. Please try again.');
+                    }
+                } else {
+                    setAIDebug('AI request failed. Check if Python service is running.', 'danger');
+                }
+                if (showAlerts) {
+                    alert('AI generation error. Make sure the Python AI service is running (http://127.0.0.1:8008).');
+                }
+            } finally {
+                clearTimeout(timeoutId);
+                aiInFlight = false;
+                if (genBtn) {
+                    genBtn.disabled = false;
+                    genBtn.innerHTML = originalBtnHtml;
+                }
+            }
         }
 
         // Enhanced teacher selection with search

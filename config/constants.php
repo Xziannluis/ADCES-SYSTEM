@@ -18,4 +18,8 @@ define('DEPT_CTHM', 'CTHM');
 define('DEPT_ELEM', 'Elementary');
 define('DEPT_JHS', 'Junior High');
 define('DEPT_SHS', 'Senior High');
+
+// App settings
+// Set to true only during local debugging.
+define('APP_DEBUG', false);
 ?>

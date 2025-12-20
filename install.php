@@ -35,7 +35,11 @@ try {
 }
 
 // Read and execute SQL file
-$sql_file = __DIR__ . '/database_complete.sql';
+// (organized under database/seed, but keep a fallback for older checkouts)
+$sql_file = __DIR__ . '/database/seed/database_complete.sql';
+if (!file_exists($sql_file)) {
+    $sql_file = __DIR__ . '/database_complete.sql';
+}
 if (!file_exists($sql_file)) {
     die("<h2 style='color: red;'>✗ database_complete.sql not found!</h2>");
 }

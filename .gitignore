@@ -1,0 +1,20 @@
+# Local editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Uploads (user data)
+/uploads/
+
+# Logs
+*.log
+
+# Optional: keep these if you deploy to production
+# /tests/
+# /scripts/
