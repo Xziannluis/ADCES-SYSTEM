@@ -175,9 +175,9 @@ RECOMMENDATIONS: <your paragraph>
 def _build_ratings_only_prompt(payload: GenerateRequest) -> str:
     """Prompt used when you want feedback purely from radio-button ratings (no comments)."""
     avg = payload.averages
-    teacher = payload.faculty_name or "The teacher"
-    subject = payload.subject_observed or "(not specified)"
-    obs_type = payload.observation_type or "(not specified)"
+    teacher = (payload.faculty_name or "").strip() or "The teacher"
+    subject = (payload.subject_observed or "").strip() or "(not specified)"
+    obs_type = (payload.observation_type or "").strip() or "(not specified)"
 
     # Convert numeric ratings into qualitative descriptors (so the model writes words, not echoes numbers)
     def band(x: float) -> str:
@@ -191,23 +191,65 @@ def _build_ratings_only_prompt(payload: GenerateRequest) -> str:
             return "Below satisfactory"
         return "Needs improvement"
 
-    return (
-        "You are an experienced academic evaluator. Write a human-like evaluation narrative based ONLY on the ratings.\n"
-        "Do NOT repeat raw scores as your output. Do NOT write fragments like 'Communication = 5'.\n"
-        "Write complete sentences in a professional tone.\n\n"
-        f"Teacher: {teacher}\n"
-        f"Subject observed: {subject}\n"
-        f"Observation type: {obs_type}\n\n"
-        "Performance levels:\n"
-        f"- Communication: {band(avg.communications)}\n"
-        f"- Classroom management: {band(avg.management)}\n"
-        f"- Assessment: {band(avg.assessment)}\n"
-        f"- Overall: {band(avg.overall)}\n\n"
-        "Write exactly three labeled paragraphs (2-4 sentences each):\n"
-        "STRENGTHS: Describe likely strengths consistent with the ratings.\n"
-        "AREAS_FOR_IMPROVEMENT: Mention realistic improvements consistent with the lowest domain.\n"
-        "RECOMMENDATIONS: Provide actionable professional-growth steps.\n"
-    )
+    # Determine weakest/strongest domains to drive "accuracy" from ratings-only
+    domains = {
+        "Communication & instruction": float(avg.communications or 0),
+        "Classroom management & learning environment": float(avg.management or 0),
+        "Assessment & feedback practices": float(avg.assessment or 0),
+    }
+    weakest = min(domains, key=domains.get)
+    strongest = max(domains, key=domains.get)
+
+    overall_level = band(float(avg.overall or 0))
+
+    # Domain-specific “evidence” lines (still ratings-only, but more grounded than generic text)
+    domain_anchors = {
+        "Communication & instruction": {
+            "strength": "clear lesson delivery, purposeful questioning, and checks for understanding",
+            "improve": "clarifying directions, pacing transitions, and increasing student talk time",
+            "reco": "use more formative questioning strategies (wait time, probing questions) and quick checks (thumbs, exit prompts)",
+        },
+        "Classroom management & learning environment": {
+            "strength": "productive routines, respectful classroom culture, and smooth lesson flow",
+            "improve": "consistent routines, proactive behavior supports, and maximizing instructional time",
+            "reco": "tighten procedures for transitions and use positive reinforcement with clear expectations and monitoring",
+        },
+        "Assessment & feedback practices": {
+            "strength": "aligned assessment tasks, timely feedback, and monitoring of learner progress",
+            "improve": "using varied assessment evidence and timely, specific feedback that guides next steps",
+            "reco": "embed short formative checks and provide actionable feedback aligned to learning goals and criteria",
+        },
+    }
+
+    s_anchor = domain_anchors[strongest]["strength"]
+    w_improve = domain_anchors[weakest]["improve"]
+    w_reco = domain_anchors[weakest]["reco"]
+
+    # IMPORTANT: Avoid bracket placeholders. Provide strict output format + “do not output numbers”.
+    return f"""You are an academic evaluator writing professional teacher feedback based ONLY on rating results.
+Do not invent specific events, names of students, or activities that were not observed.
+Do not output scores, fractions, or number-only statements. Do NOT write things like "Communication = 5".
+Write in a constructive, human tone.
+
+Context:
+- Teacher: {teacher}
+- Subject observed: {subject}
+- Observation type: {obs_type}
+- Overall performance level: {overall_level}
+- Strongest domain: {strongest} ({band(domains[strongest])})
+- Priority for improvement: {weakest} ({band(domains[weakest])})
+
+Writing requirements:
+- Write exactly THREE paragraphs, each 2–4 sentences.
+- Use complete sentences.
+- Include BOTH strengths and next steps.
+- Ensure "Areas for Improvement" and "Recommendations" focus primarily on the priority (weakest) domain.
+
+Output format (use these exact labels, one per line):
+STRENGTHS: <2–4 sentences highlighting strengths, especially {strongest}, using wording like: {s_anchor}. Do not mention scores.>
+AREAS_FOR_IMPROVEMENT: <2–4 sentences focusing on {weakest}, using wording like: {w_improve}. Do not mention scores.>
+RECOMMENDATIONS: <2–4 sentences with actionable steps focused on {weakest}, using wording like: {w_reco}. Do not mention scores.>
+"""
 
 
 def _flatten_comments(payload: GenerateRequest) -> List[str]:
