@@ -2,11 +2,13 @@ import os
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 import random
+import traceback
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
+from fastapi import HTTPException
 
 # NOTE:
 # This service is designed to run locally (same machine as XAMPP).
@@ -30,6 +32,21 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
         content={
             "message": "Request validation failed",
             "detail": exc.errors(),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    # Always return JSON so PHP/JS won't say "invalid JSON"
+    print("[500] Unhandled error on", request.url.path)
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={
+            "message": "AI service crashed",
+            "error": str(exc),
+            "path": request.url.path,
         },
     )
 
@@ -173,14 +190,17 @@ RECOMMENDATIONS: <your paragraph>
 
 
 def _build_ratings_only_prompt(payload: GenerateRequest) -> str:
-    """Prompt used when you want feedback purely from radio-button ratings (no comments)."""
+    """
+    Ratings-only prompt (no comments).
+    Goal: produce human-like, professional paragraphs WITHOUT echoing numeric scores.
+    """
     avg = payload.averages
     teacher = (payload.faculty_name or "").strip() or "The teacher"
-    subject = (payload.subject_observed or "").strip() or "(not specified)"
-    obs_type = (payload.observation_type or "").strip() or "(not specified)"
+    subject = (payload.subject_observed or "").strip() or "the observed class"
+    obs_type = (payload.observation_type or "").strip() or "classroom observation"
 
-    # Convert numeric ratings into qualitative descriptors (so the model writes words, not echoes numbers)
     def band(x: float) -> str:
+        x = float(x or 0)
         if x >= 4.6:
             return "Excellent"
         if x >= 3.6:
@@ -191,7 +211,132 @@ def _build_ratings_only_prompt(payload: GenerateRequest) -> str:
             return "Below satisfactory"
         return "Needs improvement"
 
-    # Determine weakest/strongest domains to drive "accuracy" from ratings-only
+    # Map domains -> scores
+    domains = {
+        "Communication & instruction": float(avg.communications or 0),
+        "Classroom management & learning environment": float(avg.management or 0),
+        "Assessment & feedback practices": float(avg.assessment or 0),
+    }
+    weakest = min(domains, key=domains.get)
+    strongest = max(domains, key=domains.get)
+    overall_level = band(avg.overall)
+
+    # Anchors: used as "safe, non-invented" evidence phrases
+    anchors = {
+        "Communication & instruction": {
+            "strength": [
+                "clear communication of lesson expectations",
+                "effective questioning and checking for understanding",
+                "appropriate pacing and explanation of key concepts",
+            ],
+            "improve": [
+                "increasing student talk time and active participation",
+                "strengthening clarity of directions and transitions",
+                "using more varied engagement strategies during instruction",
+            ],
+            "reco": [
+                "use structured questioning routines (wait time, probing, follow-up questions)",
+                "add quick checks for understanding (exit prompts, mini-whiteboards, short quizzes)",
+                "plan engagement checkpoints (think-pair-share, cold-calling with support, guided practice)",
+            ],
+        },
+        "Classroom management & learning environment": {
+            "strength": [
+                "maintaining a respectful learning environment",
+                "supporting lesson flow through routines and classroom organization",
+                "promoting a focused classroom atmosphere",
+            ],
+            "improve": [
+                "strengthening routines for transitions and task completion",
+                "using proactive behavior supports and consistent expectations",
+                "maximizing instructional time through clearer procedures",
+            ],
+            "reco": [
+                "establish and rehearse clear routines for entry, transitions, and group tasks",
+                "use monitoring and positive reinforcement aligned with expectations",
+                "tighten lesson structure with time cues and clear task directions",
+            ],
+        },
+        "Assessment & feedback practices": {
+            "strength": [
+                "monitoring learner progress through appropriate assessment practices",
+                "aligning tasks with intended learning goals",
+                "providing opportunities to demonstrate understanding",
+            ],
+            "improve": [
+                "making assessment evidence more frequent and instructional (formative)",
+                "strengthening the clarity and usefulness of feedback for next steps",
+                "using success criteria so learners understand quality expectations",
+            ],
+            "reco": [
+                "embed short formative checks aligned to objectives throughout the lesson",
+                "use rubrics/success criteria and give specific feedback tied to those criteria",
+                "include opportunities for corrections or revision after feedback",
+            ],
+        },
+    }
+
+    s_phrases = anchors[strongest]["strength"]
+    w_improve_phrases = anchors[weakest]["improve"]
+    w_reco_phrases = anchors[weakest]["reco"]
+
+    # IMPORTANT:
+    # - Do NOT show numeric ratings anywhere (models tend to copy them).
+    # - Use domain levels (Excellent / Satisfactory...) as the only “rating signal”.
+    return f"""
+You are an academic evaluator writing a professional teacher evaluation narrative based ONLY on domain ratings.
+
+Hard rules:
+- Do NOT output any numbers, fractions, or score summaries.
+- Do NOT write expressions like "=" or "/5".
+- Do NOT include headings other than the required labels.
+- Do NOT invent specific classroom events. Stay general and professional.
+- Write in complete sentences (human-like), constructive and respectful.
+
+Context:
+- Teacher: {teacher}
+- Subject observed: {subject}
+- Observation type: {obs_type}
+- Overall level: {overall_level}
+- Strongest domain: {strongest} ({band(domains[strongest])})
+- Priority for improvement: {weakest} ({band(domains[weakest])})
+
+Writing requirements:
+- Write exactly THREE paragraphs.
+- If style is "short": 2 sentences per paragraph.
+- If style is "standard": 3–4 sentences per paragraph.
+- If style is "detailed": 5–6 sentences per paragraph.
+- Strengths must highlight the strongest domain using phrases like: {", ".join(s_phrases[:2])}.
+- Areas for improvement and recommendations must focus mainly on the priority domain using phrases like: {", ".join(w_improve_phrases[:2])} and actions like: {", ".join(w_reco_phrases[:2])}.
+- Do not mention "scores" or "ratings"; express performance using the domain levels instead.
+
+Output format (use these exact labels, one per line):
+STRENGTHS: <paragraph>
+AREAS_FOR_IMPROVEMENT: <paragraph>
+RECOMMENDATIONS: <paragraph>
+""".strip()
+
+
+def _build_retry_prompt(payload: GenerateRequest, similar_texts: List[str]) -> str:
+    """
+    Even stricter retry prompt.
+    Avoid putting numbers near the model to reduce numeric echo.
+    """
+    avg = payload.averages
+
+    def band(x: float) -> str:
+        x = float(x or 0)
+        if x >= 4.6:
+            return "Excellent"
+        if x >= 3.6:
+            return "Very satisfactory"
+        if x >= 2.9:
+            return "Satisfactory"
+        if x >= 1.8:
+            return "Below satisfactory"
+        return "Needs improvement"
+
+    # Determine lowest/highest domain without showing numbers
     domains = {
         "Communication & instruction": float(avg.communications or 0),
         "Classroom management & learning environment": float(avg.management or 0),
@@ -200,117 +345,52 @@ def _build_ratings_only_prompt(payload: GenerateRequest) -> str:
     weakest = min(domains, key=domains.get)
     strongest = max(domains, key=domains.get)
 
-    overall_level = band(float(avg.overall or 0))
+    teacher = (payload.faculty_name or "").strip() or "The teacher"
 
-    # Domain-specific “evidence” lines (still ratings-only, but more grounded than generic text)
-    domain_anchors = {
-        "Communication & instruction": {
-            "strength": "clear lesson delivery, purposeful questioning, and checks for understanding",
-            "improve": "clarifying directions, pacing transitions, and increasing student talk time",
-            "reco": "use more formative questioning strategies (wait time, probing questions) and quick checks (thumbs, exit prompts)",
-        },
-        "Classroom management & learning environment": {
-            "strength": "productive routines, respectful classroom culture, and smooth lesson flow",
-            "improve": "consistent routines, proactive behavior supports, and maximizing instructional time",
-            "reco": "tighten procedures for transitions and use positive reinforcement with clear expectations and monitoring",
-        },
-        "Assessment & feedback practices": {
-            "strength": "aligned assessment tasks, timely feedback, and monitoring of learner progress",
-            "improve": "using varied assessment evidence and timely, specific feedback that guides next steps",
-            "reco": "embed short formative checks and provide actionable feedback aligned to learning goals and criteria",
-        },
-    }
+    return f"""
+Write a professional, human-like teacher evaluation narrative based ONLY on rating levels.
 
-    s_anchor = domain_anchors[strongest]["strength"]
-    w_improve = domain_anchors[weakest]["improve"]
-    w_reco = domain_anchors[weakest]["reco"]
-
-    # IMPORTANT: Avoid bracket placeholders. Provide strict output format + “do not output numbers”.
-    return f"""You are an academic evaluator writing professional teacher feedback based ONLY on rating results.
-Do not invent specific events, names of students, or activities that were not observed.
-Do not output scores, fractions, or number-only statements. Do NOT write things like "Communication = 5".
-Write in a constructive, human tone.
-
-Context:
-- Teacher: {teacher}
-- Subject observed: {subject}
-- Observation type: {obs_type}
-- Overall performance level: {overall_level}
-- Strongest domain: {strongest} ({band(domains[strongest])})
-- Priority for improvement: {weakest} ({band(domains[weakest])})
-
-Writing requirements:
-- Write exactly THREE paragraphs, each 2–4 sentences.
+Rules:
+- NO numbers, NO "=" signs, NO "/5", NO score recap.
+- Do not invent details; keep statements general but specific to domains.
 - Use complete sentences.
-- Include BOTH strengths and next steps.
-- Ensure "Areas for Improvement" and "Recommendations" focus primarily on the priority (weakest) domain.
 
-Output format (use these exact labels, one per line):
-STRENGTHS: <2–4 sentences highlighting strengths, especially {strongest}, using wording like: {s_anchor}. Do not mention scores.>
-AREAS_FOR_IMPROVEMENT: <2–4 sentences focusing on {weakest}, using wording like: {w_improve}. Do not mention scores.>
-RECOMMENDATIONS: <2–4 sentences with actionable steps focused on {weakest}, using wording like: {w_reco}. Do not mention scores.>
-"""
+Information you may use:
+- Overall level: {band(payload.averages.overall)}
+- Strongest domain: {strongest} ({band(domains[strongest])})
+- Priority domain: {weakest} ({band(domains[weakest])})
+- Teacher: {teacher}
 
-
-def _flatten_comments(payload: GenerateRequest) -> List[str]:
-    texts: List[str] = []
-    for cat, items in (payload.ratings or {}).items():
-        if items is None:
-            continue
-
-        # The PHP/JS may send ratings per category as:
-        # - dict: {"0": {rating, comment}, "1": {rating, comment}}
-        # - list: [{rating, comment}, {rating, comment}, ...]
-        if isinstance(items, dict):
-            iterable = list(items.items())
-        elif isinstance(items, list):
-            iterable = list(enumerate(items))
-        else:
-            # Unknown container shape; skip
-            continue
-
-        for k, v in iterable:
-            item = _coerce_rating_item(v)
-            if not item:
-                continue
-            if item.comment and item.comment.strip():
-                texts.append(f"{cat} item {k}: rating={item.rating}, comment={item.comment.strip()}")
-            else:
-                # include at least the rating as signal
-                texts.append(f"{cat} item {k}: rating={item.rating}")
-    return texts
+Return EXACTLY three labeled paragraphs:
+STRENGTHS: 2–6 sentences depending on the requested style.
+AREAS_FOR_IMPROVEMENT: 2–6 sentences.
+RECOMMENDATIONS: 2–6 sentences.
+""".strip()
 
 
-def _retrieve_top_k(sbert, texts: List[str], k: int = 10) -> List[str]:
-    """Very small retrieval step: pick representative comments/ratings."""
-    if not texts:
-        return []
+def _generate_text(tok, model, prompt: str, style: str = "standard") -> str:
+    """
+    Generation tuned for 'human' paragraphs.
+    Use a little sampling for natural phrasing, but keep repetition controls.
+    """
+    style = (style or "standard").strip().lower()
+    if style not in {"short", "standard", "detailed"}:
+        style = "standard"
 
-    import numpy as np
+    max_new = 180 if style == "short" else (260 if style == "standard" else 360)
 
-    emb = sbert.encode(texts, normalize_embeddings=True)
-    centroid = np.mean(emb, axis=0)
-    scores = emb @ centroid
-    idx = np.argsort(scores)[::-1][: min(k, len(texts))]
-    return [texts[i] for i in idx]
-
-
-def _generate_text(tok, model, prompt: str) -> str:
     inputs = tok(prompt, return_tensors="pt", truncation=True, max_length=1024)
-    # Optimized parameters for flan-t5-base to generate coherent, professional feedback:
-    # - max_new_tokens: 300 to allow full paragraphs for all 3 sections
-    # - num_beams: 4 for better quality (beam search)
-    # - length_penalty: 1.2 to encourage complete sentences
-    # - no_repeat_ngram_size: 3 to avoid repetition
-    # - early_stopping: True to stop when all beams finish
+
     out = model.generate(
         **inputs,
-        max_new_tokens=300,
-        num_beams=4,
-        length_penalty=1.2,
-        no_repeat_ngram_size=3,
+        max_new_tokens=max_new,
+        do_sample=True,
+        temperature=0.7,         # more natural than beam-only
+        top_p=0.9,
+        num_beams=1,             # sampling mode
+        repetition_penalty=1.12,
+        no_repeat_ngram_size=4,
         early_stopping=True,
-        do_sample=False,  # Deterministic with beam search
     )
     return tok.decode(out[0], skip_special_tokens=True)
 
@@ -321,15 +401,13 @@ def _looks_like_bad_generation(text: str) -> bool:
         return True
 
     t = text.strip()
-    if len(t) < 80:
+    if len(t) < 120:
         return True
 
-    # model sometimes returns a single bullet (e.g. '- Communication skills: 5.0')
-    if t.startswith("-") and "\n" not in t:
-        return True
-
-    # numeric-fragment outputs (what we see in the UI screenshots)
     lower = t.lower()
+
+    # If it contains lots of numeric/score patterns, it's not acceptable.
+    # (We now forbid numbers entirely in ratings-only mode.)
     bad_markers = [
         "communication =",
         "management =",
@@ -340,11 +418,18 @@ def _looks_like_bad_generation(text: str) -> bool:
         "assessment=",
         "overall=",
         "/5",
+        "out of 5",
+        "rating:",
+        "score:",
+        "scores:",
     ]
-    if any(m in lower for m in bad_markers) and len(t) < 300:
+    if any(m in lower for m in bad_markers):
         return True
 
-    # If it doesn't contain any of our section labels, assume it missed instructions.
+    # Contains digits -> likely score echo
+    if any(ch.isdigit() for ch in t):
+        return True
+
     has_labels = ("STRENGTHS:" in t) and ("AREAS_FOR_IMPROVEMENT:" in t) and ("RECOMMENDATIONS:" in t)
     if not has_labels:
         return True
@@ -352,335 +437,225 @@ def _looks_like_bad_generation(text: str) -> bool:
     return False
 
 
-def _build_retry_prompt(payload: GenerateRequest, similar_texts: List[str]) -> str:
-    """A shorter, more direct prompt that flan-t5-base tends to follow better."""
-    avg = payload.averages
+def _flatten_comments(req: GenerateRequest) -> List[str]:
+    """Normalize `req.ratings` into a flat list of evidence strings.
 
-    # keep only the plain comment text (avoid "cat item k: rating=..." which can cause copying)
-    comment_only: List[str] = []
-    for t in similar_texts[:8]:
-        # split off "comment=" style
-        if "comment=" in t:
-            comment_only.append(t.split("comment=", 1)[1].strip())
-        elif "comment:" in t:
-            comment_only.append(t.split("comment:", 1)[1].strip())
+    The PHP app may send each category as:
+    - dict of index -> {rating, comment}
+    - list of {rating, comment}
+    - list of scalars (rating-only)
+
+    We only treat non-empty comments as "real comments".
+    """
+    texts: List[str] = []
+    ratings = req.ratings or {}
+
+    for category, items in ratings.items():
+        if items is None:
+            continue
+
+        # Normalize to iterable of values
+        if isinstance(items, dict):
+            iterable = list(items.values())
+        elif isinstance(items, list):
+            iterable = items
         else:
-            # fall back to the raw text
-            comment_only.append(t)
+            iterable = [items]
 
-    evidence = "\n".join(f"- {c}" for c in comment_only if c) or "- No written comments provided."
+        for idx, raw in enumerate(iterable, 1):
+            ri = _coerce_rating_item(raw)
+            if not ri:
+                continue
 
-    # IMPORTANT: avoid patterns like "communication=5" which the model tends to echo.
-    return (
-        "Write a professional teacher evaluation narrative based on the scores and evidence. "
-        "Write in complete sentences (human-like). Do not output only numbers or score summaries.\n\n"
-        "Scores (1 to 5):\n"
-        f"- Communication: {avg.communications}\n"
-        f"- Management: {avg.management}\n"
-        f"- Assessment: {avg.assessment}\n"
-        f"- Overall: {avg.overall}\n\n"
-        "Evidence:\n"
-        f"{evidence}\n\n"
-        "Return EXACTLY three labeled paragraphs:\n"
-        "STRENGTHS: 2-4 sentences.\n"
-        "AREAS_FOR_IMPROVEMENT: 2-4 sentences.\n"
-        "RECOMMENDATIONS: 2-4 sentences.\n"
-    )
+            comment = (ri.comment or "").strip()
+            rating = ri.rating
+
+            if comment:
+                # include rating as context; prompt logic decides whether to use it
+                texts.append(f"{category} item {idx}: rating={rating}; comment={comment}")
+            else:
+                texts.append(f"{category} item {idx}: rating={rating}")
+
+    return texts
 
 
-def _parsed_missing_or_too_short(parsed: Dict[str, str]) -> bool:
-    s = (parsed.get("strengths") or "").strip()
-    i = (parsed.get("improvement_areas") or "").strip()
-    r = (parsed.get("recommendations") or "").strip()
-    # Require each section to have a reasonable length (avoid single fragments)
-    if len(s) < 60 or len(i) < 60 or len(r) < 60:
-        return True
-    return False
+def _retrieve_top_k(sbert, texts: List[str], k: int = 10) -> List[str]:
+    """Return top-k 'most relevant' texts.
+
+    In the absence of a query, the simplest robust behavior is to just
+    prioritize comment-bearing evidence and keep order stable.
+
+    NOTE: This intentionally doesn't rely on SBERT similarity to avoid runtime
+    issues when no comments exist or when models aren't available.
+    """
+    if not texts:
+        return []
+
+    with_comments = [t for t in texts if ("comment=" in t or "comment:" in t)]
+    without_comments = [t for t in texts if t not in with_comments]
+    ranked = with_comments + without_comments
+    return ranked[: max(0, int(k or 0))] if k else ranked
 
 
 def _parse_sections(text: str) -> Dict[str, str]:
-    # Robust-ish parsing for the expected labels
+    """Parse model output into the three expected sections.
+
+    Accepts small deviations but prefers the required labels.
+    """
     out = {"strengths": "", "improvement_areas": "", "recommendations": ""}
-    upper = text
-    marks = {
-        "strengths": "STRENGTHS:",
-        "improvement_areas": "AREAS_FOR_IMPROVEMENT:",
-        "recommendations": "RECOMMENDATIONS:",
+    if not text:
+        return out
+
+    # Normalize newlines and strip
+    t = text.replace("\r\n", "\n").strip()
+
+    # Find labeled lines (can contain extra spaces)
+    lines = [ln.strip() for ln in t.split("\n") if ln.strip()]
+
+    current_key: Optional[str] = None
+    buffer: List[str] = []
+
+    def flush():
+        nonlocal buffer, current_key
+        if current_key and buffer:
+            out[current_key] = " ".join(buffer).strip()
+        buffer = []
+
+    label_map = {
+        "STRENGTHS:": "strengths",
+        "AREAS_FOR_IMPROVEMENT:": "improvement_areas",
+        "AREAS FOR IMPROVEMENT:": "improvement_areas",
+        "RECOMMENDATIONS:": "recommendations",
     }
 
-    def pick(start: str, end: Optional[str]) -> str:
-        s = upper.find(start)
-        if s == -1:
-            return ""
-        s += len(start)
-        e = upper.find(end, s) if end else -1
-        chunk = upper[s:e].strip() if e != -1 else upper[s:].strip()
-        return chunk
+    for ln in lines:
+        upper = ln.upper()
+        matched = None
+        for lab, key in label_map.items():
+            if upper.startswith(lab):
+                matched = (lab, key)
+                break
 
-    out["strengths"] = pick(marks["strengths"], marks["improvement_areas"]) or ""
-    out["improvement_areas"] = pick(marks["improvement_areas"], marks["recommendations"]) or ""
-    out["recommendations"] = pick(marks["recommendations"], None) or ""
+        if matched:
+            flush()
+            _, key = matched
+            current_key = key
+            content = ln.split(":", 1)[1].strip() if ":" in ln else ""
+            if content:
+                buffer.append(content)
+        else:
+            # continuation of current section
+            if current_key:
+                buffer.append(ln)
 
-    # Fallback: if model didn't use section labels, try to split the output
-    if not (out["strengths"] or out["improvement_areas"] or out["recommendations"]):
-        # Split by sentences and distribute
-        sentences = [s.strip() for s in text.split('.') if s.strip()]
-        if len(sentences) >= 3:
-            out["strengths"] = sentences[0] + '.'
-            out["improvement_areas"] = sentences[1] + '.'
-            out["recommendations"] = ' '.join(sentences[2:]) + '.'
-        elif sentences:
-            out["recommendations"] = text.strip()
-    
-    # Final safety: ensure at least one field has meaningful content
+    flush()
+
+    # If labels weren't found at all, fall back to treating the whole as strengths.
     if not any(out.values()):
-        out["strengths"] = "The teacher demonstrates professional competency in the assessed teaching areas with positive student engagement."
-        out["improvement_areas"] = "Continue refining instructional strategies and exploring innovative teaching methodologies to enhance student learning outcomes."
-        out["recommendations"] = "Participate in professional development workshops focused on differentiated instruction and formative assessment techniques. Collaborate with peers to share best practices and receive constructive feedback on teaching methods."
+        out["strengths"] = t
 
     return out
 
 
-@app.get("/health")
-def health():
-    return {"ok": True}
+def _parsed_missing_or_too_short(parsed: Dict[str, str]) -> bool:
+    """Ensure each section has reasonable length."""
+    for k in ("strengths", "improvement_areas", "recommendations"):
+        v = (parsed.get(k) or "").strip()
+        if len(v) < 40:
+            return True
+    return False
 
 
-def _generate_template_based_feedback(req: GenerateRequest, comments: List[str]) -> Dict[str, str]:
-    """Generate professional feedback based on ratings and comments using templates."""
+def _generate_template_based_feedback(req: GenerateRequest, texts: List[str]) -> Dict[str, str]:
+    """Deterministic fallback so the PHP app always gets usable text."""
     avg = req.averages
 
-    style = (req.style or "standard").strip().lower()
-    if style not in {"short", "standard", "detailed"}:
-        style = "standard"
+    def band(x: float) -> str:
+        x = float(x or 0)
+        if x >= 4.6:
+            return "Excellent"
+        if x >= 3.6:
+            return "Very satisfactory"
+        if x >= 2.9:
+            return "Satisfactory"
+        if x >= 1.8:
+            return "Below satisfactory"
+        return "Needs improvement"
 
-    def sentence_limits() -> tuple[int, int]:
-        if style == "short":
-            return 2, 2
-        if style == "detailed":
-            return 5, 6
-        return 3, 4  # standard
-
-    min_s, max_s = sentence_limits()
-
-    def pick(pool: List[str]) -> str:
-        return random.choice(pool) if pool else ""
-
-    def to_sentences(parts: List[str]) -> str:
-        # Keep 1..N sentences, join naturally.
-        out = [p.strip().rstrip(".") + "." for p in parts if p and p.strip()]
-        if not out:
-            return ""
-        # clamp sentence count
-        return " ".join(out[: max_s])
-
-    def lowest_domain() -> str:
-        scores = {
-            "communication": float(avg.communications or 0),
-            "management": float(avg.management or 0),
-            "assessment": float(avg.assessment or 0),
-        }
-        return min(scores, key=scores.get)
-
-    low = lowest_domain()
-
-    # If multiple areas are below target, still emphasize the lowest domain first.
-    domain_label = {
-        "communication": "communication and student engagement",
-        "management": "classroom management and learning environment",
-        "assessment": "assessment practices and feedback",
-    }.get(low, low)
-    
-    # Analyze ratings to identify strengths and areas for improvement
-    strengths_list = []
-    improvements_list = []
-    
-    if avg.communications >= 4.5:
-        strengths_list.append("demonstrates exceptional communication skills with clear articulation and effective student engagement")
-    elif avg.communications >= 4.0:
-        strengths_list.append("shows strong communication abilities in delivering lesson content")
-    elif avg.communications < 3.0:
-        improvements_list.append("communication and student engagement strategies")
-    
-    if avg.management >= 4.5:
-        strengths_list.append("exhibits excellent classroom management with well-organized and structured lessons")
-    elif avg.management >= 4.0:
-        strengths_list.append("maintains good classroom control and learning environment")
-    elif avg.management < 3.0:
-        improvements_list.append("classroom management and organizational techniques")
-    
-    if avg.assessment >= 4.5:
-        strengths_list.append("implements comprehensive assessment methods that effectively measure student learning outcomes")
-    elif avg.assessment >= 4.0:
-        strengths_list.append("uses appropriate assessment strategies to evaluate student progress")
-    elif avg.assessment < 3.0:
-        improvements_list.append("assessment techniques and formative evaluation methods")
-    
-    # Extract specific comments for context
-    comment_highlights = []
-    for comment in comments:
-        if "comment:" in comment.lower():
-            parts = comment.split("comment:", 1)
-            if len(parts) > 1 and parts[1].strip():
-                comment_highlights.append(parts[1].strip())
-    
-    teacher = req.faculty_name or "The teacher"
-
-    # Wording variety pools
-    strengths_openers = [
-        f"{teacher} demonstrates strong professional competency during the observation",
-        f"{teacher} shows a commendable level of instructional capability",
-        f"{teacher} exhibits positive teaching practices that support learner progress",
-    ]
-
-    strengths_closers = [
-        "Overall performance reflects consistent preparation and purposeful delivery",
-        "The lesson delivery reflects a clear intention to support student learning",
-        "These practices contribute to a productive and supportive learning environment",
-    ]
-
-    # Build STRENGTHS paragraph (2–6 sentences depending on style)
-    s_parts: List[str] = []
-    s_parts.append(pick(strengths_openers))
-    if strengths_list:
-        # turn key strengths into sentences
-        if len(strengths_list) == 1:
-            s_parts.append(f"The teacher {strengths_list[0]}")
-        else:
-            s_parts.append(f"The teacher {strengths_list[0]}")
-            s_parts.append(f"In addition, the teacher {strengths_list[1]}")
-    else:
-        s_parts.append("The observed indicators suggest reliable performance across the evaluated domains")
-    if comment_highlights and style != "short":
-        s_parts.append("Classroom evidence indicates that the teacher applies strategies aligned with effective instruction")
-    if style != "short":
-        s_parts.append(pick(strengths_closers))
-    strengths = to_sentences(s_parts)
-    
-    # Domain-focused improvement guidance (target lowest domain more heavily)
-    domain_focus = {
-        "communication": [
-            "increasing interactive questioning and checking for understanding",
-            "strengthening clarity of instructions and pacing of explanations",
-            "using more varied engagement strategies to sustain learner participation",
-        ],
-        "management": [
-            "strengthening classroom routines and transitions to maximize learning time",
-            "using proactive behavior supports and clear expectations",
-            "improving activity structure to keep learners consistently on-task",
-        ],
-        "assessment": [
-            "using more frequent formative checks aligned to lesson objectives",
-            "strengthening feedback practices so learners know how to improve",
-            "aligning assessment tasks more closely with targeted competencies",
-        ],
+    domains = {
+        "Communication & instruction": float(avg.communications or 0),
+        "Classroom management & learning environment": float(avg.management or 0),
+        "Assessment & feedback practices": float(avg.assessment or 0),
     }
+    weakest = min(domains, key=domains.get) if domains else "Instructional practice"
+    strongest = max(domains, key=domains.get) if domains else "Professional practice"
+    overall_level = band(avg.overall)
 
-    i_parts: List[str] = []
-    i_parts.append("To further strengthen teaching effectiveness, the teacher may focus on")
+    teacher = (req.faculty_name or "").strip() or "The teacher"
+    subject = (req.subject_observed or "").strip() or "the observed class"
 
-    if improvements_list:
-        i_parts.append(", ".join(improvements_list[:2]))
-    else:
-        i_parts.append(pick(domain_focus.get(low, [])))
+    # Pick up to 2 brief comment snippets if available
+    comment_snips: List[str] = []
+    for t in texts or []:
+        if "comment=" in t:
+            comment_snips.append(t.split("comment=", 1)[1].strip())
+        if len(comment_snips) >= 2:
+            break
 
-    if style != "short":
-        i_parts.append("This will help ensure consistent learner engagement and stronger instructional impact")
-        if style == "detailed":
-            i_parts.append("Consider reviewing lesson flow and identifying points where learners may need additional scaffolding")
-    improvements = to_sentences(i_parts)
-    
-    rec_actions = {
-        "communication": [
-            "plan short engagement checkpoints (e.g., cold-calling, think-pair-share, exit questions)",
-            "use questioning techniques that move from recall to higher-order thinking",
-            "practice clarity and pacing through microteaching and peer feedback",
-        ],
-        "management": [
-            "establish clear routines for group work and transitions",
-            "use seating/space arrangements that support visibility and movement",
-            "apply positive behavior strategies and consistent reinforcement",
-        ],
-        "assessment": [
-            "design quick formative assessments aligned to the lesson objectives",
-            "use rubrics or success criteria so learners know what quality work looks like",
-            "provide timely feedback and allow opportunities for revision",
-        ],
-    }
+    evidence = " "
+    if comment_snips:
+        evidence = " Observations noted: " + "; ".join(comment_snips) + "."
 
-    r_parts: List[str] = []
-    r_parts.append("It is recommended that the teacher")
-    r_parts.append(pick(rec_actions.get(low, [])))
-    if style != "short":
-        r_parts.append("engage in peer observation or coaching sessions to reflect on practice and refine strategies")
-    if style == "detailed":
-        r_parts.append("set 1–2 measurable goals for the next cycle and review progress using brief evidence (student work, quick checks, and observation notes)")
-    recommendations = to_sentences(r_parts)
-    
-    # Ensure each section meets minimum length expectations; if not, pad with a professional sentence.
-    def ensure_min(text: str, extra: str) -> str:
-        if len((text or "").strip()) >= 80 or style == "short":
-            return text
-        return (text.rstrip() + " " + extra).strip()
+    strengths = (
+        f"{teacher} demonstrated {overall_level.lower()} performance in {subject}. "
+        f"Strengths were most evident in {strongest.lower()}, supporting effective lesson delivery and learner engagement." 
+        f"The overall classroom experience reflected purposeful planning and an appropriate focus on learning outcomes.{evidence}"
+    ).strip()
 
-    strengths = ensure_min(strengths, "The overall performance indicates readiness to meet the expected standards for effective instruction.")
-    improvements = ensure_min(improvements, "Sustained reflection and targeted practice will support continuous improvement.")
-    recommendations = ensure_min(recommendations, "These steps will help strengthen consistency across the evaluated domains.")
+    improvement_areas = (
+        f"To further strengthen practice, priority should be given to {weakest.lower()}. "
+        "Refining strategies in this area can help increase consistency, deepen learner participation, and improve clarity of expectations. "
+        "Maintaining the current positive approaches while targeting these adjustments will support continued growth."
+    ).strip()
+
+    recommendations = (
+        f"It is recommended that {teacher.lower()} adopts one or two focused routines aligned to {weakest.lower()} and monitors their impact over time. "
+        "Using brief formative checks during the lesson and providing timely, specific feedback can strengthen instruction and student understanding. "
+        "A short cycle of goal-setting, observation, and reflection (with coaching or peer support if available) is suggested to sustain improvement."
+    ).strip()
 
     return {
         "strengths": strengths,
-        "improvement_areas": improvements,
+        "improvement_areas": improvement_areas,
         "recommendations": recommendations,
     }
 
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest):
-    # Use AI model for generation
     sbert, tok, model = _load_models()
-    
+
     texts = _flatten_comments(req)
     top = _retrieve_top_k(sbert, texts, k=10)
 
-    # If the user doesn't want/need written comments, generate from ratings only.
-    # In practice, most rows will have no comment text (and we don't want the model to echo numbers).
     has_real_comments = any(("comment=" in t or "comment:" in t) for t in texts)
+
     if not has_real_comments:
         prompt = _build_ratings_only_prompt(req)
     else:
         prompt = _build_prompt(req, top)
-    
-    # Debug logging
-    print("\n=== GENERATION DEBUG ===")
-    print(f"Input texts count: {len(texts)}")
-    print(f"Top retrieved: {len(top)}")
-    print(f"Averages: comm={req.averages.communications}, mgmt={req.averages.management}, assess={req.averages.assessment}, overall={req.averages.overall}")
-    print(f"Prompt: {prompt[:200]}...")
-    
-    # Generate with AI model
-    raw = _generate_text(tok, model, prompt)
 
-    # Retry with simpler prompt if the first output is low-quality
+    raw = _generate_text(tok, model, prompt, style=req.style or "standard")
+
     if _looks_like_bad_generation(raw):
         retry_prompt = _build_retry_prompt(req, top)
-        print("Low-quality generation detected; retrying with simplified prompt")
-        raw = _generate_text(tok, model, retry_prompt)
-    
-    print(f"Raw model output: {raw!r}")
-    
+        raw = _generate_text(tok, model, retry_prompt, style=req.style or "standard")
+
     parsed = _parse_sections(raw)
-    
-    print(f"Parsed strengths: {parsed['strengths'][:100]}...")
-    print(f"Parsed improvements: {parsed['improvement_areas'][:100]}...")
-    print(f"Parsed recommendations: {parsed['recommendations'][:100]}...")
-    
-    # Fallback to template if AI generation failed or returned fragments
+
     combined = "\n".join([parsed.get("strengths", ""), parsed.get("improvement_areas", ""), parsed.get("recommendations", "")])
     if _looks_like_bad_generation(combined) or not any(parsed.values()) or _parsed_missing_or_too_short(parsed):
-        print("AI generation insufficient, using template fallback")
         parsed = _generate_template_based_feedback(req, texts)
-    
-    print("======================\n")
 
     return GenerateResponse(
         strengths=parsed["strengths"],
