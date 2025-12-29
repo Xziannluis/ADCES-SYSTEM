@@ -6,7 +6,16 @@ require_once __DIR__ . '/../auth/session-check.php';
 require_once __DIR__ . '/../config/constants.php';
 
 // allow evaluators + leaders
-if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'president', 'vice_president'])) {
+// Keep this in sync with roles that can view evaluations.
+if (!in_array($_SESSION['role'] ?? '', [
+    'dean',
+    'principal',
+    'chairperson',
+    'subject_coordinator',
+    'grade_level_coordinator',
+    'president',
+    'vice_president',
+], true)) {
     http_response_code(403);
     header('Content-Type: application/json');
     echo json_encode(['success' => false, 'message' => 'Forbidden']);

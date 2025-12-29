@@ -5,12 +5,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
     require_once '../models/Evaluation.php';
     require_once '../models/Teacher.php';
     require_once '../controllers/AIController.php';
+
     $db = (new Database())->getConnection();
     $evalController = new EvaluationController($db);
+
     session_start();
     $evaluatorId = $_SESSION['user_id'] ?? null;
+
     $postData = $_POST;
     $result = $evalController->saveDraft($postData, $evaluatorId);
+
+    header('Content-Type: application/json');
+    echo json_encode($result);
+    exit();
+}
+
+// ✅ ADD: Handle AJAX FINAL submit requests (POST)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['action'] === 'submit_evaluation') {
+    require_once '../config/database.php';
+    require_once '../models/Evaluation.php';
+    require_once '../models/Teacher.php';
+    require_once '../controllers/AIController.php';
+
+    $db = (new Database())->getConnection();
+    $evalController = new EvaluationController($db);
+
+    session_start();
+    $evaluatorId = $_SESSION['user_id'] ?? null;
+
+    $postData = $_POST;
+    $result = $evalController->submitEvaluation($postData, $evaluatorId);
+
     header('Content-Type: application/json');
     echo json_encode($result);
     exit();
@@ -22,25 +47,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_teacher' && isset($_GET['
     $db = (new Database())->getConnection();
     $teacherModel = new Teacher($db);
     $teacher = $teacherModel->getById($_GET['id']);
-    if ($teacher) {
-        echo json_encode(['success' => true, 'teacher' => [
-            'name' => $teacher['name'],
-            'department' => $teacher['department']
-        ]]);
-    } else {
-        echo json_encode(['success' => false, 'message' => 'Teacher not found']);
-    }
-    exit();
-}
-
-
-// --- AJAX handler for get_teacher action ---
-if (isset($_GET['action']) && $_GET['action'] === 'get_teacher' && isset($_GET['id'])) {
-    require_once '../config/database.php';
-    require_once '../models/Teacher.php';
-    $db = (new Database())->getConnection();
-    $teacherModel = new Teacher($db);
-    $teacher = $teacherModel->getById($_GET['id']);
+    header('Content-Type: application/json');
     if ($teacher) {
         echo json_encode(['success' => true, 'teacher' => [
             'name' => $teacher['name'],
@@ -73,15 +80,19 @@ class EvaluationController {
 
     public function submitEvaluation($postData, $evaluatorId) {
         try {
+            if (empty($evaluatorId)) {
+                throw new Exception('Unauthorized');
+            }
+
             // Log submission for debugging
             error_log("Submission: evaluatorId=$evaluatorId, teacher_id=" . ($postData['teacher_id'] ?? 'MISSING'));
-            
+
             // Start transaction
             $this->db->beginTransaction();
 
             // 1. Create evaluation record
             $evaluationId = $this->createEvaluationRecord($postData, $evaluatorId);
-            
+
             if (!$evaluationId) {
                 throw new Exception("Failed to create evaluation record");
             }
@@ -93,8 +104,12 @@ class EvaluationController {
             // 3. Calculate averages (use model method)
             $this->evaluationModel->calculateAverages($evaluationId);
 
-            // 4. Generate AI recommendations
-            $this->aiController->generateRecommendations($evaluationId);
+            // 4. Generate AI recommendations (if service down, don't fail submit)
+            try {
+                $this->aiController->generateRecommendations($evaluationId);
+            } catch (Throwable $aiErr) {
+                error_log("AI generateRecommendations failed: " . $aiErr->getMessage());
+            }
 
             // 5. Update evaluation with qualitative data
             $this->updateQualitativeData($evaluationId, $postData);
@@ -110,7 +125,9 @@ class EvaluationController {
 
         } catch (Exception $e) {
             // Rollback transaction on error
-            $this->db->rollBack();
+            if ($this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
             return [
                 'success' => false,
                 'message' => $e->getMessage()
@@ -132,7 +149,9 @@ class EvaluationController {
         $others_requirements = isset($data['others_requirements']) ? $data['others_requirements'] : 0;
         $others_specify = $data['others_specify'] ?? '';
 
-        $query = "INSERT INTO evaluations 
+    // IMPORTANT: Use a consistent status that dashboards can filter on.
+    // We'll use 'submitted' for final submissions.
+    $query = "INSERT INTO evaluations 
                   (teacher_id, evaluator_id, academic_year, semester, 
                    subject_observed, observation_time, observation_date, 
                    observation_type, seat_plan, course_syllabi, 
@@ -140,7 +159,7 @@ class EvaluationController {
                   VALUES (:teacher_id, :evaluator_id, :academic_year, :semester, 
                           :subject_observed, :observation_time, :observation_date, 
                           :observation_type, :seat_plan, :course_syllabi, 
-                          :others_requirements, :others_specify, 'completed')";
+              :others_requirements, :others_specify, 'submitted')";
 
         $stmt = $this->db->prepare($query);
 
@@ -165,10 +184,31 @@ class EvaluationController {
     }
 
     private function saveEvaluationDetails($evaluationId, $data) {
+        // Support BOTH payload styles:
+        // 1) flat fields: communications0=5, communications_comment0=...
+        // 2) nested fields: ratings[communications][0][rating]=5, ratings[communications][0][comment]=...
+        // Normalize nested => flat so the loops below always work.
+        if (isset($data['ratings']) && is_array($data['ratings'])) {
+            foreach (['communications' => 5, 'management' => 12, 'assessment' => 6] as $cat => $count) {
+                if (!isset($data['ratings'][$cat]) || !is_array($data['ratings'][$cat])) continue;
+                for ($i = 0; $i < $count; $i++) {
+                    if (!isset($data["{$cat}{$i}"]) && isset($data['ratings'][$cat][$i]['rating'])) {
+                        $data["{$cat}{$i}"] = $data['ratings'][$cat][$i]['rating'];
+                    }
+                    if (!isset($data["{$cat}_comment{$i}"]) && isset($data['ratings'][$cat][$i]['comment'])) {
+                        $data["{$cat}_comment{$i}"] = $data['ratings'][$cat][$i]['comment'];
+                    }
+                }
+            }
+        }
+
+        $savedCount = 0;
+
         // Save communications criteria
         for ($i = 0; $i < 5; $i++) {
             if (isset($data["communications{$i}"])) {
                 $this->saveCriterion($evaluationId, 'communications', $i, $data["communications{$i}"], $data["communications_comment{$i}"] ?? '');
+                $savedCount++;
             }
         }
 
@@ -176,6 +216,7 @@ class EvaluationController {
         for ($i = 0; $i < 12; $i++) {
             if (isset($data["management{$i}"])) {
                 $this->saveCriterion($evaluationId, 'management', $i, $data["management{$i}"], $data["management_comment{$i}"] ?? '');
+                $savedCount++;
             }
         }
 
@@ -183,8 +224,11 @@ class EvaluationController {
         for ($i = 0; $i < 6; $i++) {
             if (isset($data["assessment{$i}"])) {
                 $this->saveCriterion($evaluationId, 'assessment', $i, $data["assessment{$i}"], $data["assessment_comment{$i}"] ?? '');
+                $savedCount++;
             }
         }
+
+        error_log("Saved evaluation_details rows={$savedCount} for evaluation_id={$evaluationId}");
     }
 
     private function saveCriterion($evaluationId, $category, $index, $rating, $comment) {
@@ -305,32 +349,26 @@ class EvaluationController {
                   WHERE id = :evaluation_id";
 
         $stmt = $this->db->prepare($query);
-        
-        $stmt->bindParam(':strengths', $data['strengths']);
-        $stmt->bindParam(':improvement_areas', $data['improvement_areas']);
-        $stmt->bindParam(':recommendations', $data['recommendations']);
-        $stmt->bindParam(':rater_signature', $data['rater_signature']);
-        $stmt->bindParam(':rater_date', $data['rater_date']);
-        $stmt->bindParam(':faculty_signature', $data['faculty_signature']);
-        $stmt->bindParam(':faculty_date', $data['faculty_date']);
+
+        // ✅ prevent "Undefined index" notices
+        $strengths = $data['strengths'] ?? '';
+        $improvement = $data['improvement_areas'] ?? '';
+        $recommendations = $data['recommendations'] ?? '';
+        $raterSig = $data['rater_signature'] ?? '';
+        $raterDate = $data['rater_date'] ?? null;
+        $facultySig = $data['faculty_signature'] ?? '';
+        $facultyDate = $data['faculty_date'] ?? null;
+
+        $stmt->bindParam(':strengths', $strengths);
+        $stmt->bindParam(':improvement_areas', $improvement);
+        $stmt->bindParam(':recommendations', $recommendations);
+        $stmt->bindParam(':rater_signature', $raterSig);
+        $stmt->bindParam(':rater_date', $raterDate);
+        $stmt->bindParam(':faculty_signature', $facultySig);
+        $stmt->bindParam(':faculty_date', $facultyDate);
         $stmt->bindParam(':evaluation_id', $evaluationId);
 
         return $stmt->execute();
-    }
-
-    public function getEvaluationById($evaluationId) {
-        $query = "SELECT e.*, t.name as teacher_name, t.department, 
-                         u.name as evaluator_name 
-                  FROM evaluations e
-                  JOIN teachers t ON e.teacher_id = t.id
-                  JOIN users u ON e.evaluator_id = u.id
-                  WHERE e.id = :evaluation_id";
-
-        $stmt = $this->db->prepare($query);
-        $stmt->bindParam(':evaluation_id', $evaluationId);
-        $stmt->execute();
-
-        return $stmt->fetch(PDO::FETCH_ASSOC);
     }
 }
 ?>

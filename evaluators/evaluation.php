@@ -38,6 +38,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
 
     if($result['success']) {
         $_SESSION['success'] = "Evaluation submitted successfully!";
+        // Go back to evaluator dashboard explicitly
         header("Location: dashboard.php");
         exit();
     } else {
@@ -793,6 +794,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             const genBtn = document.getElementById('generateAI');
             if (genBtn) {
                 genBtn.addEventListener('click', function() {
+                    // Visible proof that the handler is firing
+                    setAIDebugStatus('Clicked. Preparing request…', true);
                     generateAINarratives({ force: true, showAlerts: true });
                 });
             }
@@ -1099,6 +1102,138 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             }
         }
 
+        // --- AI Generation (Python service via PHP proxy) ---
+        function setAIDebugStatus(text, show = true) {
+            const panel = document.getElementById('aiDebugPanel');
+            const label = document.getElementById('aiDebugText');
+            if (label) label.textContent = text;
+            if (panel) panel.style.display = show ? 'block' : 'none';
+        }
+
+        function buildAIPayloadFromForm() {
+            // Use existing getFormData() if available (keeps shapes consistent)
+            if (typeof getFormData === 'function') {
+                const data = getFormData();
+                // The AI service expects: faculty_name, department, subject_observed, observation_type, averages, ratings
+                // getFormData() already returns those keys in this system.
+                return {
+                    faculty_name: data.faculty_name || '',
+                    department: data.department || '',
+                    subject_observed: data.subject_observed || '',
+                    observation_type: data.observation_type || '',
+                    averages: data.averages || { communications: 0, management: 0, assessment: 0, overall: 0 },
+                    ratings: data.ratings || {},
+                    // Allows the AI service to generate shorter/standard/detailed if you add UI later
+                    style: data.style || 'standard'
+                };
+            }
+
+            // Fallback minimal payload (should still work via template generation)
+            const averages = (typeof calculateAverages === 'function') ? calculateAverages() : { communications: 0, management: 0, assessment: 0, overall: 0 };
+            return {
+                faculty_name: (document.getElementById('facultyName')?.value || ''),
+                department: (document.getElementById('department')?.value || ''),
+                subject_observed: (document.getElementById('subjectObserved')?.value || ''),
+                observation_type: (document.querySelector('input[name="observationType"]:checked')?.value || ''),
+                averages,
+                ratings: {}
+            };
+        }
+
+        async function generateAINarratives(options = {}) {
+            const { force = false, showAlerts = false } = options;
+
+            const btn = document.getElementById('generateAI');
+            const strengthsEl = document.getElementById('strengths');
+            const improvementEl = document.getElementById('improvementAreas');
+            const recEl = document.getElementById('recommendations');
+
+            if (!strengthsEl || !improvementEl || !recEl) {
+                if (showAlerts) alert('AI fields not found on the page.');
+                return;
+            }
+
+            // Keep a stable original label so the button never gets stuck
+            const defaultBtnHtml = '<i class="fas fa-magic me-2"></i> Generate AI Recommendation';
+            const restoreButton = () => {
+                if (!btn) return;
+                btn.disabled = false;
+                const prev = btn.dataset.prevText;
+                btn.innerHTML = (prev && prev.trim().length) ? prev : defaultBtnHtml;
+                delete btn.dataset.prevText;
+            };
+
+            // If user already has text and not forcing, do nothing
+            if (!force && (
+                (strengthsEl.value || '').trim() ||
+                (improvementEl.value || '').trim() ||
+                (recEl.value || '').trim()
+            )) {
+                restoreButton();
+                return;
+            }
+
+            const payload = buildAIPayloadFromForm();
+
+            if (btn) {
+                btn.disabled = true;
+                // Only capture original text once; don't overwrite it with "Generating..."
+                if (!btn.dataset.prevText) btn.dataset.prevText = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Generating...';
+            }
+            setAIDebugStatus('Generating… first run may take a while (model load).', true);
+
+            try {
+                const res = await fetch('../controllers/ai_generate.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                // Handle cases where PHP returns HTML (e.g., login redirect page) instead of JSON
+                const contentType = (res.headers.get('content-type') || '').toLowerCase();
+                const rawText = await res.text();
+
+                let data = null;
+                if (contentType.includes('application/json')) {
+                    try {
+                        data = JSON.parse(rawText);
+                    } catch (e) {
+                        // keep null
+                    }
+                }
+
+                if (!res.ok || !data || data.success !== true) {
+                    console.error('AI proxy error:', { status: res.status, data, rawText });
+                    let msg = `AI generation failed (HTTP ${res.status}).`;
+                    if (data && (data.message || data.error)) {
+                        msg = (data.message || data.error);
+                    } else if (rawText && rawText.toLowerCase().includes('login')) {
+                        msg = 'Not authenticated. Please refresh the page and log in again.';
+                    } else if (rawText && rawText.trim().length) {
+                        msg = `AI proxy returned unexpected response. Check console for details.`;
+                    }
+                    setAIDebugStatus(msg, true);
+                    if (showAlerts) alert(msg);
+                    restoreButton();
+                    return;
+                }
+
+                const out = data.data || {};
+                strengthsEl.value = out.strengths || strengthsEl.value;
+                improvementEl.value = out.improvement_areas || improvementEl.value;
+                recEl.value = out.recommendations || recEl.value;
+                setAIDebugStatus('Done', true);
+            } catch (err) {
+                console.error(err);
+                const msg = 'AI generation error. Is the AI server running on 127.0.0.1:8008?';
+                setAIDebugStatus(msg, true);
+                if (showAlerts) alert(msg);
+            } finally {
+                restoreButton();
+            }
+        }
+
         function validateForm(isDraft = false) {
             let isValid = true;
             const errorFields = [];
@@ -1205,13 +1340,23 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 
                 for (let i = 0; i < count; i++) {
                     const rating = document.querySelector(`input[name="${category}${i}"]:checked`);
-                    const comment = document.querySelector(`input[name="${category}_comment${i}"]`);
+                    // Comment inputs in the HTML are named like "communications_comment0"
+                    // (no underscore between category and comment), so match that here.
+                    const comment = document.querySelector(`input[name="${category}_comment${i}"]`) ||
+                                    document.querySelector(`textarea[name="${category}_comment${i}"]`) ||
+                                    document.querySelector(`input[name="${category}_comment${i}"]`) ||
+                                    document.querySelector(`textarea[name="${category}_comment${i}"]`);
                     
                     if (rating) {
                         formData.ratings[category][i] = {
                             rating: rating.value,
                             comment: comment ? comment.value : ''
                         };
+
+                        // Also include flat keys because the PHP backend currently expects
+                        // POST fields like communications0, communications_comment0, etc.
+                        formData[`${category}${i}`] = rating.value;
+                        formData[`${category}_comment${i}`] = comment ? comment.value : '';
                     }
                 }
             });
@@ -1260,22 +1405,22 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             return pairs;
         }
 
-        // Form submission handler
-        document.getElementById('evaluationForm').addEventListener('submit', function(e) {
-            if (!validateForm()) {
+        // Final submit handler (AJAX)
+        // We submit via AJAX so we can redirect cleanly back to the dashboard
+        // and immediately see the new row in "Recent Evaluations".
+        const evaluationForm = document.getElementById('evaluationForm');
+        if (evaluationForm) {
+            evaluationForm.addEventListener('submit', function(e) {
                 e.preventDefault();
+
+                if (!validateForm()) {
+                    return false;
+                }
+
+                submitEvaluationFinal();
                 return false;
-            }
-            
-            // Show loading state
-            const submitBtn = document.querySelector('button[name="submit_evaluation"]');
-            const originalText = submitBtn.innerHTML;
-            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Submitting...';
-            submitBtn.disabled = true;
-            
-            // Allow form to submit normally
-            return true;
-        });
+            });
+        }
 
         // Auto-save functionality (optional)
         let autoSaveTimeout;
@@ -1294,191 +1439,18 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             });
         }
 
-        // Initialize auto-save when form is shown
-        function initializeEvaluationForm() {
-            setupAutoSave();
-            calculateAverages();
-            // Auto-generate narrative feedback (Strengths / Improvements / Recommendations)
-            generateAINarratives({ force: false, showAlerts: false });
-        }
+        // Initialize when the page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            // Set current date
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('observationDate').value = today;
+            document.getElementById('raterDate').value = today;
+            document.getElementById('facultyDate').value = today;
 
-    let aiGenerateTimeout;
-    let aiLastFailed = false;
-    let aiInFlight = false;
+            initializeTeacherSelection();
+            setupTeacherSearch();
+        });
 
-        async function generateAINarratives(options = {}) {
-            const { force = false, showAlerts = false } = options;
-
-            // Prevent stacking multiple pending requests (seen in Network panel)
-            if (aiInFlight) {
-                if (showAlerts) alert('AI generation is already running. Please wait...');
-                return;
-            }
-
-            // If the last AI call failed, don't keep auto-calling unless user forces it.
-            if (!force && aiLastFailed) return;
-
-            // Fields we fill
-            const strengthsEl = document.getElementById('strengths');
-            const improvementsEl = document.getElementById('improvementAreas');
-            const recommendationsEl = document.getElementById('recommendations');
-            const genBtn = document.getElementById('generateAI');
-            const aiDebugPanel = document.getElementById('aiDebugPanel');
-            const aiDebugText = document.getElementById('aiDebugText');
-
-            const setAIDebug = (msg, variant = 'info') => {
-                if (!aiDebugPanel || !aiDebugText) return;
-                aiDebugPanel.style.display = 'block';
-                const alertEl = aiDebugPanel.querySelector('.alert');
-                if (alertEl) {
-                    alertEl.className = `alert alert-${variant} py-2 mb-0`;
-                }
-                aiDebugText.textContent = msg;
-            };
-
-            // If the form doesn't have these fields, do nothing.
-            if (!strengthsEl || !improvementsEl || !recommendationsEl) return;
-
-            // Gather current form state
-            const payload = getFormData();
-
-            // Only generate if we have at least some numeric signal.
-            // Note: ratings are only added to payload when a radio is checked.
-            const hasAnyRating = ['communications', 'management', 'assessment'].some(cat => {
-                const obj = payload.ratings && payload.ratings[cat];
-                return obj && Object.keys(obj).length > 0;
-            });
-
-            if (!hasAnyRating && !payload.faculty_name && !payload.subject_observed) {
-                return;
-            }
-
-            const isPlaceholderDots = (v) => {
-                const t = (v || '').trim();
-                if (!t) return true;
-                // Treat punctuation-only placeholders (e.g. '...', '.....', '---', '…') as empty
-                const withoutPunct = t.replace(/[\s\.\-•—_…]+/g, '');
-                return withoutPunct.length === 0;
-            };
-
-            // Don't overwrite evaluator-written narrative unless forced.
-            // But do overwrite placeholder dots.
-            if (!force) {
-                const existingNarrativeRaw = (strengthsEl.value || '').trim() || (improvementsEl.value || '').trim() || (recommendationsEl.value || '').trim();
-                if (existingNarrativeRaw && !isPlaceholderDots(existingNarrativeRaw)) return;
-            }
-
-            // If user explicitly clicks Generate, require at least some ratings.
-            if (force && !hasAnyRating) {
-                if (showAlerts) alert('Please select at least one rating before generating AI feedback.');
-                return;
-            }
-
-            const originalBtnHtml = genBtn ? genBtn.innerHTML : '';
-            if (genBtn) {
-                genBtn.disabled = true;
-                genBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Generating...';
-            }
-            setAIDebug('Sending request to AI service...', 'info');
-
-            const controller = new AbortController();
-            const timeoutMs = 120000; // 120s
-            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-            try {
-                aiInFlight = true;
-                const res = await fetch('../controllers/ai_generate.php', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                    signal: controller.signal
-                });
-
-                const data = await res.json();
-                console.log('[AI] proxy response:', data);
-                if (!data.success) {
-                    console.warn('AI generation failed:', data);
-                    aiLastFailed = true;
-                    setAIDebug(data.message || 'AI generation failed.', 'warning');
-                    if (showAlerts) {
-                        // Show the most useful details available from the PHP proxy
-                        const parts = [];
-                        if (data.message) parts.push(data.message);
-                        if (data.ai_url) parts.push(`URL: ${data.ai_url}`);
-                        if (data.status) parts.push(`Status: ${data.status}`);
-                        if (data.error) parts.push(`Error: ${data.error}`);
-                        alert(parts.length ? parts.join('\n') : 'AI generation failed.');
-                    }
-                    return;
-                }
-
-                aiLastFailed = false;
-                setAIDebug('AI responded successfully.', 'success');
-
-                // The PHP proxy returns {success:true, data:{...python...}}
-                // But tolerate alt shapes in case we ever call the python endpoint directly.
-                const out = (data && data.data && typeof data.data === 'object') ? data.data : (data || {});
-                console.log('[AI] model output:', out);
-
-                // Tolerate alternate key names (older versions / minor python changes)
-                const strengthsText = (typeof out.strengths === 'string') ? out.strengths
-                    : (typeof out.strength === 'string') ? out.strength
-                    : (typeof out.strengths_text === 'string') ? out.strengths_text
-                    : '';
-                const improvementsText = (typeof out.improvement_areas === 'string') ? out.improvement_areas
-                    : (typeof out.improvements === 'string') ? out.improvements
-                    : (typeof out.areas_for_improvement === 'string') ? out.areas_for_improvement
-                    : (typeof out.areas_of_improvement === 'string') ? out.areas_of_improvement
-                    : '';
-                const recommendationsText = (typeof out.recommendations === 'string') ? out.recommendations
-                    : (typeof out.recommendation === 'string') ? out.recommendation
-                    : (typeof out.suggestions === 'string') ? out.suggestions
-                    : '';
-
-                if (!strengthsText && !improvementsText && !recommendationsText) {
-                    setAIDebug('AI response missing expected text fields (check Console -> [AI] logs).', 'warning');
-                }
-
-                // Only overwrite non-empty evaluator-written text unless forced.
-                // But always overwrite placeholders.
-                const canWrite = (el) => force || isPlaceholderDots(el.value);
-                if (strengthsText.trim() && canWrite(strengthsEl)) strengthsEl.value = strengthsText.trim();
-                if (improvementsText.trim() && canWrite(improvementsEl)) improvementsEl.value = improvementsText.trim();
-                if (recommendationsText.trim() && canWrite(recommendationsEl)) recommendationsEl.value = recommendationsText.trim();
-
-                // If we still have dots after a successful call, explain why.
-                if (showAlerts) {
-                    const stillDots = isPlaceholderDots(strengthsEl.value) && isPlaceholderDots(improvementsEl.value) && isPlaceholderDots(recommendationsEl.value);
-                    const allEmpty = !strengthsText.trim() && !improvementsText.trim() && !recommendationsText.trim();
-                    if (stillDots && allEmpty) {
-                        setAIDebug('AI returned empty text. Add indicator comments and try again.', 'warning');
-                        alert('AI returned empty text. Please add at least 1-2 comments on the indicators, then click Generate again. (Check Console -> [AI] logs for details.)');
-                    }
-                }
-            } catch (err) {
-                console.warn('AI generation error:', err);
-                if (err && (err.name === 'AbortError')) {
-                    setAIDebug('AI request timed out. Try again (or wait for the AI service to finish loading models).', 'warning');
-                    if (showAlerts) {
-                        alert('AI request timed out after 120 seconds. Please try again.');
-                    }
-                } else {
-                    setAIDebug('AI request failed. Check if Python service is running.', 'danger');
-                }
-                if (showAlerts) {
-                    alert('AI generation error. Make sure the Python AI service is running (http://127.0.0.1:8008).');
-                }
-            } finally {
-                clearTimeout(timeoutId);
-                aiInFlight = false;
-                if (genBtn) {
-                    genBtn.disabled = false;
-                    genBtn.innerHTML = originalBtnHtml;
-                }
-            }
-        }
-
-        // Enhanced teacher selection with search
         function setupTeacherSearch() {
             const teacherSearch = document.createElement('div');
             teacherSearch.className = 'mb-3';
@@ -1509,12 +1481,43 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 });
             }
         }
+                async function submitEvaluationFinal() {
+                        const btn = document.querySelector('button[name="submit_evaluation"]');
+                        if (!btn) return;
 
-        // Initialize everything when the page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            initializeTeacherSelection();
-            setupTeacherSearch();
-        });
+                        const originalText = btn.innerHTML;
+                        btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Submitting...';
+                        btn.disabled = true;
+
+                        try {
+                                const payload = getFormData();
+                                if (!payload.teacher_id) {
+                                        alert('Please select a teacher.');
+                                        return;
+                                }
+
+                                const res = await fetch('../controllers/EvaluationController.php?action=submit_evaluation', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                                        body: new URLSearchParams(flattenObject(payload)).toString()
+                                });
+
+                                const json = await res.json().catch(() => null);
+                                if (!json || !json.success) {
+                                        const msg = (json && json.message) ? json.message : ('Submit failed (HTTP ' + res.status + ')');
+                                        throw new Error(msg);
+                                }
+
+                                alert('Evaluation submitted successfully!');
+                                window.location.href = '../evaluators/dashboard.php';
+                        } catch (err) {
+                                console.error(err);
+                                alert(err.message || 'Submit failed. See console for details.');
+                        } finally {
+                                btn.innerHTML = originalText;
+                                btn.disabled = false;
+                        }
+                }
     </script>
 </body>
 </html>

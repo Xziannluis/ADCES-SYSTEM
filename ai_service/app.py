@@ -17,6 +17,12 @@ from fastapi import HTTPException
 app = FastAPI(title="ADCES AI Service", version="1.0.0")
 
 
+@app.get("/health")
+async def health():
+    """Basic health check used by the PHP proxy and smoke tests."""
+    return {"ok": True}
+
+
 @app.exception_handler(RequestValidationError)
 async def _validation_exception_handler(request: Request, exc: RequestValidationError):
     # Return a friendlier JSON payload for frontend/PHP troubleshooting
