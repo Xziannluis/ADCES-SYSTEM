@@ -92,12 +92,14 @@ $available_query = "SELECT u.id, u.name, u.role, u.department
                    FROM users u 
                    WHERE u.role IN ('subject_coordinator', 'chairperson', 'grade_level_coordinator') 
                    AND u.status = 'active' 
+                   AND u.department = :department
                    AND u.id NOT IN (
                        SELECT evaluator_id FROM evaluator_assignments WHERE supervisor_id = :supervisor_id
                    )
                    ORDER BY u.role, u.name";
 $available_stmt = $db->prepare($available_query);
 $available_stmt->bindParam(':supervisor_id', $supervisor_id);
+$available_stmt->bindParam(':department', $supervisor['department']);
 $available_stmt->execute();
 $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>

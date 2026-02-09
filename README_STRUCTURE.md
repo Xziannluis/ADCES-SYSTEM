@@ -31,12 +31,15 @@ All database-related dumps/tools were moved under `database/`:
 - `database/tools/` – setup helpers
 
 ## New: scripts
-One-off maintenance/admin scripts:
-- `scripts/`
+ One-off maintenance/admin scripts:
+ - `dev/scripts/` (development/admin utilities; not used by the running site)
 
 ## New: tests
-Ad-hoc test pages/scripts:
-- `tests/`
+ Ad-hoc test pages/scripts:
+ - `dev/tests/` (development tests; not used by the running site)
 
+### Dev-only folders
+
+- `dev/archive/` (old experiments / scratch files; safe to ignore in production)
 ## Notes
 If you later want an even cleaner structure (like moving web entrypoints into `public/`), we can do that too, but it requires updating Apache/XAMPP document root or adding rewrite rules.

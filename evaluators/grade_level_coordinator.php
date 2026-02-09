@@ -72,67 +72,7 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
                 <span>Welcome, <?php echo htmlspecialchars($_SESSION['name']); ?> (Grade Level Coordinator)</span>
             </div>
 
-            <div class="row mb-4">
-                <div class="col-12">
-                    <div class="card coordinator-card">
-                        <div class="card-header bg-success text-white">
-                            <h5 class="mb-0">
-                                <i class="fas fa-user me-2"></i>Coordinator Overview
-                            </h5>
-                        </div>
-                        <div class="card-body">
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <h6>Supervisor Information</h6>
-                                    <?php if($supervisor_info): ?>
-                                        <div class="card bg-light">
-                                            <div class="card-body">
-                                                <p class="mb-1"><strong>Name:</strong> <?php echo htmlspecialchars($supervisor_info['name']); ?></p>
-                                                <p class="mb-1"><strong>Role:</strong> <?php echo ucfirst(str_replace('_',' ',$supervisor_info['role'])); ?></p>
-                                                <p class="mb-0"><strong>Department:</strong> <?php echo htmlspecialchars($supervisor_info['department']); ?></p>
-                                            </div>
-                                        </div>
-                                    <?php else: ?>
-                                        <p class="text-muted">Not assigned to a supervisor yet.</p>
-                                        <a href="../edp/users.php" class="btn btn-sm btn-outline-secondary">Contact EDP for Assignment</a>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="col-md-6">
-                                    <h6>My Responsibilities</h6>
-                                    <div class="card bg-light">
-                                        <div class="card-body">
-                                            <p class="mb-2"><i class="fas fa-chalkboard-teacher me-2 text-success"></i><strong>Assigned Teachers:</strong> <?php echo $assigned_teachers_count; ?></p>
-                                            <p class="mb-2"><i class="fas fa-clipboard-check me-2 text-primary"></i><strong>Completed Evaluations:</strong> <?php echo $stats['completed_evaluations']; ?></p>
-                                            <p class="mb-0"><i class="fas fa-robot me-2 text-info"></i><strong>AI Recommendations:</strong> <?php echo $stats['ai_recommendations']; ?></p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <?php if(!empty($notifications)): ?>
-                            <div class="row mt-3">
-                                <div class="col-12">
-                                    <div class="card border-info">
-                                        <div class="card-header bg-light">
-                                            <h6 class="mb-0">Notifications <span class="badge bg-info ms-2"><?php echo count($notifications); ?></span></h6>
-                                        </div>
-                                        <div class="card-body">
-                                            <ul class="list-group list-group-flush">
-                                                <?php foreach($notifications as $n): ?>
-                                                <li class="list-group-item">
-                                                    <div><?php echo htmlspecialchars($n['description']); ?></div>
-                                                    <div class="small text-muted mt-1"><?php echo date('M j, Y g:ia', strtotime($n['created_at'])); ?></div>
-                                                </li>
-                                                <?php endforeach; ?>
-                                            </ul>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            
 
             <div class="row">
                 <div class="col-md-8">
@@ -158,7 +98,7 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
                                                         elseif($rating >= 1.8) echo 'warning';
                                                         else echo 'danger';
                                                     ?>"><?php echo number_format($rating,1); ?></span>
-                                                    <a href="evaluation_view.php?id=<?php echo $eval['id']; ?>" class="btn btn-sm btn-outline-primary">View</a>
+                                                    <a href="view_evaluation.php?id=<?php echo $eval['id']; ?>" class="btn btn-sm btn-outline-primary">View</a>
                                                 </div>
                                             </div>
                                         </div>

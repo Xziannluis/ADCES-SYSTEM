@@ -84,6 +84,30 @@ class EvaluationController {
                 throw new Exception('Unauthorized');
             }
 
+            // Enforce schedule requirement: you can't evaluate a teacher without a schedule.
+            $teacherId = $postData['teacher_id'] ?? null;
+            if (empty($teacherId)) {
+                throw new Exception('Teacher is required');
+            }
+
+            // Accept schedule from either: evaluation_schedule (legacy DATETIME column)
+            // or evaluation_room/evaluation_schedule text fields (newer UI patterns may store schedule info differently).
+            // If your DB only has evaluation_schedule, the COALESCE simply returns that.
+            $scheduleStmt = $this->db->prepare(
+                "SELECT evaluation_schedule, evaluation_room FROM teachers WHERE id = :id LIMIT 1"
+            );
+            $scheduleStmt->bindValue(':id', $teacherId);
+            $scheduleStmt->execute();
+            $t = $scheduleStmt->fetch(PDO::FETCH_ASSOC);
+            $scheduleVal = $t['evaluation_schedule'] ?? null;
+            $roomVal = $t['evaluation_room'] ?? null;
+
+            // Consider it "scheduled" if either schedule datetime is set OR room is set.
+            // (Room is usually set together with schedule from the UI; this avoids false negatives in prod data.)
+            if (empty($scheduleVal) && empty($roomVal)) {
+                throw new Exception('Cannot submit evaluation: no evaluation schedule is set for this teacher.');
+            }
+
             // Log submission for debugging
             error_log("Submission: evaluatorId=$evaluatorId, teacher_id=" . ($postData['teacher_id'] ?? 'MISSING'));
 
@@ -342,8 +366,11 @@ class EvaluationController {
                   SET strengths = :strengths, 
                       improvement_areas = :improvement_areas,
                       recommendations = :recommendations,
+                      agreement = :agreement,
+                      rater_printed_name = :rater_printed_name,
                       rater_signature = :rater_signature,
                       rater_date = :rater_date,
+                      faculty_printed_name = :faculty_printed_name,
                       faculty_signature = :faculty_signature,
                       faculty_date = :faculty_date
                   WHERE id = :evaluation_id";
@@ -354,16 +381,22 @@ class EvaluationController {
         $strengths = $data['strengths'] ?? '';
         $improvement = $data['improvement_areas'] ?? '';
         $recommendations = $data['recommendations'] ?? '';
+        $agreement = $data['agreement'] ?? '';
+    $raterPrintedName = $data['rater_printed_name'] ?? '';
         $raterSig = $data['rater_signature'] ?? '';
         $raterDate = $data['rater_date'] ?? null;
+    $facultyPrintedName = $data['faculty_printed_name'] ?? '';
         $facultySig = $data['faculty_signature'] ?? '';
         $facultyDate = $data['faculty_date'] ?? null;
 
         $stmt->bindParam(':strengths', $strengths);
         $stmt->bindParam(':improvement_areas', $improvement);
         $stmt->bindParam(':recommendations', $recommendations);
+        $stmt->bindParam(':agreement', $agreement);
+    $stmt->bindParam(':rater_printed_name', $raterPrintedName);
         $stmt->bindParam(':rater_signature', $raterSig);
         $stmt->bindParam(':rater_date', $raterDate);
+    $stmt->bindParam(':faculty_printed_name', $facultyPrintedName);
         $stmt->bindParam(':faculty_signature', $facultySig);
         $stmt->bindParam(':faculty_date', $facultyDate);
         $stmt->bindParam(':evaluation_id', $evaluationId);

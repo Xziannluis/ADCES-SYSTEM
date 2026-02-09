@@ -73,11 +73,12 @@ $recent_evaluations = $evaluation->getByTeacher($teacher_id, 5);
                                     <?php echo ucfirst($teacher_data['status']); ?>
                                 </span>
                             </div>
-                            
+                                            <i class="fas fa-eye"></i> View
                             <div class="teacher-details">
                                 <div class="detail-item mb-3">
                                     <strong><i class="fas fa-envelope me-2"></i>Email:</strong>
                                     <p class="mb-0"><?php echo $teacher_data['email'] ? htmlspecialchars($teacher_data['email']) : '<span class="text-muted">Not provided</span>'; ?></p>
+                                            <i class="fas fa-eye"></i> View
                                 </div>
                                 <div class="detail-item mb-3">
                                     <strong><i class="fas fa-phone me-2"></i>Phone:</strong>
@@ -191,7 +192,7 @@ $recent_evaluations = $evaluation->getByTeacher($teacher_id, 5);
                                         ?>
                                     </td>
                                     <td>
-                                        <a href="evaluation-view.php?id=<?php echo $eval['id']; ?>" class="btn btn-sm btn-outline-primary">
+                                        <a href="../evaluators/view_evaluation.php?id=<?php echo $eval['id']; ?>" class="btn btn-sm btn-outline-primary">
                                             <i class="fas fa-eye"></i> View
                                         </a>
                                     </td>

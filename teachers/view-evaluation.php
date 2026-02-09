@@ -745,6 +745,52 @@ foreach($eval_details as $detail) {
                         <p style="margin: 0;"><?php echo nl2br(htmlspecialchars($eval_data['comments'])); ?></p>
                     </div>
                     <?php endif; ?>
+
+                    <?php
+                        $rSig = $evaluation['rater_signature'] ?? '';
+                        $fSig = $evaluation['faculty_signature'] ?? '';
+                        $rDate = $evaluation['rater_date'] ?? '';
+                        $fDate = $evaluation['faculty_date'] ?? '';
+                    ?>
+                    <?php if (!empty($rSig) || !empty($fSig) || !empty($rDate) || !empty($fDate)): ?>
+                    <div style="background: #ffffff; padding: 20px; border-radius: 12px; margin-top: 30px; border: 1px solid #e6e6e6;">
+                        <h6 style="color: var(--primary); font-weight: 700; margin-bottom: 14px;">
+                            <i class="fas fa-pen-nib me-2"></i>Signatures
+                        </h6>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <div class="border rounded p-3" style="background:#fff;">
+                                    <div style="font-weight:600; margin-bottom: 6px;">Rater/Observer</div>
+                                    <?php if (is_string($rSig) && strpos($rSig, 'data:image/') === 0): ?>
+                                        <img src="<?php echo htmlspecialchars($rSig); ?>" alt="Rater signature" style="max-width:100%; height: 90px; object-fit: contain; display:block;" />
+                                    <?php else: ?>
+                                        <div style="min-height: 90px; display:flex; align-items:center; color:#6c757d;">
+                                            <?php echo htmlspecialchars($rSig); ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($rDate)): ?>
+                                        <div style="margin-top: 8px; font-size: 0.9rem; color:#555;">Date: <?php echo htmlspecialchars($rDate); ?></div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="border rounded p-3" style="background:#fff;">
+                                    <div style="font-weight:600; margin-bottom: 6px;">Faculty</div>
+                                    <?php if (is_string($fSig) && strpos($fSig, 'data:image/') === 0): ?>
+                                        <img src="<?php echo htmlspecialchars($fSig); ?>" alt="Faculty signature" style="max-width:100%; height: 90px; object-fit: contain; display:block;" />
+                                    <?php else: ?>
+                                        <div style="min-height: 90px; display:flex; align-items:center; color:#6c757d;">
+                                            <?php echo htmlspecialchars($fSig); ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($fDate)): ?>
+                                        <div style="margin-top: 8px; font-size: 0.9rem; color:#555;">Date: <?php echo htmlspecialchars($fDate); ?></div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>

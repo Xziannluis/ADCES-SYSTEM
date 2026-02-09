@@ -17,6 +17,13 @@ $teacher = new Teacher($db);
 $user = new User($db);
 $evaluation = new Evaluation($db);
 
+// Get chairperson program subjects
+$program_subjects = [];
+$program_stmt = $db->prepare("SELECT subject FROM evaluator_subjects WHERE evaluator_id = :evaluator_id");
+$program_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+$program_stmt->execute();
+$program_subjects = $program_stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+
 // Get supervisor info (who supervises this chairperson)
 $supervisor_info = [];
 $supervisor_query = "
@@ -32,15 +39,47 @@ $supervisor_info = $supervisor_stmt->fetch(PDO::FETCH_ASSOC);
 
 // Get assigned teachers count
 $assigned_teachers_count = 0;
-$teachers_count_query = "
-    SELECT COUNT(*) as teacher_count 
-    FROM teacher_assignments 
-    WHERE evaluator_id = :evaluator_id
-";
+$teachers_count_query = "SELECT COUNT(*) as teacher_count FROM teacher_assignments WHERE evaluator_id = :evaluator_id";
+if (!empty($program_subjects)) {
+    $placeholders = [];
+    foreach ($program_subjects as $i => $subject) {
+        $placeholders[] = ":subject{$i}";
+    }
+    $teachers_count_query .= " AND subject IN (" . implode(',', $placeholders) . ")";
+}
 $teachers_count_stmt = $db->prepare($teachers_count_query);
 $teachers_count_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+if (!empty($program_subjects)) {
+    foreach ($program_subjects as $i => $subject) {
+        $teachers_count_stmt->bindValue(":subject{$i}", $subject);
+    }
+}
 $teachers_count_stmt->execute();
-$assigned_teachers_count = $teachers_count_stmt->fetch(PDO::FETCH_ASSOC)['teacher_count'];
+$assigned_teachers_count = (int)($teachers_count_stmt->fetch(PDO::FETCH_ASSOC)['teacher_count'] ?? 0);
+
+// Get assigned teachers list (filtered to program subjects if available)
+$assigned_teachers = [];
+$assigned_list_query = "SELECT ta.subject, ta.grade_level, t.name, t.department
+    FROM teacher_assignments ta
+    JOIN teachers t ON ta.teacher_id = t.id
+    WHERE ta.evaluator_id = :evaluator_id";
+if (!empty($program_subjects)) {
+    $placeholders = [];
+    foreach ($program_subjects as $i => $subject) {
+        $placeholders[] = ":list_subject{$i}";
+    }
+    $assigned_list_query .= " AND ta.subject IN (" . implode(',', $placeholders) . ")";
+}
+$assigned_list_query .= " ORDER BY t.name";
+$assigned_list_stmt = $db->prepare($assigned_list_query);
+$assigned_list_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+if (!empty($program_subjects)) {
+    foreach ($program_subjects as $i => $subject) {
+        $assigned_list_stmt->bindValue(":list_subject{$i}", $subject);
+    }
+}
+$assigned_list_stmt->execute();
+$assigned_teachers = $assigned_list_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get stats and recent evaluations for this evaluator
 $stats = $evaluation->getAdminStats($_SESSION['user_id']);
@@ -72,70 +111,55 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
                 <span>Welcome, <?php echo htmlspecialchars($_SESSION['name']); ?> (Chairperson)</span>
             </div>
 
-            <div class="row mb-4">
-                <div class="col-12">
-                    <div class="card coordinator-card">
-                        <div class="card-header bg-success text-white">
-                            <h5 class="mb-0">
-                                <i class="fas fa-user me-2"></i>Coordinator Overview
-                            </h5>
+            <div class="dashboard-stats">
+                <div class="dashboard-stat stat-1">
+                    <i class="fas fa-chalkboard-teacher"></i>
+                    <div class="number"><?php echo $assigned_teachers_count; ?></div>
+                    <div>Assigned Teachers (Program)</div>
+                </div>
+                <div class="dashboard-stat stat-2">
+                    <i class="fas fa-clipboard-check"></i>
+                    <div class="number"><?php echo $stats['completed_evaluations']; ?></div>
+                    <div>Completed Evaluations</div>
+                </div>
+            </div>
+
+            
+
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card mb-3">
+                        <div class="card-header bg-info text-white">
+                            <h5 class="mb-0"><i class="fas fa-users me-2"></i>My Assigned Teachers (Program)</h5>
                         </div>
                         <div class="card-body">
-                            <div class="row">
-                                <div class="col-md-6">
-                                    <h6>Supervisor Information</h6>
-                                    <?php if($supervisor_info): ?>
-                                        <div class="card bg-light">
-                                            <div class="card-body">
-                                                <p class="mb-1"><strong>Name:</strong> <?php echo htmlspecialchars($supervisor_info['name']); ?></p>
-                                                <p class="mb-1"><strong>Role:</strong> <?php echo ucfirst(str_replace('_',' ',$supervisor_info['role'])); ?></p>
-                                                <p class="mb-0"><strong>Department:</strong> <?php echo htmlspecialchars($supervisor_info['department']); ?></p>
+                            <?php if(!empty($assigned_teachers)): ?>
+                                <ul class="list-group">
+                                    <?php foreach($assigned_teachers as $assignment): ?>
+                                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                                            <div>
+                                                <strong><?php echo htmlspecialchars($assignment['name']); ?></strong>
+                                                <div class="text-muted small">
+                                                    <?php echo htmlspecialchars($assignment['department']); ?>
+                                                    <?php if(!empty($assignment['subject'])): ?>
+                                                        • <?php echo htmlspecialchars($assignment['subject']); ?>
+                                                    <?php endif; ?>
+                                                    <?php if(!empty($assignment['grade_level'])): ?>
+                                                        • Grade <?php echo htmlspecialchars($assignment['grade_level']); ?>
+                                                    <?php endif; ?>
+                                                </div>
                                             </div>
-                                        </div>
-                                    <?php else: ?>
-                                        <p class="text-muted">Not assigned to a supervisor yet.</p>
-                                        <a href="../edp/users.php" class="btn btn-sm btn-outline-secondary">Contact EDP for Assignment</a>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="col-md-6">
-                                    <h6>My Responsibilities</h6>
-                                    <div class="card bg-light">
-                                        <div class="card-body">
-                                            <p class="mb-2"><i class="fas fa-chalkboard-teacher me-2 text-success"></i><strong>Assigned Teachers:</strong> <?php echo $assigned_teachers_count; ?></p>
-                                            <p class="mb-2"><i class="fas fa-clipboard-check me-2 text-primary"></i><strong>Completed Evaluations:</strong> <?php echo $stats['completed_evaluations']; ?></p>
-                                            <p class="mb-0"><i class="fas fa-robot me-2 text-info"></i><strong>AI Recommendations:</strong> <?php echo $stats['ai_recommendations']; ?></p>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <?php if(!empty($notifications)): ?>
-                            <div class="row mt-3">
-                                <div class="col-12">
-                                    <div class="card border-info">
-                                        <div class="card-header bg-light">
-                                            <h6 class="mb-0">Notifications <span class="badge bg-info ms-2"><?php echo count($notifications); ?></span></h6>
-                                        </div>
-                                        <div class="card-body">
-                                            <ul class="list-group list-group-flush">
-                                                <?php foreach($notifications as $n): ?>
-                                                <li class="list-group-item">
-                                                    <div><?php echo htmlspecialchars($n['description']); ?></div>
-                                                    <div class="small text-muted mt-1"><?php echo date('M j, Y g:ia', strtotime($n['created_at'])); ?></div>
-                                                </li>
-                                                <?php endforeach; ?>
-                                            </ul>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                                            <a href="evaluation.php" class="btn btn-sm btn-outline-primary">Evaluate</a>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php else: ?>
+                                <p class="text-muted mb-0">No assigned teachers found for your program yet.</p>
                             <?php endif; ?>
                         </div>
                     </div>
                 </div>
-            </div>
-
-            <div class="row">
-                <div class="col-md-8">
+                <div class="col-md-6">
                     <div class="card">
                         <div class="card-header"><h5 class="mb-0">Recent Evaluations</h5></div>
                         <div class="card-body">
@@ -158,7 +182,7 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
                                                         elseif($rating >= 1.8) echo 'warning';
                                                         else echo 'danger';
                                                     ?>"><?php echo number_format($rating,1); ?></span>
-                                                    <a href="evaluation_view.php?id=<?php echo $eval['id']; ?>" class="btn btn-sm btn-outline-primary">View</a>
+                                                    <a href="view_evaluation.php?id=<?php echo $eval['id']; ?>" class="btn btn-sm btn-outline-primary">View</a>
                                                 </div>
                                             </div>
                                         </div>
@@ -172,18 +196,6 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
                                     <a href="evaluation.php" class="btn btn-primary"><i class="fas fa-plus me-2"></i>Start Evaluation</a>
                                 </div>
                             <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card">
-                        <div class="card-header"><h5 class="mb-0">Quick Actions</h5></div>
-                        <div class="card-body">
-                            <div class="d-grid gap-2">
-                                <a href="evaluation.php" class="btn btn-primary mb-2"><i class="fas fa-clipboard-check me-2"></i>New Evaluation</a>
-                                <!-- 'My Assigned Teachers' removed for coordinator roles -->
-                                <a href="reports.php" class="btn btn-outline-secondary"> <i class="fas fa-chart-bar me-2"></i>View Reports</a>
-                            </div>
                         </div>
                     </div>
                 </div>

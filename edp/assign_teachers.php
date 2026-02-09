@@ -242,12 +242,7 @@ $available_teachers = $teacher->getActiveByDepartment($evaluator['department']);
                             <?php if (in_array($evaluator['role'], ['subject_coordinator', 'chairperson'])): ?>
                             <div class="mb-3">
                                 <label class="form-label">Subject</label>
-                                <select class="form-select" name="subject" required>
-                                    <option value="">Select Subject</option>
-                                    <?php foreach($evaluator_specializations as $subject): ?>
-                                        <option value="<?php echo htmlspecialchars($subject); ?>"><?php echo htmlspecialchars($subject); ?></option>
-                                    <?php endforeach; ?>
-                                </select>
+                                <input type="text" class="form-control" name="subject" placeholder="e.g., English" required autocomplete="off">
                             </div>
                             <?php elseif ($evaluator['role'] === 'grade_level_coordinator'): ?>
                             <div class="mb-3">

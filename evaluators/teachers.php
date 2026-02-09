@@ -84,9 +84,129 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule')
     }
 }
 
-// Handle teacher assignment (only dean/principal may assign)
+// Cancel / clear evaluation schedule and room
+if ($_POST && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule') {
+    $teacher_id = $_POST['teacher_id'] ?? '';
+
+    if (!empty($teacher_id)) {
+        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, updated_at = NOW() WHERE id = :id";
+        $stmt = $db->prepare($query);
+        $stmt->bindParam(':id', $teacher_id);
+
+        if ($stmt->execute()) {
+            $success_message = "Evaluation schedule cancelled.";
+
+            // Log for auditing/notifications
+            try {
+                $tq = $db->prepare("SELECT user_id, name FROM teachers WHERE id = :id LIMIT 1");
+                $tq->bindParam(':id', $teacher_id);
+                $tq->execute();
+                $tdata = $tq->fetch(PDO::FETCH_ASSOC);
+                $uid = $tdata['user_id'] ?? null;
+
+                $description = sprintf(
+                    "Schedule cancelled for %s. Cancelled by %s (user_id=%d)",
+                    $tdata['name'] ?? ('teacher_id=' . $teacher_id),
+                    $_SESSION['name'],
+                    $_SESSION['user_id']
+                );
+
+                $log_q = $db->prepare("INSERT INTO audit_logs (user_id, action, description, ip_address) VALUES (:user_id, :action, :description, :ip)");
+                $action = 'SCHEDULE_CANCELLED';
+                $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+                $log_q->bindValue(':user_id', $uid ?: $_SESSION['user_id']);
+                $log_q->bindParam(':action', $action);
+                $log_q->bindParam(':description', $description);
+                $log_q->bindParam(':ip', $ip);
+                $log_q->execute();
+            } catch (Exception $e) {
+                error_log('Schedule cancel log error: ' . $e->getMessage());
+            }
+        } else {
+            $error_message = "Failed to cancel schedule.";
+        }
+    } else {
+        $error_message = "Teacher ID is required.";
+    }
+}
+
+// Mark evaluation done (lightweight: clears schedule/room; actual completed evaluations are stored in `evaluations`)
+if ($_POST && isset($_POST['action']) && $_POST['action'] === 'mark_done') {
+    $teacher_id = $_POST['teacher_id'] ?? '';
+
+    if (!empty($teacher_id)) {
+        try {
+            $db->beginTransaction();
+
+            // 1) Clear schedule/room (so teacher dashboard's schedule banner is removed)
+            $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, updated_at = NOW() WHERE id = :id";
+            $stmt = $db->prepare($query);
+            $stmt->bindParam(':id', $teacher_id);
+            $stmt->execute();
+
+            // 2) Mark the latest evaluation record as completed (so teacher dashboard status isn't Pending)
+            // Assumption: "done" means the most recently created evaluation for this teacher is now finalized.
+            $latestEvalStmt = $db->prepare(
+                "SELECT id, status FROM evaluations WHERE teacher_id = :teacher_id ORDER BY created_at DESC, id DESC LIMIT 1"
+            );
+            $latestEvalStmt->bindParam(':teacher_id', $teacher_id);
+            $latestEvalStmt->execute();
+            $latestEval = $latestEvalStmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($latestEval) {
+                $updateEvalStmt = $db->prepare(
+                    "UPDATE evaluations SET status = 'completed' WHERE id = :id AND (status IS NULL OR status <> 'completed')"
+                );
+                $updateEvalStmt->bindParam(':id', $latestEval['id']);
+                $updateEvalStmt->execute();
+            }
+
+            // 3) Log for auditing/notifications
+            $tq = $db->prepare("SELECT user_id, name FROM teachers WHERE id = :id LIMIT 1");
+            $tq->bindParam(':id', $teacher_id);
+            $tq->execute();
+            $tdata = $tq->fetch(PDO::FETCH_ASSOC);
+            $uid = $tdata['user_id'] ?? null;
+
+            $description = sprintf(
+                "Evaluation marked done for %s by %s (user_id=%d)%s",
+                $tdata['name'] ?? ('teacher_id=' . $teacher_id),
+                $_SESSION['name'],
+                $_SESSION['user_id'],
+                $latestEval ? (sprintf("; evaluation_id=%d", (int)$latestEval['id'])) : '; no evaluation record found'
+            );
+
+            $log_q = $db->prepare("INSERT INTO audit_logs (user_id, action, description, ip_address) VALUES (:user_id, :action, :description, :ip)");
+            $action = 'EVALUATION_MARKED_DONE';
+            $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+            $log_q->bindValue(':user_id', $uid ?: $_SESSION['user_id']);
+            $log_q->bindParam(':action', $action);
+            $log_q->bindParam(':description', $description);
+            $log_q->bindParam(':ip', $ip);
+            $log_q->execute();
+
+            $db->commit();
+
+            if ($latestEval) {
+                $success_message = "Marked as evaluated. Evaluation status updated.";
+            } else {
+                $success_message = "Marked as evaluated. Schedule cleared (no evaluation record found to update).";
+            }
+        } catch (Exception $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            error_log('Mark done error: ' . $e->getMessage());
+            $error_message = "Failed to mark as done.";
+        }
+    } else {
+        $error_message = "Teacher ID is required.";
+    }
+}
+
+// Handle teacher assignment (only dean may assign)
 if ($_POST && isset($_POST['action']) && $_POST['action'] === 'assign_teacher') {
-    if (!in_array($_SESSION['role'], ['dean', 'principal'])) {
+    if ($_SESSION['role'] !== 'dean') {
         $error_message = "You are not allowed to assign teachers.";
     } else {
         $teacher_id = $_POST['teacher_id'];
@@ -131,11 +251,11 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'assign_teacher') 
     }
 }
 
-// Handle teacher removal (only dean/principal may remove assignments)
+// Handle teacher removal (only dean may remove assignments)
 if ($_POST && isset($_POST['action']) && $_POST['action'] === 'remove_assignment') {
     $assignment_id = $_POST['assignment_id'];
     
-    if (!in_array($_SESSION['role'], ['dean', 'principal'])) {
+    if ($_SESSION['role'] !== 'dean') {
         $error_message = "You are not allowed to remove assignments.";
     } else {
         // Deans/Principals may remove any assignment by id
@@ -339,6 +459,64 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
             max-width: 600px;
         }
 
+        .schedule-modal .modal-header {
+            background: linear-gradient(135deg, #1b66c9, #0f4fa8);
+            color: #fff;
+            border-bottom: none;
+        }
+
+        .schedule-modal .modal-title {
+            font-weight: 600;
+        }
+
+        .schedule-modal .modal-body {
+            padding: 20px 22px 8px;
+        }
+
+        .schedule-modal .modal-footer {
+            border-top: none;
+            padding: 12px 22px 20px;
+        }
+
+        .schedule-card {
+            border: 1px solid #e6eef9;
+            background: #f7fbff;
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+        }
+
+        .schedule-field label {
+            font-weight: 600;
+        }
+
+        .schedule-help {
+            color: #6c757d;
+            font-size: 0.8rem;
+            margin-top: 4px;
+        }
+
+        .schedule-preview {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+
+        .schedule-preview .preview-chip {
+            background: #fff;
+            border: 1px solid #d7e3f7;
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 0.8rem;
+            color: #2a3b4f;
+        }
+
+        .schedule-preview .preview-chip i {
+            color: #1b66c9;
+            margin-right: 6px;
+        }
+
         .schedule-info {
             background: #f8f9fa;
             padding: 10px;
@@ -438,61 +616,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
 
             <!-- Assign Teacher form removed (assignments handled via dedicated pages) -->
 
-            <!-- Assigned Teachers Section -->
-            <?php if (!empty($assigned_teachers)): ?>
-            <div class="assigned-teachers-section">
-                <div class="card">
-                    <div class="card-header bg-success text-white">
-                        <h5 class="mb-0"><i class="fas fa-list me-2"></i>My Assigned Teachers</h5>
-                    </div>
-                    <div class="card-body">
-                        <?php
-                        // Group assignments by subject/grade level
-                        $grouped_assignments = [];
-                        foreach ($assigned_teachers as $assignment) {
-                            $key = $assignment['subject'] ?: 'Grade ' . $assignment['grade_level'];
-                            $grouped_assignments[$key][] = $assignment;
-                        }
-                        ?>
-                        
-                        <?php foreach($grouped_assignments as $category => $assignments): ?>
-                        <div class="assignment-card">
-                            <div class="assignment-header">
-                                <h6 class="mb-0">
-                                    <i class="fas fa-book me-2"></i><?php echo htmlspecialchars($category); ?>
-                                    <span class="badge bg-secondary ms-2"><?php echo count($assignments); ?> teachers</span>
-                                </h6>
-                            </div>
-                            <div class="assignment-body">
-                                <ul class="teacher-list">
-                                    <?php foreach($assignments as $assignment): ?>
-                                    <li class="teacher-item">
-                                        <div>
-                                            <strong><?php echo htmlspecialchars($assignment['teacher_name']); ?></strong>
-                                            <small class="text-muted ms-2"><?php echo htmlspecialchars($assignment['department']); ?></small>
-                                        </div>
-                                        <div>
-                                            <?php if (in_array($_SESSION['role'], ['dean', 'principal'])): ?>
-                                            <form method="POST" style="display: inline;">
-                                                <input type="hidden" name="action" value="remove_assignment">
-                                                <input type="hidden" name="assignment_id" value="<?php echo $assignment['id']; ?>">
-                                                <button type="submit" class="btn btn-sm btn-danger" 
-                                                        onclick="return confirm('Remove <?php echo htmlspecialchars($assignment['teacher_name']); ?> from assignments?')">
-                                                    <i class="fas fa-times"></i> Remove
-                                                </button>
-                                            </form>
-                                            <?php endif; ?>
-                                        </div>
-                                    </li>
-                                    <?php endforeach; ?>
-                                </ul>
-                            </div>
-                        </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            </div>
-            <?php endif; ?>
+            
 
             <!-- All Teachers in Department -->
             <div class="mt-4">
@@ -537,16 +661,13 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                     <?php echo ucfirst($teacher_row['status']); ?>
                                 </div>
 
-                                <?php if($is_assigned): ?>
-                                <div class="assignment-badge">
-                                    <i class="fas fa-check me-1"></i>Assigned for <?php echo htmlspecialchars($assignment_info); ?>
-                                </div>
-                                <?php endif; ?>
+                                <!-- Assignment badge removed per request -->
 
                                 <?php if(!empty($teacher_row['evaluation_schedule']) || !empty($teacher_row['evaluation_room'])): ?>
                                 <div class="schedule-info">
                                     <?php if(!empty($teacher_row['evaluation_schedule'])): ?>
-                                        <div><i class="fas fa-calendar me-2"></i><?php echo htmlspecialchars($teacher_row['evaluation_schedule']); ?></div>
+                                        <?php $scheduleFormatted = date('F d, Y \a\t h:i A', strtotime($teacher_row['evaluation_schedule'])); ?>
+                                        <div><i class="fas fa-calendar me-2"></i><?php echo htmlspecialchars($scheduleFormatted); ?></div>
                                     <?php endif; ?>
                                     <?php if(!empty($teacher_row['evaluation_room'])): ?>
                                         <div><i class="fas fa-door-open me-2"></i><?php echo htmlspecialchars($teacher_row['evaluation_room']); ?></div>
@@ -555,9 +676,28 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                 <?php endif; ?>
 
                                 <div class="teacher-actions">
-                                    <button class="btn btn-sm btn-outline-info" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="editSchedule(<?php echo $teacher_row['id']; ?>, '<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? ''); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? ''); ?>')">
+                                    <button class="btn btn-sm btn-outline-info" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; line-height: 1.2;" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="editSchedule(<?php echo $teacher_row['id']; ?>, '<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? ''); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? ''); ?>')">
                                         <i class="fas fa-calendar"></i> Schedule
                                     </button>
+
+                                    <?php if(!empty($teacher_row['evaluation_schedule']) || !empty($teacher_row['evaluation_room'])): ?>
+                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Mark evaluation as done and clear schedule?');">
+                                            <input type="hidden" name="action" value="mark_done">
+                                            <input type="hidden" name="teacher_id" value="<?php echo $teacher_row['id']; ?>">
+                                            <button type="submit" class="btn btn-sm btn-outline-success">
+                                                <i class="fas fa-check"></i> Done
+                                            </button>
+                                        </form>
+
+                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this schedule?');">
+                                            <input type="hidden" name="action" value="cancel_schedule">
+                                            <input type="hidden" name="teacher_id" value="<?php echo $teacher_row['id']; ?>">
+                                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                                <i class="fas fa-times"></i> Cancel
+                                            </button>
+                                        </form>
+                                    <?php endif; ?>
+
                                     <a href="?action=toggle_status&teacher_id=<?php echo $teacher_row['id']; ?>" class="btn btn-sm btn-outline-<?php echo $teacher_row['status'] == 'active' ? 'warning' : 'success'; ?>" onclick="return confirm('Are you sure?');">
                                         <i class="fas fa-<?php echo $teacher_row['status'] == 'active' ? 'ban' : 'check'; ?>"></i> <?php echo $teacher_row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?>
                                     </a>
@@ -580,32 +720,64 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
     <?php include '../includes/footer.php'; ?>
 
     <!-- Schedule and Room Modal -->
-    <div class="modal fade" id="scheduleModal" tabindex="-1">
-        <div class="modal-dialog">
+    <div class="modal fade schedule-modal" id="scheduleModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Set Evaluation Schedule & Room</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    <h5 class="modal-title"><i class="fas fa-calendar-check me-2"></i>Set Evaluation Schedule</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <form method="POST">
                     <div class="modal-body">
                         <input type="hidden" name="action" value="update_schedule">
                         <input type="hidden" name="teacher_id" id="schedule_teacher_id">
+
+                        <div class="schedule-card">
+                            <div class="d-flex align-items-start gap-2">
+                                <i class="fas fa-circle-info text-primary mt-1"></i>
+                                <div>
+                                    <div class="fw-semibold">This schedule unlocks evaluation access</div>
+                                    <div class="text-muted small">Both fields are required so evaluators can plan the observation.</div>
+                                </div>
+                            </div>
+                        </div>
                         
-                        <div class="form-group">
+                        <div class="form-group schedule-field">
                             <label class="form-label">Evaluation Schedule <span class="text-danger">*</span></label>
-                            <input type="datetime-local" class="form-control" id="evaluation_schedule" name="evaluation_schedule" required placeholder="Select date and time">
-                            <small class="form-text text-muted">Date and time of the classroom observation/evaluation.</small>
+                            <input type="hidden" id="evaluation_schedule" name="evaluation_schedule" required>
+                            <div class="row g-2">
+                                <div class="col-7">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-calendar"></i></span>
+                                        <input type="date" class="form-control" id="evaluation_date" required>
+                                    </div>
+                                </div>
+                                <div class="col-5">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-clock"></i></span>
+                                        <input type="time" class="form-control" id="evaluation_time" step="900" required>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="schedule-help">Pick a date and time for the classroom observation.</div>
                         </div>
 
-                        <div class="form-group">
+                        <div class="form-group schedule-field">
                             <label class="form-label">Classroom/Room <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="evaluation_room" name="evaluation_room" required placeholder="e.g., Room 101, Laboratory B, Building A - Room 303">
-                            <small class="form-text text-muted">Location where the evaluation will take place.</small>
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="fas fa-location-dot"></i></span>
+                                <input type="text" class="form-control" id="evaluation_room" name="evaluation_room" required placeholder="e.g., Room 101, Laboratory B, Building A - Room 303">
+                            </div>
+                            <div class="schedule-help">Location where the evaluation will take place.</div>
+                        </div>
+
+                        <div class="schedule-preview" id="schedulePreview">
+                            <span class="preview-chip" id="schedulePreviewTime"><i class="fas fa-calendar"></i>No date selected</span>
+                            <span class="preview-chip" id="schedulePreviewRoom"><i class="fas fa-door-open"></i>No room selected</span>
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
                         <button type="submit" class="btn btn-primary">Save Schedule & Room</button>
                     </div>
                 </form>
@@ -614,11 +786,92 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
     </div>
 
     <script>
+        function updateSchedulePreview() {
+            const dateInput = document.getElementById('evaluation_date');
+            const timeInput = document.getElementById('evaluation_time');
+            const roomInput = document.getElementById('evaluation_room');
+            const previewTime = document.getElementById('schedulePreviewTime');
+            const previewRoom = document.getElementById('schedulePreviewRoom');
+
+            if (previewTime) {
+                const dateVal = dateInput?.value || '';
+                const timeVal = timeInput?.value || '';
+                if (dateVal && timeVal) {
+                    const date = new Date(`${dateVal}T${timeVal}`);
+                    const formatter = new Intl.DateTimeFormat('en-US', {
+                        month: 'short',
+                        day: '2-digit',
+                        year: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        hour12: true
+                    });
+                    const formatted = isNaN(date.getTime()) ? `${dateVal} ${timeVal}` : formatter.format(date);
+                    previewTime.innerHTML = '<i class="fas fa-calendar"></i>' + formatted;
+                } else if (dateVal) {
+                    const date = new Date(`${dateVal}T00:00`);
+                    const formatter = new Intl.DateTimeFormat('en-US', {
+                        month: 'short',
+                        day: '2-digit',
+                        year: 'numeric'
+                    });
+                    const formatted = isNaN(date.getTime()) ? dateVal : formatter.format(date);
+                    previewTime.innerHTML = '<i class="fas fa-calendar"></i>' + formatted;
+                } else {
+                    previewTime.innerHTML = '<i class="fas fa-calendar"></i>No date selected';
+                }
+            }
+
+            if (previewRoom) {
+                const room = roomInput?.value.trim() || '';
+                previewRoom.innerHTML = '<i class="fas fa-door-open"></i>' + (room || 'No room selected');
+            }
+        }
+
         function editSchedule(teacherId, schedule, room) {
             document.getElementById('schedule_teacher_id').value = teacherId;
-            document.getElementById('evaluation_schedule').value = schedule;
+            const scheduleInput = document.getElementById('evaluation_schedule');
+            const dateInput = document.getElementById('evaluation_date');
+            const timeInput = document.getElementById('evaluation_time');
+            scheduleInput.value = schedule || '';
             document.getElementById('evaluation_room').value = room;
+
+            if (schedule) {
+                const normalized = schedule.replace(' ', 'T');
+                const parsed = new Date(normalized);
+                if (!isNaN(parsed.getTime())) {
+                    dateInput.value = parsed.toISOString().slice(0, 10);
+                    timeInput.value = parsed.toTimeString().slice(0, 5);
+                } else if (normalized.includes('T')) {
+                    const parts = normalized.split('T');
+                    dateInput.value = parts[0] || '';
+                    timeInput.value = (parts[1] || '').slice(0, 5);
+                }
+            } else {
+                dateInput.value = '';
+                timeInput.value = '';
+            }
+            updateSchedulePreview();
         }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const scheduleInput = document.getElementById('evaluation_schedule');
+            const dateInput = document.getElementById('evaluation_date');
+            const timeInput = document.getElementById('evaluation_time');
+            const roomInput = document.getElementById('evaluation_room');
+            if (dateInput) dateInput.addEventListener('input', updateSchedulePreview);
+            if (timeInput) timeInput.addEventListener('input', updateSchedulePreview);
+            if (roomInput) roomInput.addEventListener('input', updateSchedulePreview);
+
+            const scheduleForm = document.querySelector('#scheduleModal form');
+            if (scheduleForm) {
+                scheduleForm.addEventListener('submit', () => {
+                    const dateVal = dateInput?.value || '';
+                    const timeVal = timeInput?.value || '';
+                    scheduleInput.value = (dateVal && timeVal) ? `${dateVal} ${timeVal}:00` : '';
+                });
+            }
+        });
     </script>
 </body>
 </html>

@@ -217,6 +217,39 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 }
                 break;
 
+            case 'update_teacher':
+                // Allow EDP to update teacher account (name, department, optional password)
+                $uid = $_POST['user_id'] ?? null;
+                if ($uid) {
+                    $updData = [
+                        'name' => $_POST['name'] ?? '',
+                        'role' => 'teacher',
+                        'department' => $_POST['department'] ?? '',
+                        'designation' => ''
+                    ];
+                    // Only include password when provided
+                    if (!empty($_POST['password'])) {
+                        $updData['password'] = $_POST['password'];
+                    }
+
+                    if ($user->update($uid, $updData)) {
+                        // Update teachers table record (if exists)
+                        $update_teacher_q = "UPDATE teachers SET name = :name, department = :department WHERE user_id = :user_id";
+                        $ut = $db->prepare($update_teacher_q);
+                        $ut->bindParam(':name', $updData['name']);
+                        $ut->bindParam(':department', $updData['department']);
+                        $ut->bindParam(':user_id', $uid);
+                        $ut->execute();
+
+                        $_SESSION['success'] = "Teacher account updated successfully.";
+                    } else {
+                        $_SESSION['error'] = "Failed to update teacher account.";
+                    }
+                } else {
+                    $_SESSION['error'] = "Invalid user id.";
+                }
+                break;
+
             case 'activate':
                 if($user->updateStatus($_POST['user_id'], 'active')) {
                     $_SESSION['success'] = "Account activated successfully.";
@@ -290,6 +323,75 @@ function getAssignedCoordinators($db, $supervisor_id) {
     <title>Manage Deans - AI Classroom Evaluation</title>
     <?php include '../includes/header.php'; ?>
     <style>
+        .page-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px 20px;
+            margin-bottom: 18px;
+        }
+
+        .page-title {
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .page-subtitle {
+            color: #6c757d;
+            font-size: 0.9rem;
+            margin-bottom: 0;
+        }
+
+        .page-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .page-actions .btn {
+            border-radius: 999px;
+            padding: 0.45rem 1rem;
+            font-weight: 600;
+            box-shadow: 0 6px 16px rgba(15, 60, 120, 0.12);
+        }
+
+        .filter-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 12px;
+            align-items: center;
+            background: #f8fafc;
+            border: 1px solid #e6edf5;
+            border-radius: 12px;
+            padding: 10px 14px;
+            margin-bottom: 18px;
+        }
+
+        .filter-label {
+            font-weight: 600;
+            color: #2b3a4a;
+        }
+
+        .section-card {
+            border-radius: 14px;
+            border: 1px solid #e5edf7;
+            box-shadow: 0 10px 24px rgba(15, 60, 120, 0.08);
+            overflow: hidden;
+        }
+
+        .section-card .card-header {
+            border-bottom: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+        }
+
+        .section-card .card-body {
+            padding: 18px;
+        }
+
         .subjects-container, .grade-levels-container, .supervisor-container {
             display: none;
             margin-top: 15px;
@@ -441,25 +543,28 @@ function getAssignedCoordinators($db, $supervisor_id) {
     
     <div class="main-content">
         <div class="container-fluid">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3>Create User Accounts</h3>
+            <div class="page-header">
                 <div>
-                    <button class="btn btn-primary m-3" data-bs-toggle="modal" data-bs-target="#addLeadershipModal">
+                    <h3 class="page-title">Create User Accounts</h3>
+                    <p class="page-subtitle">Manage leadership, evaluators, coordinators, and teacher access in one place.</p>
+                </div>
+                <div class="page-actions">
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addLeadershipModal">
                         <i class="fas fa-plus me-2"></i>Add President/VP
                     </button>
-                    <button class="btn btn-success m-3" data-bs-toggle="modal" data-bs-target="#addEvaluatorModal">
+                    <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addEvaluatorModal">
                         <i class="fas fa-plus me-2"></i>Add Evaluators
                     </button>
-                    <button class="btn btn-warning m-3" data-bs-toggle="modal" data-bs-target="#addTeacherModal">
+                    <button class="btn btn-warning" data-bs-toggle="modal" data-bs-target="#addTeacherModal">
                         <i class="fas fa-plus me-2"></i>Add Teacher Account
-                    </button>
+                    
                 </div>
             </div>
 
             <?php if(isset($_SESSION['success'])): ?>
             <div class="alert alert-success alert-dismissible fade show">
                 <i class="fas fa-check-circle me-2"></i>
-                <?php echo $_SESSION['success']; unset($_SESSION['success']); ?>
+                <?php echo htmlspecialchars($_SESSION['success'], ENT_QUOTES, 'UTF-8'); unset($_SESSION['success']); ?>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
             <?php endif; ?>
@@ -472,9 +577,9 @@ function getAssignedCoordinators($db, $supervisor_id) {
             </div>
             <?php endif; ?>
 
-            <form method="get" class="mb-3 d-flex align-items-center">
-                <label class="me-2 mb-0">Department:</label>
-                <select name="department" class="form-select w-auto me-2" onchange="this.form.submit()">
+            <form method="get" class="filter-toolbar">
+                <span class="filter-label"><i class="fas fa-filter me-2"></i>Department</span>
+                <select name="department" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
                     <option value="">All Departments</option>
                     <?php foreach($departments as $key => $label): ?>
                         <option value="<?php echo $key; ?>" <?php if($selected_department == $key) echo 'selected'; ?>><?php echo $label; ?></option>
@@ -483,7 +588,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
             </form>
 
 <!-- Leadership Section (President & Vice President) -->
-<div class="card mb-4">
+<div class="card mb-4 section-card">
     <div class="card-header bg-primary text-white">
         <h5 class="mb-0"><i class="fas fa-crown me-2"></i>President & Vice President</h5>
     </div>
@@ -550,17 +655,11 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 </tbody>
             </table>
         </div>
-                            <!-- Designation (for Coordinators) -->
-                            <div class="mb-3" id="designationContainer" style="display: none;">
-                                <label class="form-label">Designation / Program Head</label>
-                                <input type="text" class="form-control" name="designation" id="designationInput" placeholder="e.g. IT Program Head">
-                                <div class="form-text">Optional: editable title displayed under the evaluator's name.</div>
-                            </div>
     </div>
 </div>
 
 <!-- Supervisors Section (Deans & Principals) -->
-<div class="card mb-4">
+<div class="card mb-4 section-card">
     <div class="card-header bg-info text-white">
         <h5 class="mb-0"><i class="fas fa-user-tie me-2"></i>Deans & Principals</h5>
     </div>
@@ -667,7 +766,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
 </div>
 
 <!-- Coordinators Section -->
-<div class="card mb-4">
+<div class="card mb-4 section-card">
     <div class="card-header bg-success text-white">
         <h5 class="mb-0"><i class="fas fa-users me-2"></i>Coordinators</h5>
     </div>
@@ -807,18 +906,27 @@ function getAssignedCoordinators($db, $supervisor_id) {
 </div>
 
 <!-- Teachers Section -->
-<div class="card mb-4">
+<div class="card mb-4 section-card">
     <div class="card-header bg-warning text-white">
         <h5 class="mb-0"><i class="fas fa-chalkboard-teacher me-2"></i>Teachers</h5>
     </div>
     <div class="card-body">
         <?php
-        // Get teachers with user accounts
+        // Get teachers with user accounts (filter by selected department if provided)
         $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id FROM teachers t 
                         LEFT JOIN users u ON t.user_id = u.id 
-                        WHERE (u.role = 'teacher' AND u.id IS NOT NULL)
-                        ORDER BY t.name ASC";
-        $teacher_result = $db->query($teacher_query);
+                        WHERE (u.role = 'teacher' AND u.id IS NOT NULL)";
+        if (!empty($selected_department)) {
+            $teacher_query .= " AND t.department = :department";
+        }
+        $teacher_query .= " ORDER BY t.name ASC";
+
+        $teacher_stmt = $db->prepare($teacher_query);
+        if (!empty($selected_department)) {
+            $teacher_stmt->bindParam(':department', $selected_department);
+        }
+        $teacher_stmt->execute();
+        $teacher_result = $teacher_stmt;
         ?>
         <div class="table-responsive">
             <table class="table table-striped table-hover">
@@ -864,6 +972,10 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         </td>
                         <td>
                             <div class="btn-group btn-group-sm" role="group">
+                                <button class="btn btn-outline-primary btn-edit-teacher" data-userid="<?php echo $row['user_id']; ?>" data-username="<?php echo htmlspecialchars($row['username']); ?>" data-name="<?php echo htmlspecialchars($row['name']); ?>" data-department="<?php echo htmlspecialchars($row['department']); ?>">
+                                    <i class="fas fa-edit"></i>
+                                    <span class="d-none d-sm-inline">Edit</span>
+                                </button>
                                 <form method="POST" class="d-inline">
                                     <input type="hidden" name="user_id" value="<?php echo $row['user_id']; ?>">
                                     <input type="hidden" name="action" value="<?php echo $row['status'] == 'active' ? 'deactivate' : 'activate'; ?>">
@@ -1018,13 +1130,12 @@ function getAssignedCoordinators($db, $supervisor_id) {
                                 </div>
                             </div>
                         </div>
-                        
-                        <!-- Subjects Selection (for Subject Coordinators and Chairpersons) -->
-                        <div class="mb-3" id="subjectsContainer" style="display: none;">
-                            <label class="form-label">Subjects/Courses</label>
-                            <div class="subjects-list" id="subjectsList">
-                                <!-- Subjects will be populated dynamically based on department -->
-                            </div>
+
+                        <!-- Designation (for Coordinators) -->
+                        <div class="mb-3" id="designationContainer" style="display: none;">
+                            <label class="form-label">Designation / Program Head</label>
+                            <input type="text" class="form-control" name="designation" id="designationInput" placeholder="e.g. IT Program Head">
+                            <div class="form-text">Optional: editable title displayed under the evaluator's name.</div>
                         </div>
                         
                         <!-- Grade Levels Selection (for Grade Level Coordinators) -->
@@ -1099,23 +1210,52 @@ function getAssignedCoordinators($db, $supervisor_id) {
         </div>
     </div>
 
+            <!-- Edit Teacher Modal -->
+            <div class="modal fade" id="editTeacherModal" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Edit Teacher Account</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <form method="POST" id="editTeacherForm">
+                            <div class="modal-body">
+                                <input type="hidden" name="action" value="update_teacher">
+                                <input type="hidden" name="user_id" id="editTeacherUserId">
+                                <div class="mb-3">
+                                    <label class="form-label">Username</label>
+                                    <input type="text" class="form-control" id="editTeacherUsername" disabled>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Name</label>
+                                    <input type="text" class="form-control" name="name" id="editTeacherName" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Department</label>
+                                    <select class="form-select" name="department" id="editTeacherDepartment" required>
+                                        <option value="">Select Department</option>
+                                        <?php foreach($departments as $key => $label): ?>
+                                            <option value="<?php echo $key; ?>"><?php echo $label; ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Password (leave blank to keep current)</label>
+                                    <input type="password" class="form-control" name="password">
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="submit" class="btn btn-primary">Save Changes</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="../assets/js/main.js"></script>
     <script>
-        // Subject data by department
-        const departmentSubjects = {
-            'CTE': ['Mathematics Education', 'Science Education', 'English Education', 'Filipino Education', 'Social Studies Education'],
-            'BSED': ['Professional Education', 'Specialization Courses', 'Thesis Writing'],
-            'CAS': ['English', 'Filipino', 'Mathematics', 'Science', 'Social Sciences', 'Physical Education'],
-            'CCJE': ['Criminal Law', 'Criminology', 'Forensic Science', 'Law Enforcement Administration'],
-            'CBM': ['Accounting', 'Business Management', 'Marketing', 'Finance', 'Entrepreneurship'],
-            'CCIS': ['Computer Programming', 'Database Management', 'Web Development', 'Networking', 'Software Engineering'],
-            'CTHM': ['Tourism Management', 'Hospitality Management', 'Culinary Arts', 'Event Management'],
-            'ELEM': ['English', 'Mathematics', 'Science', 'Filipino', 'Araling Panlipunan', 'MAPEH'],
-            'JHS': ['English', 'Mathematics', 'Science', 'Filipino', 'Araling Panlipunan', 'MAPEH', 'TLE'],
-            'SHS': ['Core Subjects', 'Applied Track Subjects', 'Specialized Track Subjects']
-        };
-
         // Grade levels
         const gradeLevels = ['7', '8', '9', '10', '11', '12'];
 
@@ -1127,7 +1267,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
             const designationInput = document.getElementById('designationInput');
             const subjectsContainer = document.getElementById('subjectsContainer');
             const gradeLevelsContainer = document.getElementById('gradeLevelsContainer');
-            const subjectsList = document.getElementById('subjectsList');
             const gradeLevelsList = document.getElementById('gradeLevelsList');
 
             const designationMap = {
@@ -1169,7 +1308,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 if (role === 'subject_coordinator' || role === 'chairperson') {
                     if (department) {
                         subjectsContainer.style.display = 'block';
-                        populateSubjects(department);
                     }
                 } else if (role === 'grade_level_coordinator') {
                     gradeLevelsContainer.style.display = 'block';
@@ -1179,23 +1317,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 if (!(role === 'subject_coordinator' || role === 'chairperson' || role === 'grade_level_coordinator')) {
                     designationContainer.style.display = 'none';
                 }
-            }
-
-            function populateSubjects(department) {
-                const subjects = departmentSubjects[department] || [];
-                subjectsList.innerHTML = '';
-                
-                subjects.forEach(subject => {
-                    const subjectDiv = document.createElement('div');
-                    subjectDiv.className = 'form-check subject-item';
-                    subjectDiv.innerHTML = `
-                        <input class="form-check-input subject-checkbox" type="checkbox" name="subjects[]" value="${subject}" id="subject_${subject.replace(/\s+/g, '_')}">
-                        <label class="form-check-label" for="subject_${subject.replace(/\s+/g, '_')}">
-                            ${subject}
-                        </label>
-                    `;
-                    subjectsList.appendChild(subjectDiv);
-                });
             }
 
             function populateGradeLevels() {
@@ -1235,6 +1356,26 @@ function getAssignedCoordinators($db, $supervisor_id) {
             var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
             var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
                 return new bootstrap.Tooltip(tooltipTriggerEl);
+            });
+        });
+
+        // Edit teacher button handler
+        document.addEventListener('DOMContentLoaded', function() {
+            const editButtons = document.querySelectorAll('.btn-edit-teacher');
+            const editModalEl = document.getElementById('editTeacherModal');
+            const editModal = new bootstrap.Modal(editModalEl);
+            editButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const userId = btn.getAttribute('data-userid');
+                    const username = btn.getAttribute('data-username');
+                    const name = btn.getAttribute('data-name');
+                    const department = btn.getAttribute('data-department');
+                    document.getElementById('editTeacherUserId').value = userId;
+                    document.getElementById('editTeacherUsername').value = username;
+                    document.getElementById('editTeacherName').value = name;
+                    document.getElementById('editTeacherDepartment').value = department;
+                    editModal.show();
+                });
             });
         });
     </script>

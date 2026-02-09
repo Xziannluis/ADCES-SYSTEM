@@ -15,10 +15,44 @@ $db = $database->getConnection();
 $evaluation = new Evaluation($db);
 $teacher = new Teacher($db);
 
+// Map department codes/names to their full display names for printing.
+// Add/adjust entries as needed to match your database values.
+$department_map = [
+    'CCIS' => 'College of Computing and Information Sciences',
+    'COE'  => 'College of Education',
+    'CBA'  => 'College of Business Administration',
+    'CCJE' => 'College of Criminal Justice Education',
+    'CAS'  => 'College of Arts and Sciences',
+    'CHM'  => 'College of Hospitality Management',
+    'CTE'  => 'College of Teacher Education',
+];
+
+$raw_department = (string)($_SESSION['department'] ?? '');
+$department_display = $department_map[$raw_department] ?? $raw_department;
+
+// Build Academic Year list based on actual evaluations (so dropdown only shows years with data)
+$available_years = [];
+try {
+    $yearsStmt = $db->prepare(
+        "SELECT DISTINCT academic_year FROM evaluations WHERE evaluator_id = :evaluator_id AND academic_year IS NOT NULL AND academic_year <> '' ORDER BY academic_year DESC"
+    );
+    $yearsStmt->bindValue(':evaluator_id', $_SESSION['user_id']);
+    $yearsStmt->execute();
+    $available_years = $yearsStmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    // Fail-safe: keep page working even if query fails
+    $available_years = [];
+}
+
 // Get filter parameters
-$academic_year = $_GET['academic_year'] ?? '2023-2024';
-$semester = $_GET['semester'] ?? '';
-$teacher_id = $_GET['teacher_id'] ?? '';
+// IMPORTANT: filters should be applied only when explicitly selected.
+$academic_year = trim((string)($_GET['academic_year'] ?? ''));
+$semester = trim((string)($_GET['semester'] ?? ''));
+$teacher_id = trim((string)($_GET['teacher_id'] ?? ''));
+
+// Display labels used in the report header
+$academic_year_label = ($academic_year !== '') ? $academic_year : 'All';
+$semester_label = ($semester !== '') ? $semester : 'All';
 
 // Get evaluations for reporting
 $evaluations = $evaluation->getEvaluationsForReport($_SESSION['user_id'], $academic_year, $semester, $teacher_id);
@@ -121,6 +155,14 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
         .print-only {
             display: none;
         }
+
+        /* Prevent signature block from being pushed to a new printed page */
+        @media print {
+            .avoid-page-break {
+                page-break-inside: avoid;
+                break-inside: avoid;
+            }
+        }
         
         /* Responsive table for smaller screens */
         @media (max-width: 1200px) {
@@ -138,6 +180,9 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             }
             .print-only {
                 display: block !important;
+            }
+            .print-hide {
+                display: none !important;
             }
             .classroom-report {
                 border: none;
@@ -157,6 +202,28 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             .report-table {
                 min-width: auto;
             }
+
+            /* More "paper" look */
+            body {
+                background: #fff !important;
+                color: #000 !important;
+            }
+            .report-info {
+                background: #fff !important;
+            }
+            .report-table th,
+            .report-table td {
+                border: 1px solid #000 !important;
+            }
+            .report-table th {
+                background: #fff !important;
+                color: #000 !important;
+                font-weight: 700;
+                font-size: 12px;
+            }
+            .report-table td {
+                font-size: 12px;
+            }
         }
         
         .stat-card {
@@ -174,6 +241,42 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             margin-bottom: 20px;
             padding: 20px;
         }
+
+        /* Ratings cell layout (screen + print)
+           Target print structure like the paper form: "4.0  Very Satisfactory" */
+        .ratings-cell {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+        }
+        .ratings-cell .rating-score {
+            font-weight: 700;
+            min-width: 2.7rem;
+            text-align: left;
+        }
+        .ratings-cell .rating-label {
+            font-weight: 600;
+            text-align: left;
+            white-space: normal;
+            line-height: 1.1;
+        }
+
+        @media print {
+            /* Print like the paper form: plain text, no colored badge */
+            .rating-badge {
+                background: none !important;
+                color: #000 !important;
+                padding: 0 !important;
+                border-radius: 0 !important;
+                font-size: 0.9rem !important;
+                font-weight: 600 !important;
+            }
+            .ratings-cell {
+                justify-content: flex-start;
+            }
+        }
     </style>
 </head>
 <body>
@@ -182,7 +285,7 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
     <div class="main-content">
         <div class="container-fluid">
             <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3>Evaluation Reports - <?php echo $_SESSION['department']; ?></h3>
+                <h3 class="print-hide">Evaluation Reports - <?php echo $_SESSION['department']; ?></h3>
                 <div class="no-print mt-3">
                     <button class="btn btn-primary me-2" onclick="window.print()">
                         <i class="fas fa-print me-2"></i>Print Report
@@ -196,9 +299,16 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                     <div class="col-md-3">
                         <label for="academic_year" class="form-label">Academic Year</label>
                         <select class="form-select" id="academic_year" name="academic_year">
-                            <option value="2025-2026" <?php echo $academic_year == '2025-2026' ? 'selected' : ''; ?>>2025-2026</option>
-                            <option value="2024-2025" <?php echo $academic_year == '2024-2025' ? 'selected' : ''; ?>>2024-2025</option>
-                            <option value="2023-2024" <?php echo $academic_year == '2023-2024' ? 'selected' : ''; ?>>2023-2024</option>
+                            <option value="" <?php echo empty($academic_year) ? 'selected' : ''; ?>>All Years</option>
+                            <?php if (!empty($available_years)): ?>
+                                <?php foreach ($available_years as $yr): ?>
+                                    <option value="<?php echo htmlspecialchars($yr); ?>" <?php echo $academic_year == $yr ? 'selected' : ''; ?>><?php echo htmlspecialchars($yr); ?></option>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <?php if (!empty($academic_year)): ?>
+                                    <option value="<?php echo htmlspecialchars($academic_year); ?>" selected><?php echo htmlspecialchars($academic_year); ?></option>
+                                <?php endif; ?>
+                            <?php endif; ?>
                         </select>
                     </div>
                     <div class="col-md-3">
@@ -231,16 +341,42 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
 
             <!-- Classroom Observation Report -->
             <div class="classroom-report">                
+                <!-- Print Header (matches paper form style) -->
+                <div class="print-only" style="padding: 8px 0 10px; border-bottom: 1px solid #000; margin-bottom: 10px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap: 10px;">
+                        <!-- Use equal side widths so the center block is truly centered on the page -->
+                        <div style="width: 170px; text-align:left;">
+                            <img src="../SMCCnewlogo.png" alt="SMCC" style="max-width: 80px; height:auto;" />
+                        </div>
+                        <div style="flex:1; text-align:center; line-height: 1.2;">
+                            <div style="font-weight:700; font-size: 13px;">SAINT MICHAEL COLLEGE OF CARAGA</div>
+                            <div style="font-size: 11px;">Brgy. 4, Nasipit, Agusan del Norte, Caraga Region</div>
+                            <div style="font-size: 11px;">Tel. Nos: (085) 343-2232 / (085) 283-3113</div>
+                            <div style="font-size: 11px;">www.smccnasipit.edu.ph</div>
+                            
+                        </div>
+                        <div style="width: 170px; text-align:right;">
+                            <div style="display:flex; gap: 8px; justify-content:flex-end; align-items:center;">
+                                    <img src="../assets/img/socotec.jpg" alt="SOCOTEC ISO 9001" style="max-width: 95px; height:auto;" />
+                                <img src="../assets/img/pab_ab.png" alt="PAB AB" style="max-width: 80px; height:auto;" onerror="this.style.display='none'" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Report Info -->
                 <div class="report-info">
                     <div class="row">
-                        <div class="col-md-6">
-                            <strong>CLASSROOM OBSERVATION REPORT</strong><br>
-                            <strong>College/Department:</strong> <?php echo $_SESSION['department']; ?>
+                        <div class="col-md-6 text-center">
+                            <!-- Show these only when printing (Ctrl+P) -->
+                            <div class="print-only">
+                                <strong>CLASSROOM OBSERVATION REPORT</strong><br />
+                                <strong><?php echo htmlspecialchars($department_display); ?></strong>
+                            </div>
                         </div>
                         <div class="col-md-6 text-end">
-                            <strong>Academic Year:</strong> <?php echo htmlspecialchars($academic_year); ?><br>
-                            <strong>Semester:</strong> <?php echo $semester ? htmlspecialchars($semester) : 'All'; ?>
+                            <strong>Academic Year:</strong> <?php echo htmlspecialchars($academic_year_label); ?><br>
+                            <strong>Semester:</strong> <?php echo htmlspecialchars($semester_label); ?>
                         </div>
                     </div>
                 </div>
@@ -386,11 +522,11 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                                         </div>
                                     </td>
                                     <td>
-                                        <span class="rating-badge <?php echo $rating_class; ?>">
-                                            <?php echo $rating_text; ?>
-                                        </span>
-                                        <div class="text-center mt-1">
-                                            <small><?php echo number_format($eval['overall_avg'], 1); ?></small>
+                                        <div class="ratings-cell">
+                                            <span class="rating-score"><?php echo number_format($eval['overall_avg'], 1); ?></span>
+                                            <span class="rating-badge rating-label <?php echo $rating_class; ?>">
+                                                <?php echo $rating_text; ?>
+                                            </span>
                                         </div>
                                     </td>
                                 </tr>
@@ -400,7 +536,7 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                                     <td colspan="8" class="text-center py-4">
                                         <i class="fas fa-clipboard-list fa-2x text-muted mb-3"></i>
                                         <h5>No Evaluation Data</h5>
-                                        <p class="text-muted">No classroom observations found for the selected filters.</p>
+                                        <p class="text-muted">No evaluations found for the selected academic year / semester / teacher.</p>
                                     </td>
                                 </tr>
                             <?php endif; ?>
@@ -408,14 +544,18 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                     </table>
                 </div>
                 
-                <!-- Report Footer -->
-                <div class="report-info">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <strong>Generated on:</strong> <?php echo date('F j, Y'); ?>
-                        </div>
-                        <div class="col-md-6 text-end">
-                            <strong>Total Evaluations:</strong> <?php echo $stats['total_evaluations']; ?>
+                
+
+                <!-- Print Signature (Prepared by) -->
+                <div class="print-only avoid-page-break" style="margin-top: 24px;">
+                    <div style="max-width: 260px;">
+                        <div style="font-size: 12px;">Prepared by:</div>
+                        <div style="height: 40px;"></div>
+                        <div style="border-top: 1px solid #000; font-size: 12px; text-align:center; padding-top: 4px;">
+                            <?php echo htmlspecialchars($_SESSION['name'] ?? ''); ?>
+                            <?php if (!empty($_SESSION['role'])): ?>
+                                <div style="font-size: 11px; font-weight: 600; margin-top: 2px;">(<?php echo htmlspecialchars($_SESSION['role']); ?>)</div>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>
@@ -443,7 +583,7 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                 <head>
                     <title>Classroom Observation Report - <?php echo $_SESSION['department']; ?></title>
                     <style>
-                        body { font-family: Arial, sans-serif; margin: 20px; }
+                        body { font-family: Arial, sans-serif; margin: 20px; color: #000; }
                         .classroom-report { border: 1px solid #ddd; }
                         .report-header { 
                             background: #2c3e50; 
@@ -452,15 +592,14 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                             text-align: center; 
                         }
                         .report-title { font-size: 1.5rem; font-weight: bold; }
-                        .report-info { background: #f8f9fa; padding: 15px; border-bottom: 1px solid #ddd; }
+                        .report-info { background: #fff; padding: 10px 0; border: none; }
                         .report-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-                        .report-table th { background: #34495e; color: white; padding: 10px; text-align: left; }
-                        .report-table td { padding: 8px; border: 1px solid #ddd; vertical-align: top; }
-                        .rating-badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; }
-                        .rating-excellent { background: #28a745; color: white; }
-                        .rating-very-satisfactory { background: #17a2b8; color: white; }
-                        .rating-satisfactory { background: #ffc107; color: black; }
-                        .rating-below-satisfactory { background: #fd7e14; color: white; }
+                        .report-table th, .report-table td { border: 1px solid #000; }
+                        .report-table th { background: #fff; color: #000; padding: 8px; text-align: left; font-weight: 700; font-size: 12px; }
+                        .report-table td { padding: 8px; vertical-align: top; font-size: 12px; }
+                        .rating-badge { background: none; color: #000; padding: 0; border-radius: 0; font-weight: 600; }
+                        .ratings-cell { display: flex; align-items: center; gap: 8px; }
+                        .ratings-cell .rating-score { min-width: 2.7rem; font-weight: 700; }
                         .section-title { font-weight: bold; margin-top: 8px; margin-bottom: 3px; }
                         @media print { body { margin: 0; } }
                     </style>

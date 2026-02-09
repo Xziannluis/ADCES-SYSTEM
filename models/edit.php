@@ -211,7 +211,7 @@ if($_POST && isset($_POST['update_teacher'])) {
                                     </td>
                                     <td><?php echo htmlspecialchars($eval['evaluator_name']); ?></td>
                                     <td>
-                                        <a href="evaluation-view.php?id=<?php echo $eval['id']; ?>" class="btn btn-sm btn-outline-primary">
+                                        <a href="../evaluators/view_evaluation.php?id=<?php echo $eval['id']; ?>" class="btn btn-sm btn-outline-primary">
                                             <i class="fas fa-eye"></i> View
                                         </a>
                                     </td>

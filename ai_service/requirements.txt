@@ -6,3 +6,4 @@ sentence-transformers==2.7.0
 transformers==4.47.1
 torch==2.5.1
 accelerate==0.26.1
+numpy==1.26.4

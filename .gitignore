@@ -16,5 +16,5 @@ __pycache__/
 *.log
 
 # Optional: keep these if you deploy to production
-# /tests/
-# /scripts/
+# /dev/tests/
+# /dev/scripts/

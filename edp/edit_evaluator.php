@@ -17,17 +17,9 @@ if (!isset($_GET['id'])) {
 $id = $_GET['id'];
 $evaluator = $user->getById($id);
 
-// Get evaluator's subjects or grade levels
-$current_subjects = [];
+// Get evaluator's grade levels (we no longer store subjects here)
 $current_grade_levels = [];
-
-if (in_array($evaluator['role'], ['subject_coordinator', 'chairperson'])) {
-    $subjects_query = "SELECT subject FROM evaluator_subjects WHERE evaluator_id = :evaluator_id";
-    $subjects_stmt = $db->prepare($subjects_query);
-    $subjects_stmt->bindParam(':evaluator_id', $id);
-    $subjects_stmt->execute();
-    $current_subjects = $subjects_stmt->fetchAll(PDO::FETCH_COLUMN, 0);
-} elseif ($evaluator['role'] === 'grade_level_coordinator') {
+if ($evaluator['role'] === 'grade_level_coordinator') {
     $grades_query = "SELECT grade_level FROM evaluator_grade_levels WHERE evaluator_id = :evaluator_id";
     $grades_stmt = $db->prepare($grades_query);
     $grades_stmt->bindParam(':evaluator_id', $id);
@@ -47,27 +39,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     // Update user
     $user->update($id, $data);
-    
-    // Update subjects for subject coordinators and chairpersons
-    if (in_array($_POST['role'], ['subject_coordinator', 'chairperson']) && isset($_POST['subjects'])) {
-        // Delete existing subjects
-        $delete_query = "DELETE FROM evaluator_subjects WHERE evaluator_id = :evaluator_id";
-        $delete_stmt = $db->prepare($delete_query);
-        $delete_stmt->bindParam(':evaluator_id', $id);
-        $delete_stmt->execute();
-        
-        // Insert new subjects
-        foreach ($_POST['subjects'] as $subject) {
-            $insert_query = "INSERT INTO evaluator_subjects (evaluator_id, subject, created_at) 
-                            VALUES (:evaluator_id, :subject, NOW())";
-            $insert_stmt = $db->prepare($insert_query);
-            $insert_stmt->bindParam(':evaluator_id', $id);
-            $insert_stmt->bindParam(':subject', $subject);
-            $insert_stmt->execute();
-        }
-    }
+
     // Update grade levels for grade level coordinators
-    elseif ($_POST['role'] === 'grade_level_coordinator' && isset($_POST['grade_levels'])) {
+    if ($_POST['role'] === 'grade_level_coordinator' && isset($_POST['grade_levels'])) {
         // Delete existing grade levels
         $delete_query = "DELETE FROM evaluator_grade_levels WHERE evaluator_id = :evaluator_id";
         $delete_stmt = $db->prepare($delete_query);
@@ -180,14 +154,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </select>
                 </div>
                 
-                <!-- Subjects Selection (for Subject Coordinators and Chairpersons) -->
-                <div class="mb-3" id="subjectsContainer" style="display: none;">
-                    <label class="form-label">Subjects/Courses</label>
-                    <div class="subjects-list" id="subjectsList">
-                        <!-- Subjects will be populated dynamically -->
-                    </div>
-                </div>
-                
                 <!-- Grade Levels Selection (for Grade Level Coordinators) -->
                 <div class="mb-3" id="gradeLevelsContainer" style="display: none;">
                     <label class="form-label">Grade Levels</label>
@@ -207,19 +173,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
 
     <script>
-        // Subject data by department
-        const departmentSubjects = {
-            'CTE': ['Mathematics Education', 'Science Education', 'English Education', 'Filipino Education', 'Social Studies Education'],
-            'BSED': ['Professional Education', 'Specialization Courses', 'Thesis Writing'],
-            'CAS': ['English', 'Filipino', 'Mathematics', 'Science', 'Social Sciences', 'Physical Education'],
-            'CCJE': ['Criminal Law', 'Criminology', 'Forensic Science', 'Law Enforcement Administration'],
-            'CBM': ['Accounting', 'Business Management', 'Marketing', 'Finance', 'Entrepreneurship'],
-            'CCIS': ['Computer Programming', 'Database Management', 'Web Development', 'Networking', 'Software Engineering'],
-            'CTHM': ['Tourism Management', 'Hospitality Management', 'Culinary Arts', 'Event Management'],
-            'ELEM': ['English', 'Mathematics', 'Science', 'Filipino', 'Araling Panlipunan', 'MAPEH'],
-            'JHS': ['English', 'Mathematics', 'Science', 'Filipino', 'Araling Panlipunan', 'MAPEH', 'TLE'],
-            'SHS': ['Core Subjects', 'Applied Track Subjects', 'Specialized Track Subjects']
-        };
 
         // Grade levels
         const gradeLevels = ['7', '8', '9', '10', '11', '12'];
@@ -231,44 +184,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             const gradeLevelsContainer = document.getElementById('gradeLevelsContainer');
             const subjectsList = document.getElementById('subjectsList');
             const gradeLevelsList = document.getElementById('gradeLevelsList');
-            const currentSubjects = <?php echo json_encode($current_subjects); ?>;
             const currentGradeLevels = <?php echo json_encode($current_grade_levels); ?>;
 
             function toggleSpecializations() {
                 const role = roleSelect.value;
                 const department = departmentSelect.value;
                 
-                // Hide both containers first
-                subjectsContainer.style.display = 'none';
+                // Hide grade levels container first
                 gradeLevelsContainer.style.display = 'none';
-                
-                if (role === 'subject_coordinator' || role === 'chairperson') {
-                    if (department) {
-                        subjectsContainer.style.display = 'block';
-                        populateSubjects(department);
-                    }
-                } else if (role === 'grade_level_coordinator') {
+                if (role === 'grade_level_coordinator') {
                     gradeLevelsContainer.style.display = 'block';
                     populateGradeLevels();
                 }
-            }
-
-            function populateSubjects(department) {
-                const subjects = departmentSubjects[department] || [];
-                subjectsList.innerHTML = '';
-                
-                subjects.forEach(subject => {
-                    const isChecked = currentSubjects.includes(subject);
-                    const subjectDiv = document.createElement('div');
-                    subjectDiv.className = 'form-check subject-item';
-                    subjectDiv.innerHTML = `
-                        <input class="form-check-input subject-checkbox" type="checkbox" name="subjects[]" value="${subject}" id="subject_${subject.replace(/\s+/g, '_')}" ${isChecked ? 'checked' : ''}>
-                        <label class="form-check-label" for="subject_${subject.replace(/\s+/g, '_')}">
-                            ${subject}
-                        </label>
-                    `;
-                    subjectsList.appendChild(subjectDiv);
-                });
             }
 
             function populateGradeLevels() {

@@ -58,28 +58,24 @@ if (in_array($target_role, ['subject_coordinator', 'chairperson'])) {
     $grades_stmt->execute();
     $evaluator_specializations = $grades_stmt->fetchAll(PDO::FETCH_COLUMN, 0);
 }
-        // Only allow dean/principal to assign teachers
-        if (!in_array($_SESSION['role'], ['dean', 'principal'])) {
-            $_SESSION['error'] = "You are not allowed to assign teachers.";
-            header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
-            exit();
-        }
+        // Coordinators may assign teachers for themselves; only deans/principals may assign on behalf of others.
 
 // Handle teacher assignment
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'assign_teacher') {
-    // Only allow dean/principal to assign teachers
-    if (!in_array($_SESSION['role'], ['dean', 'principal'])) {
+    // Chairpersons are no longer allowed to assign; keep subject_coordinators and grade_level_coordinators able to assign themselves
+    // Only dean may perform assignment actions (no principals, chairpersons, or coordinators)
+    $canAssignSelf = false;
+    $canAssignOthers = ($_SESSION['role'] === 'dean');
+    if (!$canAssignSelf && !$canAssignOthers) {
         $_SESSION['error'] = "You are not allowed to assign teachers.";
         header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
         exit();
     }
 
     $teacher_id = $_POST['teacher_id'];
-    $subject = trim($_POST['subject'] ?? '');
-    $grade_level = trim($_POST['grade_level'] ?? '');
     // Allow supervisor to pick target coordinator
     $assign_target_evaluator_id = $current_evaluator_id;
-    if (in_array($_SESSION['role'], ['dean', 'principal']) && !empty($_POST['target_evaluator_id'])) {
+    if ($canAssignOthers && !empty($_POST['target_evaluator_id'])) {
         $possible_target = (int)$_POST['target_evaluator_id'];
         // validate target is a coordinator in the same department
         $v_query = "SELECT id, role FROM users WHERE id = :id AND role IN ('chairperson','subject_coordinator','grade_level_coordinator') AND department = :dept AND status = 'active' LIMIT 1";
@@ -98,20 +94,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     // Check if assignment already exists
     $check_query = "SELECT id FROM teacher_assignments WHERE evaluator_id = :evaluator_id AND teacher_id = :teacher_id";
-    if (!empty($subject)) {
-        $check_query .= " AND subject = :subject";
-    } elseif (!empty($grade_level)) {
-        $check_query .= " AND grade_level = :grade_level";
-    }
-    
     $check_stmt = $db->prepare($check_query);
     $check_stmt->bindParam(':evaluator_id', $assign_target_evaluator_id);
     $check_stmt->bindParam(':teacher_id', $teacher_id);
-    if (!empty($subject)) {
-        $check_stmt->bindParam(':subject', $subject);
-    } elseif (!empty($grade_level)) {
-        $check_stmt->bindParam(':grade_level', $grade_level);
-    }
     $check_stmt->execute();
     
     if ($check_stmt->rowCount() === 0) {
@@ -126,13 +111,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
             exit();
         }
-        $insert_query = "INSERT INTO teacher_assignments (evaluator_id, teacher_id, subject, grade_level, assigned_at) 
-                VALUES (:evaluator_id, :teacher_id, :subject, :grade_level, NOW())";
-        $insert_stmt = $db->prepare($insert_query);
-        $insert_stmt->bindParam(':evaluator_id', $assign_target_evaluator_id);
-        $insert_stmt->bindParam(':teacher_id', $teacher_id);
-        $insert_stmt->bindParam(':subject', $subject);
-        $insert_stmt->bindParam(':grade_level', $grade_level);
+    $insert_query = "INSERT INTO teacher_assignments (evaluator_id, teacher_id, assigned_at) 
+        VALUES (:evaluator_id, :teacher_id, NOW())";
+    $insert_stmt = $db->prepare($insert_query);
+    $insert_stmt->bindParam(':evaluator_id', $assign_target_evaluator_id);
+    $insert_stmt->bindParam(':teacher_id', $teacher_id);
         
         if ($insert_stmt->execute()) {
             $_SESSION['success'] = "Teacher assigned successfully!";
@@ -140,7 +123,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $_SESSION['error'] = "Failed to assign teacher.";
         }
     } else {
-        $_SESSION['error'] = "Teacher is already assigned with the same subject/grade level.";
+        $_SESSION['error'] = "Teacher is already assigned to this evaluator.";
     }
     
     header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
@@ -149,8 +132,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
 // Handle teacher removal
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'remove_assignment') {
-    // Only allow dean/principal to remove assignments
-    if (!in_array($_SESSION['role'], ['dean', 'principal'])) {
+    // Chairpersons are no longer allowed to remove assignments
+    // Only dean may remove assignments
+    $canRemoveSelf = false;
+    $canRemoveOthers = ($_SESSION['role'] === 'dean');
+    if (!$canRemoveSelf && !$canRemoveOthers) {
         $_SESSION['error'] = "You are not allowed to remove assignments.";
         header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
         exit();
@@ -184,8 +170,9 @@ $assigned_stmt->bindParam(':evaluator_id', $current_evaluator_id);
 $assigned_stmt->execute();
 $assigned_teachers = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get available teachers (not assigned to this evaluator for the same department)
-$available_teachers = $teacher->getActiveByDepartment($_SESSION['department']);
+// Get available teachers scoped to the evaluator's department
+$target_department = $coordinator_info['department'] ?? $_SESSION['department'];
+$available_teachers = $teacher->getActiveByDepartment($target_department);
 
 // If current user is a supervisor, load coordinators list for dropdown (exclude chairpersons)
 $coordinators = [];
@@ -317,7 +304,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
             </div>
 
             <!-- Assign New Teacher -->
-            <?php if(in_array($_SESSION['role'], ['dean', 'principal'])): ?>
+            <?php if($_SESSION['role'] === 'dean'): ?>
             <div class="form-container">
                 <h5><i class="fas fa-plus-circle me-2"></i>Assign New Teacher</h5>
                 <form method="POST">
@@ -338,7 +325,45 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                         if ($chair_query->fetchColumn()) {
                                             $exclude = true;
                                         }
-                                        if (!$exclude):
+
+                                        // Respect evaluator specializations when present (e.g., an IT chairperson should only see IT teachers)
+                                        $include_by_specialization = true;
+                                        $include_by_department = true;
+
+                                        // Normalize department strings
+                                        $coord_dept = strtolower(trim($target_department ?? $_SESSION['department']));
+                                        $teacher_dept = strtolower(trim($teacher_row['department'] ?? ''));
+
+                                        if (!empty($evaluator_specializations)) {
+                                            $specs = array_map('strtolower', $evaluator_specializations);
+                                            // If evaluator specializes in IT, only include teachers whose department mentions IT
+                                            if (in_array('it', $specs) || in_array('information technology', $specs) || in_array('information_technology', $specs)) {
+                                                $include_by_specialization = (strpos($teacher_dept, 'it') !== false || strpos($teacher_dept, 'information technology') !== false);
+                                            }
+
+                                            // If evaluator specializes in Computer Science, only include CS teachers
+                                            if (in_array('computer science', $specs) || in_array('cs', $specs)) {
+                                                $include_by_specialization = (strpos($teacher_dept, 'cs') !== false || strpos($teacher_dept, 'computer science') !== false);
+                                            }
+                                        }
+
+                                        // Also use the evaluator's department string as a safety filter.
+                                        // For example, 'CCIS IT' should not include teachers from 'CCIS CS'.
+                                        if (!empty($coord_dept)) {
+                                            if (strpos($coord_dept, 'it') !== false || strpos($coord_dept, 'information technology') !== false) {
+                                                $include_by_department = (strpos($teacher_dept, 'it') !== false || strpos($teacher_dept, 'information technology') !== false);
+                                            } elseif (strpos($coord_dept, 'computer science') !== false || strpos($coord_dept, 'cs') !== false) {
+                                                $include_by_department = (strpos($teacher_dept, 'computer science') !== false || strpos($teacher_dept, 'cs') !== false);
+                                            } else {
+                                                // Fallback: require the faculty prefix (e.g., 'ccis') to match if present
+                                                if (preg_match('/^[a-z]+/i', $coord_dept, $m)) {
+                                                    $prefix = $m[0];
+                                                    $include_by_department = (strpos($teacher_dept, $prefix) !== false);
+                                                }
+                                            }
+                                        }
+
+                                        if (!$exclude && $include_by_specialization && $include_by_department):
                                     ?>
                                         <option value="<?php echo $teacher_row['id']; ?>">
                                             <?php echo htmlspecialchars($teacher_row['name']); ?>
@@ -348,16 +373,8 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                             </div>
                         </div>
 
-                        <div class="col-md-4">
+                        <div class="col-md-4 d-flex align-items-end">
                             <div class="mb-3">
-                                <label class="form-label">Subject (optional)</label>
-                                <input type="text" name="subject" class="form-control" placeholder="eg. Mathematics">
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Grade Level (optional)</label>
-                                <input type="text" name="grade_level" class="form-control" placeholder="eg. 7">
-                            </div>
-                            <div class="mb-3 d-flex align-items-end">
                                 <button type="submit" class="btn btn-primary">
                                     <i class="fas fa-user-plus me-2"></i>Assign Teacher
                                 </button>

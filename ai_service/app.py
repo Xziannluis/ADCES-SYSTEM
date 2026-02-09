@@ -3,6 +3,11 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 import random
 import traceback
+import pathlib
+import json
+from datetime import datetime
+from threading import Lock
+import numpy as np
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -65,6 +70,70 @@ async def debug_echo(request: Request):
     except Exception:
         body = None
     return {"ok": True, "received": body}
+
+
+# Simple feedback collection to gather human judgments / corrections for later fine-tuning.
+FEEDBACK_PATH = pathlib.Path(__file__).parent / "ai_feedback.jsonl"
+_feedback_lock = Lock()
+
+
+def _append_feedback(entry: Dict[str, Any]):
+    """Append a JSON line to the feedback file in an atomic way."""
+    try:
+        _feedback_lock.acquire()
+        FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with FEEDBACK_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    finally:
+        try:
+            _feedback_lock.release()
+        except Exception:
+            pass
+
+
+class FeedbackItem(BaseModel):
+    # Minimal structure: include the original request, the generated text, and a human label/correction
+    request: GenerateRequest
+    generated_strengths: Optional[str] = None
+    generated_improvement_areas: Optional[str] = None
+    generated_recommendations: Optional[str] = None
+    accurate: Optional[bool] = None
+    # If the user corrected the output, include corrected text (any or all sections).
+    corrected_strengths: Optional[str] = None
+    corrected_improvement_areas: Optional[str] = None
+    corrected_recommendations: Optional[str] = None
+    comment: Optional[str] = None
+
+
+@app.post("/feedback")
+async def feedback(item: FeedbackItem):
+    """Collect human feedback / corrections for exports and fine-tuning.
+
+    Save a single JSON line with timestamp to `ai_feedback.jsonl`.
+    """
+    entry = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "request": item.request.dict(),
+        "generated": {
+            "strengths": item.generated_strengths,
+            "improvement_areas": item.generated_improvement_areas,
+            "recommendations": item.generated_recommendations,
+        },
+        "accurate": item.accurate,
+        "corrected": {
+            "strengths": item.corrected_strengths,
+            "improvement_areas": item.corrected_improvement_areas,
+            "recommendations": item.corrected_recommendations,
+        },
+        "comment": item.comment,
+    }
+
+    try:
+        _append_feedback(entry)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"ok": True}
 
 
 class RatingItem(BaseModel):
@@ -145,54 +214,56 @@ def _load_models():
     tok = AutoTokenizer.from_pretrained(flan_name)
     model = AutoModelForSeq2SeqLM.from_pretrained(flan_name)
 
+    # Move model to GPU if available for better speed/quality when possible.
+    try:
+        import torch
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+    except Exception:
+        # If torch isn't available or moving fails, continue on CPU.
+        pass
+
     return sbert, tok, model
 
 
 def _build_prompt(payload: GenerateRequest, similar_texts: List[str]) -> str:
     # Build a clear, structured prompt for the AI model
     avg = payload.averages
-    
-    # Build context from actual comments
+
+    # Build context from actual comments (up to 8 items)
     context_lines = []
-    for i, text in enumerate(similar_texts[:8], 1):
+    for i, text in enumerate((similar_texts or [])[:8], 1):
         context_lines.append(f"{i}. {text}")
     context = "\n".join(context_lines) if context_lines else "No specific comments provided."
-    
+
     # Create instruction-based prompt.
     # IMPORTANT: Do not include bracketed placeholders like "[Write ...]" because smaller seq2seq models
     # may copy them verbatim.
-    prompt = f"""You are writing a PROFESSIONAL teacher evaluation narrative.
-Use the ratings and observations as evidence.
+    prompt = (
+        f"You are writing a PROFESSIONAL teacher evaluation narrative.\n"
+        f"Use the ratings and observations as evidence.\n\n"
+        f"Teacher: {payload.faculty_name or 'The teacher'}\n"
+        f"Subject: {payload.subject_observed or 'Not specified'}\n"
+        f"Type: {payload.observation_type or 'Classroom observation'}\n\n"
+        "OBSERVATIONS:\n"
+        f"{context}\n\n"
+        "TASK:\n"
+        "Write three short paragraphs. Each paragraph should be 2 to 4 sentences.\n\n"
+        "Output format (use these exact labels, one per line):\n"
+        "STRENGTHS: <your paragraph>\n"
+        "AREAS_FOR_IMPROVEMENT: <your paragraph>\n"
+        "RECOMMENDATIONS: <your paragraph>\n"
+    )
 
-Rules:
-- Do NOT copy any instruction text.
-- Do NOT output brackets [], placeholders, or template text.
-- Write in complete sentences.
-- Keep a professional and constructive tone.
+    # Append a short, generic example to show desired tone and structure.
+    example = (
+        "\nEXAMPLE:\n"
+        "STRENGTHS: The teacher provided clear explanations and used targeted questioning to check for understanding, supporting student engagement. Lessons were well-paced and learning objectives were evident.\n"
+        "AREAS_FOR_IMPROVEMENT: Increasing active student participation and tightening transition routines could further enhance learning time and engagement.\n"
+        "RECOMMENDATIONS: Introduce brief formative checks and structured partner activities to increase participation and provide rapid feedback.\n"
+    )
 
-Teacher: {payload.faculty_name or 'The teacher'}
-Subject: {payload.subject_observed or 'Not specified'}
-Type: {payload.observation_type or 'Classroom observation'}
-
-RATINGS (out of 5.0):
-- Communication skills: {avg.communications}
-- Classroom management: {avg.management}
-- Assessment methods: {avg.assessment}
-- Overall performance: {avg.overall}
-
-OBSERVATIONS:
-{context}
-
-TASK:
-Write three short paragraphs. Each paragraph should be 2 to 4 sentences.
-
-Output format (use these exact labels, one per line):
-STRENGTHS: <your paragraph>
-AREAS_FOR_IMPROVEMENT: <your paragraph>
-RECOMMENDATIONS: <your paragraph>
-"""
-    
-    return prompt
+    return prompt + example
 
 
 def _build_ratings_only_prompt(payload: GenerateRequest) -> str:
@@ -203,7 +274,6 @@ def _build_ratings_only_prompt(payload: GenerateRequest) -> str:
     avg = payload.averages
     teacher = (payload.faculty_name or "").strip() or "The teacher"
     subject = (payload.subject_observed or "").strip() or "the observed class"
-    obs_type = (payload.observation_type or "").strip() or "classroom observation"
 
     def band(x: float) -> str:
         x = float(x or 0)
@@ -286,41 +356,23 @@ def _build_ratings_only_prompt(payload: GenerateRequest) -> str:
     w_improve_phrases = anchors[weakest]["improve"]
     w_reco_phrases = anchors[weakest]["reco"]
 
-    # IMPORTANT:
-    # - Do NOT show numeric ratings anywhere (models tend to copy them).
-    # - Use domain levels (Excellent / Satisfactory...) as the only “rating signal”.
-    return f"""
-You are an academic evaluator writing a professional teacher evaluation narrative based ONLY on domain ratings.
+    base = (
+        "You are an academic evaluator writing a professional teacher evaluation narrative based ONLY on domain ratings.\n"
+        "Hard rules: Do NOT include numeric scores; avoid specific numeric references.\n\n"
+        "Output format (use these exact labels, one per line):\n"
+        "STRENGTHS: <paragraph>\n"
+        "AREAS_FOR_IMPROVEMENT: <paragraph>\n"
+        "RECOMMENDATIONS: <paragraph>\n"
+    )
 
-Hard rules:
-- Do NOT output any numbers, fractions, or score summaries.
-- Do NOT write expressions like "=" or "/5".
-- Do NOT include headings other than the required labels.
-- Do NOT invent specific classroom events. Stay general and professional.
-- Write in complete sentences (human-like), constructive and respectful.
+    example = (
+        "\nEXAMPLE:\n"
+        "STRENGTHS: The teacher demonstrated effective classroom routines and clear explanations, supporting student engagement.\n"
+        "AREAS_FOR_IMPROVEMENT: Consider increasing brief formative checks and clarifying transition procedures to maximize instructional time.\n"
+        "RECOMMENDATIONS: Use quick exit tickets and short peer discussions to surface misunderstandings and inform next steps.\n"
+    )
 
-Context:
-- Teacher: {teacher}
-- Subject observed: {subject}
-- Observation type: {obs_type}
-- Overall level: {overall_level}
-- Strongest domain: {strongest} ({band(domains[strongest])})
-- Priority for improvement: {weakest} ({band(domains[weakest])})
-
-Writing requirements:
-- Write exactly THREE paragraphs.
-- If style is "short": 2 sentences per paragraph.
-- If style is "standard": 3–4 sentences per paragraph.
-- If style is "detailed": 5–6 sentences per paragraph.
-- Strengths must highlight the strongest domain using phrases like: {", ".join(s_phrases[:2])}.
-- Areas for improvement and recommendations must focus mainly on the priority domain using phrases like: {", ".join(w_improve_phrases[:2])} and actions like: {", ".join(w_reco_phrases[:2])}.
-- Do not mention "scores" or "ratings"; express performance using the domain levels instead.
-
-Output format (use these exact labels, one per line):
-STRENGTHS: <paragraph>
-AREAS_FOR_IMPROVEMENT: <paragraph>
-RECOMMENDATIONS: <paragraph>
-""".strip()
+    return (base + example).strip()
 
 
 def _build_retry_prompt(payload: GenerateRequest, similar_texts: List[str]) -> str:
@@ -390,10 +442,13 @@ def _generate_text(tok, model, prompt: str, style: str = "standard") -> str:
     out = model.generate(
         **inputs,
         max_new_tokens=max_new,
+        # Use a small beam search for more consistent, higher-quality outputs;
+        # lower temperature and slightly constrained top_p to reduce risky sampling.
         do_sample=True,
-        temperature=0.7,         # more natural than beam-only
-        top_p=0.9,
-        num_beams=1,             # sampling mode
+        temperature=0.6,
+        top_p=0.85,
+        num_beams=4,
+        num_return_sequences=1,
         repetition_penalty=1.12,
         no_repeat_ngram_size=4,
         early_stopping=True,
@@ -497,6 +552,35 @@ def _retrieve_top_k(sbert, texts: List[str], k: int = 10) -> List[str]:
     if not texts:
         return []
 
+    # Prefer an SBERT-based ranking that selects representative / central comments.
+    # This helps pick evidence that's most 'typical' when many comments exist.
+    use_retrieval = os.getenv("USE_SBERT_RETRIEVAL", "1") not in ("0", "false", "False")
+    if use_retrieval:
+        try:
+            # Encode all texts; if SBERT fails, fall back to simple heuristic below.
+            emb = sbert.encode(texts, convert_to_numpy=True)
+            if emb is not None and len(emb) == len(texts):
+                # Compute centroid and rank by cosine similarity to centroid (most representative first).
+                centroid = np.mean(emb, axis=0)
+                # normalize to avoid zero-division
+                def _cos(a, b):
+                    na = a / (np.linalg.norm(a) + 1e-12)
+                    nb = b / (np.linalg.norm(b) + 1e-12)
+                    return float(np.dot(na, nb))
+
+                scores = [ _cos(v, centroid) for v in emb ]
+                idxs = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+                ranked = [texts[i] for i in idxs]
+                # Keep comment-bearing texts earlier by stable sort if many ties
+                with_comments = [t for t in ranked if ("comment=" in t or "comment:" in t)]
+                without_comments = [t for t in ranked if t not in with_comments]
+                ranked = with_comments + without_comments
+                return ranked[: max(0, int(k or 0))] if k else ranked
+        except Exception:
+            # Fall through to conservative heuristic below on any error.
+            pass
+
+    # Conservative fallback: prefer items that explicitly contain comments, keep original order.
     with_comments = [t for t in texts if ("comment=" in t or "comment:" in t)]
     without_comments = [t for t in texts if t not in with_comments]
     ranked = with_comments + without_comments

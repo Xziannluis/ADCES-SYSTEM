@@ -1,7 +1,7 @@
 <?php
 require_once '../auth/session-check.php';
 // Allow evaluators and leaders (president/vice_president) to access evaluation
-if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'president', 'vice_president'])) {
+if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'])) {
     header("Location: ../login.php");
     exit();
 }
@@ -28,7 +28,20 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
     $stmt->execute();
     $teachers = $stmt; // mimic PDOStatement for compatibility with view loop
 } else {
-    $teachers = $teacher->getActiveByDepartment($_SESSION['department']);
+    // Deans/principals can evaluate teachers in their department AND teachers assigned to them (cross-department)
+    $query = "SELECT DISTINCT t.*
+              FROM teachers t
+              LEFT JOIN users u ON t.user_id = u.id
+              LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id
+              WHERE t.status = 'active'
+                AND (t.department = :department OR ta.evaluator_id IS NOT NULL)
+                AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
+              ORDER BY t.name ASC";
+    $stmt = $db->prepare($query);
+    $stmt->bindParam(':department', $_SESSION['department']);
+    $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    $stmt->execute();
+    $teachers = $stmt;
 }
 
 // Handle form submission
@@ -81,14 +94,29 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     <?php if($teachers->rowCount() > 0): ?>
                     <div class="list-group" id="teacherList">
                         <?php while($teacher_row = $teachers->fetch(PDO::FETCH_ASSOC)): ?>
-                        <div class="list-group-item teacher-item" data-teacher-id="<?php echo $teacher_row['id']; ?>">
+                        <?php
+                            $has_schedule = !empty($teacher_row['evaluation_schedule']);
+                        ?>
+                        <div class="list-group-item teacher-item <?php echo $has_schedule ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-has-schedule="<?php echo $has_schedule ? '1' : '0'; ?>">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_row['name']); ?></h6>
                                     <p class="mb-0 text-muted"><?php echo htmlspecialchars($teacher_row['department']); ?></p>
+                                    <small class="text-muted">
+                                        <?php if ($has_schedule): ?>
+                                            <i class="fas fa-calendar me-1"></i>
+                                            <?php echo htmlspecialchars($teacher_row['evaluation_schedule']); ?>
+                                        <?php else: ?>
+                                            <i class="fas fa-ban me-1"></i>No schedule set
+                                        <?php endif; ?>
+                                    </small>
                                 </div>
                                 <div>
-                                    <span class="badge bg-success p-2">Evaluate this teacher</span>
+                                    <?php if ($has_schedule): ?>
+                                        <span class="badge bg-success p-2">Evaluate this teacher</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-secondary p-2">Schedule required</span>
+                                    <?php endif; ?>
                                     <i class="fas fa-chevron-right ms-2"></i>
                                 </div>
                             </div>
@@ -99,7 +127,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     <div class="text-center py-4">
                         <i class="fas fa-users fa-3x text-muted mb-3"></i>
                         <h5>No Active Teachers</h5>
-                        <p class="text-muted">There are no active teachers in your department to evaluate.</p>
+                        <p class="text-muted">There are no active teachers available from your department or assigned list to evaluate.</p>
                         <a href="teachers.php" class="btn btn-primary">
                             <i class="fas fa-user-plus me-2"></i>Manage Teachers
                         </a>
@@ -573,7 +601,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     </div>
                                 </div>
 
-                                
                                 <!-- Strengths and Areas for Improvement -->
                                 <div class="row mt-4">
                                     <div class="col-md-6">
@@ -621,8 +648,22 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             <h6>Rater/Observer</h6>
                                             <p class="small">I certify that this classroom evaluation represents my best judgment.</p>
                                             <div class="mb-3">
-                                                <label class="form-label">Signature over printed name</label>
-                                                <input type="text" class="form-control" id="raterSignature" name="rater_signature" required>
+                                                <label class="form-label">Printed name</label>
+                                                <input type="text" class="form-control" id="raterPrintedName" name="rater_printed_name" required>
+                                                <label class="form-label mt-2">Signature</label>
+                                                <input type="hidden" id="raterSignature" name="rater_signature" required>
+                                                <img id="raterSignaturePreview" alt="Rater signature preview" style="display:none; max-width: 100%; height: 60px; border: 1px solid #ced4da; border-radius: 4px; background: #fff;" />
+                                                <div class="form-text">Sign using touchpad/mouse. Your signature will appear above after you click “Use this signature”.</div>
+                                                <div class="mt-2">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" data-toggle-sign="rater">Sign using touchpad/mouse</button>
+                                                </div>
+                                                <div class="signature-canvas-wrap mt-2" data-sign-wrap="rater" style="display:none;">
+                                                    <canvas id="raterSignaturePad" class="signature-canvas" height="70"></canvas>
+                                                    <div class="d-flex gap-2 mt-2">
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" data-clear-sign="rater">Clear</button>
+                                                        <button type="button" class="btn btn-sm btn-primary" data-apply-sign="rater">Use this signature</button>
+                                                    </div>
+                                                </div>
                                             </div>
                                             <div class="mb-3">
                                                 <label class="form-label">Date</label>
@@ -635,8 +676,22 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             <h6>Faculty</h6>
                                             <p class="small">I certify that this evaluation result has been discussed with me during the post conference/debriefing.</p>
                                             <div class="mb-3">
-                                                <label class="form-label">Signature of Faculty over printed name</label>
-                                                <input type="text" class="form-control" id="facultySignature" name="faculty_signature" required>
+                                                <label class="form-label">Printed name</label>
+                                                <input type="text" class="form-control" id="facultyPrintedName" name="faculty_printed_name" required>
+                                                <label class="form-label mt-2">Signature of Faculty</label>
+                                                <input type="hidden" id="facultySignature" name="faculty_signature" required>
+                                                <img id="facultySignaturePreview" alt="Faculty signature preview" style="display:none; max-width: 100%; height: 60px; border: 1px solid #ced4da; border-radius: 4px; background: #fff;" />
+                                                <div class="form-text">Sign using touchpad/mouse. Your signature will appear above after you click “Use this signature”.</div>
+                                                <div class="mt-2">
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" data-toggle-sign="faculty">Sign using touchpad/mouse</button>
+                                                </div>
+                                                <div class="signature-canvas-wrap mt-2" data-sign-wrap="faculty" style="display:none;">
+                                                    <canvas id="facultySignaturePad" class="signature-canvas" height="70"></canvas>
+                                                    <div class="d-flex gap-2 mt-2">
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" data-clear-sign="faculty">Clear</button>
+                                                        <button type="button" class="btn btn-sm btn-primary" data-apply-sign="faculty">Use this signature</button>
+                                                    </div>
+                                                </div>
                                             </div>
                                             <div class="mb-3">
                                                 <label class="form-label">Date</label>
@@ -687,9 +742,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         <button type="submit" class="btn btn-success me-2" name="submit_evaluation">
                                             <i class="fas fa-check me-2"></i> Submit Evaluation
                                         </button>
-                                        <button type="button" class="btn btn-primary" id="downloadPDF">
-                                            <i class="fas fa-download me-2"></i> Download as PDF
-                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -703,6 +755,146 @@ if($_POST && isset($_POST['submit_evaluation'])) {
     <?php include '../includes/footer.php'; ?>
     
     <script>
+        // Light UI tweak for disabled teachers
+        (function ensureDisabledTeacherStyles() {
+            const style = document.createElement('style');
+            style.textContent = `
+                .teacher-item.disabled { opacity: 0.6; cursor: not-allowed; }
+                .teacher-item.disabled:hover { background: inherit; }
+                .signature-canvas { width: 100%; max-width: 420px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; touch-action: none; }
+                .signature-canvas-wrap { user-select: none; }
+            `;
+            document.head.appendChild(style);
+        })();
+
+        // Minimal signature pad: opens only when user clicks the button; writes dataURL into existing input.
+        function createSignaturePad(canvas) {
+            const ctx = canvas.getContext('2d');
+            let drawing = false;
+            let hasInk = false;
+
+            function resizeCanvas() {
+                const ratio = window.devicePixelRatio || 1;
+                const rect = canvas.getBoundingClientRect();
+                const w = Math.max(1, Math.floor(rect.width * ratio));
+                const h = Math.max(1, Math.floor(parseInt(canvas.getAttribute('height') || '70', 10) * ratio));
+                if (canvas.width !== w || canvas.height !== h) {
+                    canvas.width = w;
+                    canvas.height = h;
+                    ctx.lineWidth = 2 * ratio;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.strokeStyle = '#000';
+                }
+            }
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            function getPoint(evt) {
+                const rect = canvas.getBoundingClientRect();
+                const ratio = window.devicePixelRatio || 1;
+                return { x: (evt.clientX - rect.left) * ratio, y: (evt.clientY - rect.top) * ratio };
+            }
+            function pointerDown(evt) {
+                evt.preventDefault();
+                drawing = true;
+                const p = getPoint(evt);
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+            }
+            function pointerMove(evt) {
+                if (!drawing) return;
+                evt.preventDefault();
+                const p = getPoint(evt);
+                ctx.lineTo(p.x, p.y);
+                ctx.stroke();
+                hasInk = true;
+            }
+            function pointerUp(evt) {
+                if (!drawing) return;
+                evt.preventDefault();
+                drawing = false;
+            }
+
+            canvas.addEventListener('pointerdown', pointerDown);
+            canvas.addEventListener('pointermove', pointerMove);
+            canvas.addEventListener('pointerup', pointerUp);
+            canvas.addEventListener('pointercancel', pointerUp);
+            canvas.addEventListener('pointerleave', pointerUp);
+
+            return {
+                clear() {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    hasInk = false;
+                },
+                toDataUrl() {
+                    if (!hasInk) return '';
+                    try { return canvas.toDataURL('image/png'); } catch (e) { return ''; }
+                }
+            };
+        }
+
+        function initializeSignatureUi() {
+            const pads = new Map();
+
+            function getPad(key) {
+                if (pads.has(key)) return pads.get(key);
+                const canvas = document.getElementById(key === 'rater' ? 'raterSignaturePad' : 'facultySignaturePad');
+                if (!canvas) return null;
+                const pad = createSignaturePad(canvas);
+                pads.set(key, pad);
+                return pad;
+            }
+
+            document.querySelectorAll('[data-toggle-sign]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const key = btn.getAttribute('data-toggle-sign');
+                    const printed = document.getElementById(key === 'rater' ? 'raterPrintedName' : 'facultyPrintedName');
+                    if (!printed || !printed.value.trim()) {
+                        alert('Please type your printed name first.');
+                        if (printed) printed.focus();
+                        return;
+                    }
+                    const wrap = document.querySelector(`[data-sign-wrap="${key}"]`);
+                    if (!wrap) return;
+                    const isHidden = wrap.style.display === 'none' || !wrap.style.display;
+                    wrap.style.display = isHidden ? 'block' : 'none';
+                    if (isHidden) getPad(key);
+                });
+            });
+
+            document.querySelectorAll('[data-clear-sign]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const key = btn.getAttribute('data-clear-sign');
+                    const pad = getPad(key);
+                    if (pad) pad.clear();
+                });
+            });
+
+            document.querySelectorAll('[data-apply-sign]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const key = btn.getAttribute('data-apply-sign');
+                    const pad = getPad(key);
+                    const dataUrl = pad ? pad.toDataUrl() : '';
+                    if (!dataUrl) {
+                        alert('Please sign first.');
+                        return;
+                    }
+                    const input = document.getElementById(key === 'rater' ? 'raterSignature' : 'facultySignature');
+                    if (input) input.value = dataUrl;
+
+                    const preview = document.getElementById(key === 'rater' ? 'raterSignaturePreview' : 'facultySignaturePreview');
+                    if (preview) {
+                        preview.src = dataUrl;
+                        preview.style.display = 'block';
+                    }
+
+                    const wrap = document.querySelector(`[data-sign-wrap="${key}"]`);
+                    if (wrap) wrap.style.display = 'none';
+                });
+            });
+        }
+
         // Set current date for forms
         document.addEventListener('DOMContentLoaded', function() {
             const today = new Date().toISOString().split('T')[0];
@@ -716,6 +908,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             
             // Initialize teacher selection
             initializeTeacherSelection();
+
+            // Signature UI (touchpad/mouse)
+            initializeSignatureUi();
 
             // If a teacher_id param is provided in the URL (leaders link), auto-start evaluation
             const urlParams = new URLSearchParams(window.location.search);
@@ -740,6 +935,11 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             // Teacher selection
             document.querySelectorAll('.teacher-item').forEach(item => {
                 item.addEventListener('click', function() {
+                    const hasSchedule = this.getAttribute('data-has-schedule');
+                    if (hasSchedule !== '1') {
+                        alert('You can\'t evaluate this teacher yet: no schedule is set. Please ask the dean/principal to set a schedule first.');
+                        return;
+                    }
                     const teacherId = this.getAttribute('data-teacher-id');
                     // Auto-fill the form fields from the clicked item
                     const nameElem = this.querySelector('h6');
@@ -785,10 +985,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 saveEvaluationDraft();
             });
 
-            // Download PDF button
-            document.getElementById('downloadPDF').addEventListener('click', function() {
-                exportToPDF();
-            });
+            // Download PDF button removed
 
             // Generate AI button
             const genBtn = document.getElementById('generateAI');
@@ -963,9 +1160,11 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 window.open(`../controllers/export.php?type=form&evaluation_id=${teacherId}&report_type=single`, '_blank');
 
             const pdfBtn = document.getElementById('downloadPDF');
-            const originalText = pdfBtn.innerHTML;
-            pdfBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Generating PDF...';
-            pdfBtn.disabled = true;
+            const originalText = pdfBtn ? pdfBtn.innerHTML : '';
+            if (pdfBtn) {
+                pdfBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Generating PDF...';
+                pdfBtn.disabled = true;
+            }
 
             const data = getFormData();
 
@@ -1077,13 +1276,17 @@ if($_POST && isset($_POST['submit_evaluation'])) {
 
                 // Use html2pdf
                 html2pdf().set(opt).from(container).save().then(() => {
-                    pdfBtn.innerHTML = originalText;
-                    pdfBtn.disabled = false;
+                    if (pdfBtn) {
+                        pdfBtn.innerHTML = originalText;
+                        pdfBtn.disabled = false;
+                    }
                 }).catch(err => {
                     console.error(err);
                     alert('Failed to generate PDF. See console for details.');
-                    pdfBtn.innerHTML = originalText;
-                    pdfBtn.disabled = false;
+                    if (pdfBtn) {
+                        pdfBtn.innerHTML = originalText;
+                        pdfBtn.disabled = false;
+                    }
                 });
             }
 
@@ -1093,8 +1296,10 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 script.onload = generate;
                 script.onerror = () => {
                     alert('Failed to load PDF library. Check your internet connection.');
-                    pdfBtn.innerHTML = originalText;
-                    pdfBtn.disabled = false;
+                    if (pdfBtn) {
+                        pdfBtn.innerHTML = originalText;
+                        pdfBtn.disabled = false;
+                    }
                 };
                 document.head.appendChild(script);
             } else {
@@ -1326,8 +1531,11 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 strengths: document.getElementById('strengths').value,
                 improvement_areas: document.getElementById('improvementAreas').value,
                 recommendations: document.getElementById('recommendations').value,
+                agreement: document.getElementById('agreement').value,
+                rater_printed_name: document.getElementById('raterPrintedName')?.value || '',
                 rater_signature: document.getElementById('raterSignature').value,
                 rater_date: document.getElementById('raterDate').value,
+                faculty_printed_name: document.getElementById('facultyPrintedName')?.value || '',
                 faculty_signature: document.getElementById('facultySignature').value,
                 faculty_date: document.getElementById('facultyDate').value,
                 ratings: {}

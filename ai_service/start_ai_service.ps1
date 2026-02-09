@@ -1,5 +1,6 @@
 param(
-    [switch]$Foreground
+    [switch]$Foreground,
+    [switch]$Headless
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,6 +32,17 @@ if (Test-Path $logPath) {
 }
 
 "==== $(Get-Date -Format o) Starting uvicorn ====" | Out-File -FilePath $logPath -Encoding utf8
+
+if ($Headless) {
+    # For Task Scheduler / background runs: no extra windows, log everything.
+    $args = @('-m','uvicorn','app:app','--host','127.0.0.1','--port','8008','--log-level','info')
+
+    # Start-Process will block only if -Wait is used; we want it to keep running.
+    Start-Process -FilePath $python -ArgumentList $args -WorkingDirectory $here -WindowStyle Hidden -RedirectStandardOutput $logPath -RedirectStandardError $logPath
+    Write-Host "AI service launched headlessly." -ForegroundColor Green
+    Write-Host "Log: $logPath" -ForegroundColor Yellow
+    exit 0
+}
 
 if ($Foreground) {
     Write-Host "Running uvicorn in foreground..." -ForegroundColor Cyan

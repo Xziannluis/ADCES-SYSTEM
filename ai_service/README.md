@@ -8,6 +8,17 @@ This folder contains a small **Python API** that generates:
 **Agreement is intentionally not generated** (kept manual).
 
 ## What it exposes
+````markdown
+# ADCES AI Service (SBERT + Flan-T5)
+
+This folder contains a small **Python API** that generates:
+- Strengths
+- Areas for improvement
+- Recommendations
+
+**Agreement is intentionally not generated** (kept manual).
+
+## What it exposes
 - `GET /health` → `{ ok: true }`
 - `POST /generate` → returns `{ strengths, improvement_areas, recommendations }`
 
@@ -78,3 +89,34 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8008/generate -ContentType 
 
 ## Next step
 Create a PHP proxy endpoint (in `controllers/`) that calls `http://127.0.0.1:8008/generate` and returns JSON to the browser.
+ 
+````
+
+## Collecting feedback for improvement
+
+This service includes a simple feedback endpoint you can call from your admin UI when a human reviewer checks or corrects a generated evaluation.
+
+- `POST /feedback` accepts a JSON payload with the original request, the generated text, and optional corrected text. Each submission is appended to `ai_feedback.jsonl` in this folder.
+
+Example minimal feedback payload shape (PowerShell):
+
+```powershell
+$fb = @{
+  request = $body # reuse the same request you sent to /generate
+  generated_strengths = '...' ; generated_improvement_areas = '...' ; generated_recommendations = '...'
+  accurate = $false
+  corrected_strengths = '...' # optionally include corrected text
+}
+$json = $fb | ConvertTo-Json -Depth 10
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8008/feedback -ContentType 'application/json' -Body $json
+```
+
+## Export training data
+
+Use `export_training_data.py` to convert `ai_feedback.jsonl` into `ai_training_export.jsonl`, a simple prompt/completion JSONL suitable for supervised fine-tuning or inspection.
+
+```powershell
+.\.venv\Scripts\python.exe export_training_data.py
+```
+
+Fine-tuning steps are outside the scope of this repository; the export file is intentionally generic. You can adapt the prompt/completion formatting to match the requirements of your fine-tuning provider (OpenAI, Hugging Face, etc.).
