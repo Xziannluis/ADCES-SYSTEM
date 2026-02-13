@@ -84,6 +84,8 @@ class EvaluationController {
                 throw new Exception('Unauthorized');
             }
 
+            date_default_timezone_set('Asia/Manila');
+
             // Enforce schedule requirement: you can't evaluate a teacher without a schedule.
             $teacherId = $postData['teacher_id'] ?? null;
             if (empty($teacherId)) {
@@ -100,12 +102,20 @@ class EvaluationController {
             $scheduleStmt->execute();
             $t = $scheduleStmt->fetch(PDO::FETCH_ASSOC);
             $scheduleVal = $t['evaluation_schedule'] ?? null;
-            $roomVal = $t['evaluation_room'] ?? null;
 
-            // Consider it "scheduled" if either schedule datetime is set OR room is set.
-            // (Room is usually set together with schedule from the UI; this avoids false negatives in prod data.)
-            if (empty($scheduleVal) && empty($roomVal)) {
+            // Require a schedule datetime and ensure it's already due.
+            if (empty($scheduleVal)) {
                 throw new Exception('Cannot submit evaluation: no evaluation schedule is set for this teacher.');
+            }
+
+            $tz = new DateTimeZone('Asia/Manila');
+            $scheduleDt = date_create($scheduleVal, $tz);
+            if (!$scheduleDt) {
+                throw new Exception('Cannot submit evaluation: invalid schedule format for this teacher.');
+            }
+            $now = new DateTime('now', $tz);
+            if ($scheduleDt > $now) {
+                throw new Exception('Cannot submit evaluation yet: the evaluation schedule time has not been reached.');
             }
 
             // Log submission for debugging

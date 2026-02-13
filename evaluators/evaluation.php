@@ -11,6 +11,9 @@ require_once '../models/Teacher.php';
 require_once '../models/Evaluation.php';
 require_once '../controllers/EvaluationController.php';
 
+// Ensure schedule comparisons use local timezone
+date_default_timezone_set('Asia/Manila');
+
 $database = new Database();
 $db = $database->getConnection();
 
@@ -67,6 +70,28 @@ if($_POST && isset($_POST['submit_evaluation'])) {
     <title>Classroom Evaluation - AI Classroom Evaluation</title>
     <?php include '../includes/header.php'; ?>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+    <style>
+        .evaluation-table th:last-child,
+        .evaluation-table td:last-child {
+            width: 22%;
+            min-width: 240px;
+        }
+
+        .evaluation-table th:first-child,
+        .evaluation-table td:first-child {
+            width: 58%;
+        }
+
+        .evaluation-table th:not(:first-child):not(:last-child),
+        .evaluation-table td:not(:first-child):not(:last-child) {
+            width: 4%;
+            text-align: center;
+        }
+
+        .evaluation-table td:last-child .form-control {
+            min-height: 38px;
+        }
+    </style>
 </head>
 <body>
     <?php include '../includes/sidebar.php'; ?>
@@ -95,9 +120,15 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     <div class="list-group" id="teacherList">
                         <?php while($teacher_row = $teachers->fetch(PDO::FETCH_ASSOC)): ?>
                         <?php
-                            $has_schedule = !empty($teacher_row['evaluation_schedule']);
+                            $schedule_value = $teacher_row['evaluation_schedule'] ?? '';
+                            $has_schedule = !empty($schedule_value);
+                            $tz = new DateTimeZone('Asia/Manila');
+                            $now = new DateTime('now', $tz);
+                            $schedule_dt = $has_schedule ? date_create($schedule_value, $tz) : null;
+                            $schedule_ready = $schedule_dt instanceof DateTime && $schedule_dt <= $now;
+                            $schedule_display = $schedule_dt instanceof DateTime ? $schedule_dt->format('F d, Y h:i A') : '';
                         ?>
-                        <div class="list-group-item teacher-item <?php echo $has_schedule ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-has-schedule="<?php echo $has_schedule ? '1' : '0'; ?>">
+                        <div class="list-group-item teacher-item <?php echo $schedule_ready ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-has-schedule="<?php echo $has_schedule ? '1' : '0'; ?>" data-schedule-ready="<?php echo $schedule_ready ? '1' : '0'; ?>" data-schedule-at="<?php echo htmlspecialchars($schedule_display); ?>">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_row['name']); ?></h6>
@@ -105,15 +136,20 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     <small class="text-muted">
                                         <?php if ($has_schedule): ?>
                                             <i class="fas fa-calendar me-1"></i>
-                                            <?php echo htmlspecialchars($teacher_row['evaluation_schedule']); ?>
+                                            <?php echo htmlspecialchars($schedule_display); ?>
+                                            <?php if (!$schedule_ready): ?>
+                                                <span class="text-warning">(Not yet)</span>
+                                            <?php endif; ?>
                                         <?php else: ?>
                                             <i class="fas fa-ban me-1"></i>No schedule set
                                         <?php endif; ?>
                                     </small>
                                 </div>
                                 <div>
-                                    <?php if ($has_schedule): ?>
+                                    <?php if ($schedule_ready): ?>
                                         <span class="badge bg-success p-2">Evaluate this teacher</span>
+                                    <?php elseif ($has_schedule): ?>
+                                        <span class="badge bg-warning text-dark p-2">Scheduled (not yet)</span>
                                     <?php else: ?>
                                         <span class="badge bg-secondary p-2">Schedule required</span>
                                     <?php endif; ?>
@@ -610,6 +646,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             </span>
                                             <textarea class="form-control" id="strengths" name="strengths" rows="3" placeholder="List the teacher's strengths observed during the evaluation"></textarea>
                                         </div>
+                                        <div class="ai-suggestions mt-2" id="strengthsSuggestions" style="display:none;"></div>
                                     </div>
                                     <div class="col-md-6">
                                         <div class="input-group">
@@ -618,6 +655,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             </span>
                                             <textarea class="form-control" id="improvementAreas" name="improvement_areas" rows="3" placeholder="List areas where the teacher can improve"></textarea>
                                         </div>
+                                        <div class="ai-suggestions mt-2" id="improvementSuggestions" style="display:none;"></div>
                                     </div>
                                 </div>
                                 
@@ -629,6 +667,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             </span>
                                             <textarea class="form-control" id="recommendations" name="recommendations" rows="3" placeholder="Provide specific recommendations for improvement"></textarea>
                                         </div>
+                                        <div class="ai-suggestions mt-2" id="recommendationsSuggestions" style="display:none;"></div>
                                     </div>
                                         <div class="col-md-6">
                                             <div class="input-group">
@@ -936,8 +975,15 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             document.querySelectorAll('.teacher-item').forEach(item => {
                 item.addEventListener('click', function() {
                     const hasSchedule = this.getAttribute('data-has-schedule');
+                    const scheduleReady = this.getAttribute('data-schedule-ready');
+                    const scheduleAt = this.getAttribute('data-schedule-at');
                     if (hasSchedule !== '1') {
-                        alert('You can\'t evaluate this teacher yet: no schedule is set. Please ask the dean/principal to set a schedule first.');
+                        alert('You can\'t evaluate this teacher yet: no schedule is set. Please ask the dean to set a schedule first.');
+                        return;
+                    }
+                    if (scheduleReady !== '1') {
+                        const whenMsg = scheduleAt ? ` Scheduled for ${scheduleAt}.` : '';
+                        alert(`You can\'t evaluate this teacher yet.${whenMsg} Please wait for the scheduled time.`);
                         return;
                     }
                     const teacherId = this.getAttribute('data-teacher-id');
@@ -1400,7 +1446,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 const rawText = await res.text();
 
                 let data = null;
-                if (contentType.includes('application/json')) {
+                const trimmed = (rawText || '').trim();
+                const looksJson = trimmed.startsWith('{') || trimmed.startsWith('[');
+                if (contentType.includes('application/json') || looksJson) {
                     try {
                         data = JSON.parse(rawText);
                     } catch (e) {
@@ -1415,6 +1463,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                         msg = (data.message || data.error);
                     } else if (rawText && rawText.toLowerCase().includes('login')) {
                         msg = 'Not authenticated. Please refresh the page and log in again.';
+                    } else if (rawText && rawText.toLowerCase().includes('curl')) {
+                        msg = 'AI proxy error: PHP cURL extension is missing or disabled.';
                     } else if (rawText && rawText.trim().length) {
                         msg = `AI proxy returned unexpected response. Check console for details.`;
                     }
@@ -1425,9 +1475,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 }
 
                 const out = data.data || {};
-                strengthsEl.value = out.strengths || strengthsEl.value;
-                improvementEl.value = out.improvement_areas || improvementEl.value;
-                recEl.value = out.recommendations || recEl.value;
+                renderAISuggestions(out);
                 setAIDebugStatus('Done', true);
             } catch (err) {
                 console.error(err);
@@ -1437,6 +1485,103 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             } finally {
                 restoreButton();
             }
+        }
+
+        function normalizeSuggestionList(input) {
+            if (!input) return [];
+            if (Array.isArray(input)) {
+                return input
+                    .map(item => (typeof item === 'string' ? item.trim() : ''))
+                    .filter(Boolean);
+            }
+            if (typeof input === 'string') {
+                const bulletSplit = input
+                    .split(/\n|•|\u2022|\-/g)
+                    .map(item => item.trim())
+                    .filter(Boolean);
+                if (bulletSplit.length > 1) return bulletSplit;
+
+                return input
+                    .split(/(?<=[.!?])\s+/g)
+                    .map(item => item.trim())
+                    .filter(Boolean);
+            }
+            return [];
+        }
+
+        function groupIntoSentencePairs(items) {
+            const grouped = [];
+            for (let i = 0; i < items.length; i += 2) {
+                const first = items[i];
+                const second = items[i + 1];
+                grouped.push(second ? `${first} ${second}` : first);
+            }
+            return grouped;
+        }
+
+        function takeTopSuggestions(items, limit = 3) {
+            return (items || []).filter(Boolean).slice(0, limit);
+        }
+
+        function renderSuggestionList(container, items, targetEl) {
+            if (!container || !targetEl) return;
+            container.innerHTML = '';
+            if (!items.length) {
+                container.style.display = 'none';
+                return;
+            }
+
+            const label = document.createElement('div');
+            label.className = 'text-muted small mb-1';
+            label.textContent = 'Click a suggestion to add it:';
+            container.appendChild(label);
+
+            const list = document.createElement('div');
+            list.className = 'd-flex flex-wrap gap-2';
+            items.forEach(text => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'btn btn-outline-secondary btn-sm';
+                btn.textContent = text;
+                btn.addEventListener('click', () => {
+                    const current = targetEl.value.trim();
+                    targetEl.value = current ? `${current}\n• ${text}` : `• ${text}`;
+                    targetEl.focus();
+                });
+                list.appendChild(btn);
+            });
+            container.appendChild(list);
+            container.style.display = 'block';
+        }
+
+        function renderAISuggestions(out) {
+            const strengthsTarget = document.getElementById('strengths');
+            const improvementTarget = document.getElementById('improvementAreas');
+            const recommendationsTarget = document.getElementById('recommendations');
+
+            const strengthsContainer = document.getElementById('strengthsSuggestions');
+            const improvementContainer = document.getElementById('improvementSuggestions');
+            const recommendationsContainer = document.getElementById('recommendationsSuggestions');
+
+            const strengthsItems = takeTopSuggestions(
+                groupIntoSentencePairs(
+                    normalizeSuggestionList(out.strengths_suggestions || out.strengths_list || out.strengths)
+                )
+            );
+            const improvementItems = takeTopSuggestions(
+                groupIntoSentencePairs(
+                    normalizeSuggestionList(out.improvement_suggestions || out.improvement_list || out.improvement_areas)
+                )
+            );
+            const recommendationItems = takeTopSuggestions(
+                groupIntoSentencePairs(
+                    normalizeSuggestionList(out.recommendation_suggestions || out.recommendations_list || out.recommendations)
+                )
+            );
+
+            renderSuggestionList(strengthsContainer, strengthsItems, strengthsTarget);
+            renderSuggestionList(improvementContainer, improvementItems, improvementTarget);
+            renderSuggestionList(recommendationsContainer, recommendationItems, recommendationsTarget);
         }
 
         function validateForm(isDraft = false) {
@@ -1554,11 +1699,15 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     document.querySelector(`textarea[name="${category}_comment${i}"]`) ||
                                     document.querySelector(`input[name="${category}_comment${i}"]`) ||
                                     document.querySelector(`textarea[name="${category}_comment${i}"]`);
+
+                    const row = rating ? rating.closest('tr') : null;
+                    const label = row ? (row.querySelector('td')?.textContent || '').trim() : '';
                     
                     if (rating) {
                         formData.ratings[category][i] = {
                             rating: rating.value,
-                            comment: comment ? comment.value : ''
+                            comment: comment ? comment.value : '',
+                            label: label || `Item ${i + 1}`
                         };
 
                         // Also include flat keys because the PHP backend currently expects

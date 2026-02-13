@@ -1111,11 +1111,14 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 for (let i = 0; i < count; i++) {
                     const rating = document.querySelector(`input[name="${category}${i}"]:checked`);
                     const comment = document.querySelector(`input[name="${category}_comment${i}"]`);
+                    const row = rating ? rating.closest('tr') : null;
+                    const label = row ? (row.querySelector('td')?.textContent || '').trim() : '';
                     
                     if (rating) {
                         formData.ratings[category][i] = {
                             rating: rating.value,
-                            comment: comment ? comment.value : ''
+                            comment: comment ? comment.value : '',
+                            label: label || `Item ${i + 1}`
                         };
                     }
                 }

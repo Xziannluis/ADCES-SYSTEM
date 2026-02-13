@@ -13,6 +13,8 @@ $db = $database->getConnection();
 
 $teacher = new Teacher($db);
 
+$can_manage_schedule = ($_SESSION['role'] ?? '') === 'dean';
+
 // Handle teacher actions
 $action = $_GET['action'] ?? '';
 $success_message = '';
@@ -35,6 +37,9 @@ if ($_GET && isset($_GET['action']) && $_GET['action'] === 'toggle_status') {
 
 // Update evaluation schedule and room
 if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule') {
+    if (!$can_manage_schedule) {
+        $error_message = "Only the dean can set evaluation schedules.";
+    } else {
     $teacher_id = $_POST['teacher_id'] ?? '';
     $schedule = $_POST['evaluation_schedule'] ?? '';
     $room = $_POST['evaluation_room'] ?? '';
@@ -82,10 +87,14 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule')
     } else {
         $error_message = "Teacher ID is required.";
     }
+    }
 }
 
 // Cancel / clear evaluation schedule and room
 if ($_POST && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule') {
+    if (!$can_manage_schedule) {
+        $error_message = "Only the dean can cancel evaluation schedules.";
+    } else {
     $teacher_id = $_POST['teacher_id'] ?? '';
 
     if (!empty($teacher_id)) {
@@ -128,10 +137,14 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule')
     } else {
         $error_message = "Teacher ID is required.";
     }
+    }
 }
 
 // Mark evaluation done (lightweight: clears schedule/room; actual completed evaluations are stored in `evaluations`)
 if ($_POST && isset($_POST['action']) && $_POST['action'] === 'mark_done') {
+    if (!$can_manage_schedule) {
+        $error_message = "Only the dean can clear schedules and mark evaluations as done.";
+    } else {
     $teacher_id = $_POST['teacher_id'] ?? '';
 
     if (!empty($teacher_id)) {
@@ -201,6 +214,7 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'mark_done') {
         }
     } else {
         $error_message = "Teacher ID is required.";
+    }
     }
 }
 
@@ -676,26 +690,28 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                 <?php endif; ?>
 
                                 <div class="teacher-actions">
-                                    <button class="btn btn-sm btn-outline-info" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; line-height: 1.2;" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="editSchedule(<?php echo $teacher_row['id']; ?>, '<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? ''); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? ''); ?>')">
-                                        <i class="fas fa-calendar"></i> Schedule
-                                    </button>
+                                    <?php if ($can_manage_schedule): ?>
+                                        <button class="btn btn-sm btn-outline-info" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; line-height: 1.2;" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="editSchedule(<?php echo $teacher_row['id']; ?>, '<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? ''); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? ''); ?>')">
+                                            <i class="fas fa-calendar"></i> Schedule
+                                        </button>
 
-                                    <?php if(!empty($teacher_row['evaluation_schedule']) || !empty($teacher_row['evaluation_room'])): ?>
-                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Mark evaluation as done and clear schedule?');">
-                                            <input type="hidden" name="action" value="mark_done">
-                                            <input type="hidden" name="teacher_id" value="<?php echo $teacher_row['id']; ?>">
-                                            <button type="submit" class="btn btn-sm btn-outline-success">
-                                                <i class="fas fa-check"></i> Done
-                                            </button>
-                                        </form>
+                                        <?php if(!empty($teacher_row['evaluation_schedule']) || !empty($teacher_row['evaluation_room'])): ?>
+                                            <form method="POST" style="display:inline;" onsubmit="return confirm('Mark evaluation as done and clear schedule?');">
+                                                <input type="hidden" name="action" value="mark_done">
+                                                <input type="hidden" name="teacher_id" value="<?php echo $teacher_row['id']; ?>">
+                                                <button type="submit" class="btn btn-sm btn-outline-success">
+                                                    <i class="fas fa-check"></i> Done
+                                                </button>
+                                            </form>
 
-                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this schedule?');">
-                                            <input type="hidden" name="action" value="cancel_schedule">
-                                            <input type="hidden" name="teacher_id" value="<?php echo $teacher_row['id']; ?>">
-                                            <button type="submit" class="btn btn-sm btn-outline-danger">
-                                                <i class="fas fa-times"></i> Cancel
-                                            </button>
-                                        </form>
+                                            <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this schedule?');">
+                                                <input type="hidden" name="action" value="cancel_schedule">
+                                                <input type="hidden" name="teacher_id" value="<?php echo $teacher_row['id']; ?>">
+                                                <button type="submit" class="btn btn-sm btn-outline-danger">
+                                                    <i class="fas fa-times"></i> Cancel
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
                                     <?php endif; ?>
 
                                     <a href="?action=toggle_status&teacher_id=<?php echo $teacher_row['id']; ?>" class="btn btn-sm btn-outline-<?php echo $teacher_row['status'] == 'active' ? 'warning' : 'success'; ?>" onclick="return confirm('Are you sure?');">
@@ -720,6 +736,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
     <?php include '../includes/footer.php'; ?>
 
     <!-- Schedule and Room Modal -->
+    <?php if ($can_manage_schedule): ?>
     <div class="modal fade schedule-modal" id="scheduleModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
@@ -784,6 +801,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
             </div>
         </div>
     </div>
+    <?php endif; ?>
 
     <script>
         function updateSchedulePreview() {

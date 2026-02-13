@@ -468,9 +468,8 @@ function getAssignedCoordinators($db, $supervisor_id) {
             font-size: 0.75rem;
         }
 
-        /* Chip-style badges for coordinators and specializations */
-        .coordinator-chips .badge,
-        .specialization-chips .badge {
+        /* Chip-style badges for coordinators */
+        .coordinator-chips .badge {
             font-size: 0.7rem;
             padding: 0.25rem 0.5rem;
             display: inline-block;
@@ -495,8 +494,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 font-size: 0.7rem;
             }
             
-            .coordinator-chips .badge,
-            .specialization-chips .badge {
+            .coordinator-chips .badge {
                 font-size: 0.65rem;
                 padding: 0.2rem 0.4rem;
             }
@@ -765,10 +763,10 @@ function getAssignedCoordinators($db, $supervisor_id) {
     </div>
 </div>
 
-<!-- Coordinators Section -->
+<!-- Chairpersons Section -->
 <div class="card mb-4 section-card">
     <div class="card-header bg-success text-white">
-        <h5 class="mb-0"><i class="fas fa-users me-2"></i>Coordinators</h5>
+        <h5 class="mb-0"><i class="fas fa-users me-2"></i>Chairpersons</h5>
     </div>
     <div class="card-body">
         <div class="table-responsive">
@@ -780,7 +778,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         <th class="d-none d-lg-table-cell">Username</th>
                         <th>Role</th>
                         <th class="d-none d-md-table-cell">Department</th>
-                        <th>Specializations</th>
                         <th class="d-none d-xl-table-cell">Supervisor</th>
                         <th width="10%">Status</th>
                         <th width="25%">Actions</th>
@@ -789,19 +786,9 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 <tbody>
                     <?php 
                     $counter = 1;
-                    $coordinator_roles = ['subject_coordinator', 'chairperson', 'grade_level_coordinator'];
+                    $coordinator_roles = ['chairperson'];
                     foreach ($coordinator_roles as $role) {
                         while($row = $evaluators[$role]->fetch(PDO::FETCH_ASSOC)):
-                            if (in_array($row['role'], ['subject_coordinator', 'chairperson'])) {
-                                $items = getEvaluatorSubjects($db, $row['id']);
-                                $items_type = 'subjects';
-                            } elseif ($row['role'] === 'grade_level_coordinator') {
-                                $items = getEvaluatorGradeLevels($db, $row['id']);
-                                $items_type = 'grade_levels';
-                            } else {
-                                $items = [];
-                                $items_type = '';
-                            }
                             $supervisor = getEvaluatorSupervisor($db, $row['id']);
                     ?>
                     <tr>
@@ -828,29 +815,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         </td>
                         <td class="d-none d-md-table-cell">
                             <?php echo htmlspecialchars($row['department']); ?>
-                        </td>
-                        <td>
-                            <?php if (!empty($items)): ?>
-                                <div class="specialization-chips">
-                                    <?php if ($items_type === 'subjects'): ?>
-                                        <?php foreach(array_slice($items, 0, 2) as $item): ?>
-                                            <span class="badge bg-light text-dark border me-1 mb-1"><?php echo htmlspecialchars($item); ?></span>
-                                        <?php endforeach; ?>
-                                        <?php if(count($items) > 2): ?>
-                                            <span class="badge bg-secondary">+<?php echo count($items) - 2; ?></span>
-                                        <?php endif; ?>
-                                    <?php elseif ($items_type === 'grade_levels'): ?>
-                                        <?php foreach(array_slice($items, 0, 3) as $grade): ?>
-                                            <span class="badge bg-primary me-1 mb-1">G<?php echo $grade; ?></span>
-                                        <?php endforeach; ?>
-                                        <?php if(count($items) > 3): ?>
-                                            <span class="badge bg-secondary">+<?php echo count($items) - 3; ?></span>
-                                        <?php endif; ?>
-                                    <?php endif; ?>
-                                </div>
-                            <?php else: ?>
-                                <span class="text-muted small">None assigned</span>
-                            <?php endif; ?>
                         </td>
                         <td class="d-none d-xl-table-cell">
                             <?php if ($supervisor): ?>
@@ -1077,9 +1041,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                                         <option value="">Select Role</option>
                                         <option value="dean">Dean</option>
                                         <option value="principal">Principal</option>
-                                        <option value="subject_coordinator">Subject Coordinator</option>
                                         <option value="chairperson">Chairperson</option>
-                                        <option value="grade_level_coordinator">Grade Level Coordinator</option>
                                     </select>
                                 </div>
                             </div>
@@ -1344,7 +1306,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
         // Enhance mobile experience
         document.addEventListener('DOMContentLoaded', function() {
             // Add tooltips for truncated content
-            const chips = document.querySelectorAll('.coordinator-chips .badge, .specialization-chips .badge');
+            const chips = document.querySelectorAll('.coordinator-chips .badge');
             chips.forEach(chip => {
                 if (chip.scrollWidth > chip.clientWidth) {
                     chip.setAttribute('data-bs-toggle', 'tooltip');

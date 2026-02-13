@@ -28,6 +28,16 @@ if (!$aiBase) {
     $aiBase = 'http://127.0.0.1:8008';
 }
 
+if (!function_exists('curl_init')) {
+    http_response_code(500);
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => false,
+        'message' => 'PHP cURL extension is not enabled. Please enable it in php.ini and restart Apache.',
+    ]);
+    exit();
+}
+
 // Debug helper:
 // - GET /controllers/ai_generate.php?mode=health -> calls Python /health
 // - GET /controllers/ai_generate.php?mode=echo   -> calls Python /debug/echo (with empty JSON body)
