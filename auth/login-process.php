@@ -14,9 +14,13 @@ if (!empty($_POST)) {
     $user->role = $_POST['role'];
 
     if($user->login()) {
-        $_SESSION['user_id'] = $user->id;
-        $_SESSION['username'] = $user->username;
-        $_SESSION['role'] = strtolower($user->role); // force lowercase for consistency
+    $sessionRole = strtolower(trim((string)$user->role));
+    $sessionRole = str_replace(['-', ' '], '_', $sessionRole);
+    $sessionRole = preg_replace('/_+/', '_', $sessionRole);
+
+    $_SESSION['user_id'] = $user->id;
+    $_SESSION['username'] = $user->username;
+    $_SESSION['role'] = $sessionRole; // normalized for consistency
         $_SESSION['department'] = $user->department;
         $_SESSION['name'] = $user->name;
         
@@ -40,7 +44,7 @@ if (!empty($_POST)) {
         $log_stmt->bindParam(':ip_address', $_SERVER['REMOTE_ADDR']);
         $log_stmt->execute();
         
-        $role = strtolower($user->role);
+    $role = $sessionRole;
         if($role == 'edp') {
             header("Location: ../edp/dashboard.php");
         } elseif(in_array($role, ['president', 'vice_president'])) {

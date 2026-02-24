@@ -8,6 +8,18 @@ if(!in_array($_SESSION['role'], ['dean', 'principal'])) {
 require_once '../config/database.php';
 require_once '../models/User.php';
 
+$departments = [
+    'CCIS' => '(CCIS) College of Computing and Information Sciences',
+    'CTE' => '(CTE) College of Teacher Education',
+    'CAS' => '(CAS) College of Arts and Sciences',
+    'CCJE' => '(CCJE) College of Criminal Justice Education',
+    'CBM' => '(CBM) College of Business Management',
+    'CTHM' => '(CTHM) College of Tourism and Hospitality Management',
+    'ELEM' => '(ELEM) Elementary School)',
+    'JHS' => '(JHS) Junior High School)',
+    'SHS' => '(SHS) Senior High School'
+];
+
 $database = new Database();
 $db = $database->getConnection();
 $user = new User($db);
@@ -16,8 +28,12 @@ $user = new User($db);
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'assign_coordinator') {
     $coordinator_id = $_POST['coordinator_id'];
     $supervisor_id = $_SESSION['user_id'];
+    $program = trim($_POST['program'] ?? '');
+    if ($program === '') {
+        $program = $_SESSION['department'] ?? '';
+    }
     
-    // Check if assignment already exists
+    // Check if assignment already exists for this supervisor
     $check_query = "SELECT id FROM evaluator_assignments WHERE evaluator_id = :coordinator_id AND supervisor_id = :supervisor_id";
     $check_stmt = $db->prepare($check_query);
     $check_stmt->bindParam(':coordinator_id', $coordinator_id);
@@ -25,11 +41,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $check_stmt->execute();
     
     if ($check_stmt->rowCount() === 0) {
-        $insert_query = "INSERT INTO evaluator_assignments (evaluator_id, supervisor_id, assigned_at) 
-                        VALUES (:evaluator_id, :supervisor_id, NOW())";
+        $insert_query = "INSERT INTO evaluator_assignments (evaluator_id, supervisor_id, program, assigned_at) 
+                        VALUES (:evaluator_id, :supervisor_id, :program, NOW())";
         $insert_stmt = $db->prepare($insert_query);
         $insert_stmt->bindParam(':evaluator_id', $coordinator_id);
         $insert_stmt->bindParam(':supervisor_id', $supervisor_id);
+        $insert_stmt->bindParam(':program', $program);
         
         if ($insert_stmt->execute()) {
             $_SESSION['success'] = "Coordinator assigned successfully!";
@@ -37,7 +54,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $_SESSION['error'] = "Failed to assign coordinator.";
         }
     } else {
-        $_SESSION['error'] = "Coordinator is already assigned to you.";
+        $_SESSION['error'] = "This coordinator is already assigned and cannot be assigned again.";
     }
     
     header("Location: assign_coordinators.php");
@@ -74,19 +91,15 @@ $assigned_stmt->bindParam(':supervisor_id', $_SESSION['user_id']);
 $assigned_stmt->execute();
 $assigned_coordinators = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get available coordinators (not assigned to this supervisor, same department, and active)
+// Get available coordinators (same department and active)
 $available_query = "SELECT u.id, u.name, u.role, u.department 
                    FROM users u 
                    WHERE u.role IN ('subject_coordinator', 'chairperson', 'grade_level_coordinator') 
                    AND u.department = :department
                    AND u.status = 'active' 
-                   AND u.id NOT IN (
-                       SELECT evaluator_id FROM evaluator_assignments WHERE supervisor_id = :supervisor_id
-                   )
                    ORDER BY u.role, u.name";
 $available_stmt = $db->prepare($available_query);
 $available_stmt->bindParam(':department', $_SESSION['department']);
-$available_stmt->bindParam(':supervisor_id', $_SESSION['user_id']);
 $available_stmt->execute();
 $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
@@ -138,6 +151,20 @@ $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
             padding: 20px;
             border-radius: 8px;
             margin-bottom: 20px;
+        }
+        .form-container .form-label {
+            font-size: 0.9rem;
+            margin-bottom: 6px;
+        }
+        .form-container .form-select {
+            font-size: 0.9rem;
+            padding: 6px 10px;
+            min-height: 36px;
+            max-width: 520px;
+        }
+        .form-container .btn {
+            padding: 6px 14px;
+            font-size: 0.9rem;
         }
         .role-badge {
             background-color: #17a2b8;
@@ -249,6 +276,10 @@ $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
                                             <strong><?php echo htmlspecialchars($assignment['coordinator_name']); ?></strong>
                                             <span class="role-badge"><?php echo ucfirst(str_replace('_', ' ', $assignment['coordinator_role'])); ?></span>
                                             <small class="text-muted ms-2"><?php echo htmlspecialchars($assignment['department']); ?></small>
+                                            <?php if (!empty($assignment['program'])): ?>
+                                                <?php $programLabel = $departments[$assignment['program']] ?? $assignment['program']; ?>
+                                                <small class="text-muted ms-2">Program: <?php echo htmlspecialchars($programLabel); ?></small>
+                                            <?php endif; ?>
                                         </div>
                                         <div>
                                             <a href="assign_teachers.php?evaluator_id=<?php echo $assignment['evaluator_id']; ?>" class="btn btn-sm btn-info me-2">

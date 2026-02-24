@@ -51,7 +51,7 @@ echo "  Username: edp_user\n";
 echo "  Password: edp123\n";
 echo "  Role: EDP\n\n";
 
-echo "Dean (Computer Science):\n";
+echo "Dean (CCIS):\n";
 echo "  Username: dean_ccs\n";
 echo "  Password: dean123\n";
 echo "  Role: Dean\n\n";
@@ -61,7 +61,7 @@ echo "  Username: teacher_john\n";
 echo "  Password: teacher123\n";
 echo "  Role: Teacher\n\n";
 
-echo "Chairperson (Computer Science):\n";
+echo "Chairperson (CCIS):\n";
 echo "  Username: chairperson_ccs\n";
 echo "  Password: chair123\n";
 echo "  Role: Chairperson\n\n";

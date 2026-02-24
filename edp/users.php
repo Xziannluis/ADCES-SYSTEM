@@ -277,19 +277,29 @@ foreach ($roles as $role) {
 // Get subjects for evaluators
 function getEvaluatorSubjects($db, $evaluator_id) {
     $query = "SELECT subject FROM evaluator_subjects WHERE evaluator_id = :evaluator_id";
-    $stmt = $db->prepare($query);
-    $stmt->bindParam(':evaluator_id', $evaluator_id);
-    $stmt->execute();
-    return $stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+    try {
+        $stmt = $db->prepare($query);
+        $stmt->bindParam(':evaluator_id', $evaluator_id);
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+    } catch (PDOException $e) {
+        error_log('getEvaluatorSubjects fallback: ' . $e->getMessage());
+        return [];
+    }
 }
 
 // Get grade levels for evaluators
 function getEvaluatorGradeLevels($db, $evaluator_id) {
     $query = "SELECT grade_level FROM evaluator_grade_levels WHERE evaluator_id = :evaluator_id";
-    $stmt = $db->prepare($query);
-    $stmt->bindParam(':evaluator_id', $evaluator_id);
-    $stmt->execute();
-    return $stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+    try {
+        $stmt = $db->prepare($query);
+        $stmt->bindParam(':evaluator_id', $evaluator_id);
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+    } catch (PDOException $e) {
+        error_log('getEvaluatorGradeLevels fallback: ' . $e->getMessage());
+        return [];
+    }
 }
 
 // Get supervisor for evaluators
@@ -297,10 +307,15 @@ function getEvaluatorSupervisor($db, $evaluator_id) {
     $query = "SELECT u.name, u.role FROM evaluator_assignments ea 
               JOIN users u ON ea.supervisor_id = u.id 
               WHERE ea.evaluator_id = :evaluator_id";
-    $stmt = $db->prepare($query);
-    $stmt->bindParam(':evaluator_id', $evaluator_id);
-    $stmt->execute();
-    return $stmt->fetch(PDO::FETCH_ASSOC);
+    try {
+        $stmt = $db->prepare($query);
+        $stmt->bindParam(':evaluator_id', $evaluator_id);
+        $stmt->execute();
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        error_log('getEvaluatorSupervisor fallback: ' . $e->getMessage());
+        return false;
+    }
 }
 
 // Get assigned coordinators for supervisors
@@ -309,10 +324,17 @@ function getAssignedCoordinators($db, $supervisor_id) {
               JOIN users u ON ea.evaluator_id = u.id 
               WHERE ea.supervisor_id = :supervisor_id 
               ORDER BY u.role, u.name";
-    $stmt = $db->prepare($query);
-    $stmt->bindParam(':supervisor_id', $supervisor_id);
-    $stmt->execute();
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    try {
+        $stmt = $db->prepare($query);
+        $stmt->bindParam(':supervisor_id', $supervisor_id);
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        // Gracefully handle environments where evaluator_assignments table is not yet migrated.
+        error_log('getAssignedCoordinators fallback: ' . $e->getMessage());
+        return [];
+    }
 }
 ?>
 <!DOCTYPE html>

@@ -34,6 +34,9 @@
         <?php else: ?>
             <li><a href="evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluation</a></li>
             <li><a href="teachers.php" class="nav-link"><i class="fas fa-chalkboard-teacher"></i> Teachers</a></li>
+            <?php if(in_array($_SESSION['role'], ['dean', 'principal'])): ?>
+                <li><a href="assign_coordinators.php" class="nav-link"><i class="fas fa-users-cog"></i> Coordinators</a></li>
+            <?php endif; ?>
             <li><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></li>
         <?php endif; ?>
         <li class="nav-divider"></li>

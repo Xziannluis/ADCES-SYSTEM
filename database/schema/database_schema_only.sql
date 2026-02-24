@@ -49,6 +49,52 @@ CREATE TABLE `teachers` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ========================================
+-- EVALUATOR_ASSIGNMENTS TABLE
+-- ========================================
+CREATE TABLE `evaluator_assignments` (
+  `id` INT PRIMARY KEY AUTO_INCREMENT,
+  `evaluator_id` INT NOT NULL,
+  `supervisor_id` INT NOT NULL,
+  `program` VARCHAR(100),
+  `assigned_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (`evaluator_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`supervisor_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  KEY `evaluator_idx` (`evaluator_id`),
+  KEY `supervisor_idx` (`supervisor_id`),
+  KEY `program_idx` (`program`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ========================================
+-- EVALUATOR_SUBJECTS TABLE
+-- ========================================
+CREATE TABLE `evaluator_subjects` (
+  `id` INT PRIMARY KEY AUTO_INCREMENT,
+  `evaluator_id` INT NOT NULL,
+  `subject` VARCHAR(255) NOT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (`evaluator_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  KEY `evaluator_idx` (`evaluator_id`),
+  KEY `subject_idx` (`subject`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ========================================
+-- TEACHER_ASSIGNMENTS TABLE
+-- ========================================
+CREATE TABLE `teacher_assignments` (
+  `id` INT PRIMARY KEY AUTO_INCREMENT,
+  `evaluator_id` INT NOT NULL,
+  `teacher_id` INT NOT NULL,
+  `subject` VARCHAR(255),
+  `grade_level` VARCHAR(50),
+  `assigned_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (`evaluator_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`teacher_id`) REFERENCES `teachers`(`id`) ON DELETE CASCADE,
+  KEY `evaluator_idx` (`evaluator_id`),
+  KEY `teacher_idx` (`teacher_id`),
+  KEY `subject_idx` (`subject`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ========================================
 -- EVALUATIONS TABLE (Main table for evaluation records)
 -- ========================================
 CREATE TABLE `evaluations` (

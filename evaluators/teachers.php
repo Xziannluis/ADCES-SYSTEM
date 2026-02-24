@@ -7,6 +7,7 @@ if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_co
 
 require_once '../config/database.php';
 require_once '../models/Teacher.php';
+require_once '../includes/program_assignments.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -273,9 +274,23 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'remove_assignment
 
 // Get teachers for current department (or only assigned teachers for coordinators)
 if (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
-    $assigned_query = "SELECT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id ORDER BY t.name";
+    $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
+    $assigned_query = "SELECT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id";
+    if (!empty($programs)) {
+        $programPlaceholders = [];
+        foreach ($programs as $idx => $dept) {
+            $programPlaceholders[] = ':program_' . $idx;
+        }
+        $assigned_query .= " AND t.department IN (" . implode(',', $programPlaceholders) . ")";
+    }
+    $assigned_query .= " ORDER BY t.name";
     $stmt = $db->prepare($assigned_query);
     $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    if (!empty($programs)) {
+        foreach ($programs as $idx => $dept) {
+            $stmt->bindValue(':program_' . $idx, $dept);
+        }
+    }
     $stmt->execute();
     $teachers = $stmt; // keep interface similar (PDOStatement)
 } else {
@@ -287,10 +302,25 @@ if (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_le
 $assigned_query = "SELECT ta.*, t.name as teacher_name, t.department, t.evaluation_schedule, t.evaluation_room
                   FROM teacher_assignments ta 
                   JOIN teachers t ON ta.teacher_id = t.id 
-                  WHERE ta.evaluator_id = :evaluator_id 
-                  ORDER BY ta.subject, ta.grade_level, t.name";
+                  WHERE ta.evaluator_id = :evaluator_id";
+if (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
+    $programs = $programs ?? resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
+    if (!empty($programs)) {
+        $programPlaceholders = [];
+        foreach ($programs as $idx => $dept) {
+            $programPlaceholders[] = ':assigned_program_' . $idx;
+        }
+        $assigned_query .= " AND t.department IN (" . implode(',', $programPlaceholders) . ")";
+    }
+}
+$assigned_query .= " ORDER BY ta.subject, ta.grade_level, t.name";
 $assigned_stmt = $db->prepare($assigned_query);
 $assigned_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+if (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator']) && !empty($programs)) {
+    foreach ($programs as $idx => $dept) {
+        $assigned_stmt->bindValue(':assigned_program_' . $idx, $dept);
+    }
+}
 $assigned_stmt->execute();
 $assigned_teachers = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
 

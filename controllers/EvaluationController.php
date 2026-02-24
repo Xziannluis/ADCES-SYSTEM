@@ -59,6 +59,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_teacher' && isset($_GET['
     exit();
 }
 
+// Program assignment helpers
+$programHelperPath = __DIR__ . '/../includes/program_assignments.php';
+if (file_exists($programHelperPath)) {
+    require_once $programHelperPath;
+}
+
 // Ensure AIController is available when this controller is used directly
 if (!class_exists('AIController')) {
     $aiPath = __DIR__ . '/AIController.php';
@@ -88,6 +94,38 @@ class EvaluationController {
             $teacherId = $postData['teacher_id'] ?? null;
             if (empty($teacherId)) {
                 throw new Exception('Teacher is required');
+            }
+
+            // Enforce coordinator program assignment + explicit teacher assignment
+            $evaluatorInfoStmt = $this->db->prepare("SELECT role, department FROM users WHERE id = :id LIMIT 1");
+            $evaluatorInfoStmt->bindValue(':id', $evaluatorId);
+            $evaluatorInfoStmt->execute();
+            $evaluatorInfo = $evaluatorInfoStmt->fetch(PDO::FETCH_ASSOC);
+            $evaluatorRole = $evaluatorInfo['role'] ?? '';
+            $evaluatorDept = $evaluatorInfo['department'] ?? null;
+
+            if (in_array($evaluatorRole, ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
+                $teacherDeptStmt = $this->db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
+                $teacherDeptStmt->bindValue(':id', $teacherId);
+                $teacherDeptStmt->execute();
+                $teacherDept = $teacherDeptStmt->fetchColumn();
+
+                if (function_exists('resolveEvaluatorPrograms')) {
+                    $allowedPrograms = resolveEvaluatorPrograms($this->db, $evaluatorId, $evaluatorDept);
+                    if (!empty($allowedPrograms) && !in_array($teacherDept, $allowedPrograms, true)) {
+                        throw new Exception('You are not allowed to evaluate teachers outside your assigned program.');
+                    }
+                }
+
+                $assignmentCheck = $this->db->prepare(
+                    "SELECT id FROM teacher_assignments WHERE evaluator_id = :evaluator_id AND teacher_id = :teacher_id LIMIT 1"
+                );
+                $assignmentCheck->bindValue(':evaluator_id', $evaluatorId);
+                $assignmentCheck->bindValue(':teacher_id', $teacherId);
+                $assignmentCheck->execute();
+                if ($assignmentCheck->rowCount() === 0) {
+                    throw new Exception('You are not assigned to evaluate this teacher.');
+                }
             }
 
             // Accept schedule from either: evaluation_schedule (legacy DATETIME column)

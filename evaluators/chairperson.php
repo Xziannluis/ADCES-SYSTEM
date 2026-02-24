@@ -17,69 +17,93 @@ $teacher = new Teacher($db);
 $user = new User($db);
 $evaluation = new Evaluation($db);
 
+function tableExists($db, $table) {
+    try {
+        $stmt = $db->prepare("SHOW TABLES LIKE :table");
+        $stmt->bindValue(':table', $table);
+        $stmt->execute();
+        return $stmt->rowCount() > 0;
+    } catch (PDOException $e) {
+        error_log('tableExists failed for ' . $table . ': ' . $e->getMessage());
+        return false;
+    }
+}
+
 // Get chairperson program subjects
 $program_subjects = [];
-$program_stmt = $db->prepare("SELECT subject FROM evaluator_subjects WHERE evaluator_id = :evaluator_id");
-$program_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
-$program_stmt->execute();
-$program_subjects = $program_stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+$hasEvaluatorSubjects = tableExists($db, 'evaluator_subjects');
+$hasEvaluatorAssignments = tableExists($db, 'evaluator_assignments');
+$hasTeacherAssignments = tableExists($db, 'teacher_assignments');
+
+if ($hasEvaluatorSubjects) {
+    $program_stmt = $db->prepare("SELECT subject FROM evaluator_subjects WHERE evaluator_id = :evaluator_id");
+    $program_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    $program_stmt->execute();
+    $program_subjects = $program_stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+}
 
 // Get supervisor info (who supervises this chairperson)
 $supervisor_info = [];
-$supervisor_query = "
-    SELECT u.name, u.role, u.department 
-    FROM evaluator_assignments ea 
-    JOIN users u ON ea.supervisor_id = u.id 
-    WHERE ea.evaluator_id = :evaluator_id
-";
-$supervisor_stmt = $db->prepare($supervisor_query);
-$supervisor_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
-$supervisor_stmt->execute();
-$supervisor_info = $supervisor_stmt->fetch(PDO::FETCH_ASSOC);
+if ($hasEvaluatorAssignments) {
+    $supervisor_query = "
+        SELECT u.name, u.role, u.department 
+        FROM evaluator_assignments ea 
+        JOIN users u ON ea.supervisor_id = u.id 
+        WHERE ea.evaluator_id = :evaluator_id
+    ";
+    $supervisor_stmt = $db->prepare($supervisor_query);
+    $supervisor_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    $supervisor_stmt->execute();
+    $supervisor_info = $supervisor_stmt->fetch(PDO::FETCH_ASSOC);
+}
 
 // Get assigned teachers count
 $assigned_teachers_count = 0;
-$teachers_count_query = "SELECT COUNT(*) as teacher_count FROM teacher_assignments WHERE evaluator_id = :evaluator_id";
-if (!empty($program_subjects)) {
-    $placeholders = [];
-    foreach ($program_subjects as $i => $subject) {
-        $placeholders[] = ":subject{$i}";
+if ($hasTeacherAssignments) {
+    $teachers_count_query = "SELECT COUNT(*) as teacher_count FROM teacher_assignments WHERE evaluator_id = :evaluator_id";
+    if (!empty($program_subjects)) {
+        $placeholders = [];
+        foreach ($program_subjects as $i => $subject) {
+            $placeholders[] = ":subject{$i}";
+        }
+        $teachers_count_query .= " AND subject IN (" . implode(',', $placeholders) . ")";
     }
-    $teachers_count_query .= " AND subject IN (" . implode(',', $placeholders) . ")";
-}
-$teachers_count_stmt = $db->prepare($teachers_count_query);
-$teachers_count_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
-if (!empty($program_subjects)) {
-    foreach ($program_subjects as $i => $subject) {
-        $teachers_count_stmt->bindValue(":subject{$i}", $subject);
+    $teachers_count_stmt = $db->prepare($teachers_count_query);
+    $teachers_count_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    if (!empty($program_subjects)) {
+        foreach ($program_subjects as $i => $subject) {
+            $teachers_count_stmt->bindValue(":subject{$i}", $subject);
+        }
     }
+    $teachers_count_stmt->execute();
+    $assigned_teachers_count = (int)($teachers_count_stmt->fetch(PDO::FETCH_ASSOC)['teacher_count'] ?? 0);
 }
-$teachers_count_stmt->execute();
-$assigned_teachers_count = (int)($teachers_count_stmt->fetch(PDO::FETCH_ASSOC)['teacher_count'] ?? 0);
 
 // Get assigned teachers list (filtered to program subjects if available)
 $assigned_teachers = [];
-$assigned_list_query = "SELECT ta.subject, ta.grade_level, t.name, t.department
-    FROM teacher_assignments ta
-    JOIN teachers t ON ta.teacher_id = t.id
-    WHERE ta.evaluator_id = :evaluator_id";
-if (!empty($program_subjects)) {
-    $placeholders = [];
-    foreach ($program_subjects as $i => $subject) {
-        $placeholders[] = ":list_subject{$i}";
+if ($hasTeacherAssignments) {
+    $assigned_list_query = "SELECT ta.subject, ta.grade_level, t.name, t.department
+        FROM teacher_assignments ta
+        JOIN teachers t ON ta.teacher_id = t.id
+        WHERE ta.evaluator_id = :evaluator_id";
+    if (!empty($program_subjects)) {
+        $placeholders = [];
+        foreach ($program_subjects as $i => $subject) {
+            $placeholders[] = ":list_subject{$i}";
+        }
+        $assigned_list_query .= " AND ta.subject IN (" . implode(',', $placeholders) . ")";
     }
-    $assigned_list_query .= " AND ta.subject IN (" . implode(',', $placeholders) . ")";
-}
-$assigned_list_query .= " ORDER BY t.name";
-$assigned_list_stmt = $db->prepare($assigned_list_query);
-$assigned_list_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
-if (!empty($program_subjects)) {
-    foreach ($program_subjects as $i => $subject) {
-        $assigned_list_stmt->bindValue(":list_subject{$i}", $subject);
+    $assigned_list_query .= " ORDER BY t.name";
+    $assigned_list_stmt = $db->prepare($assigned_list_query);
+    $assigned_list_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    if (!empty($program_subjects)) {
+        foreach ($program_subjects as $i => $subject) {
+            $assigned_list_stmt->bindValue(":list_subject{$i}", $subject);
+        }
     }
+    $assigned_list_stmt->execute();
+    $assigned_teachers = $assigned_list_stmt->fetchAll(PDO::FETCH_ASSOC);
 }
-$assigned_list_stmt->execute();
-$assigned_teachers = $assigned_list_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get stats and recent evaluations for this evaluator
 $stats = $evaluation->getAdminStats($_SESSION['user_id']);

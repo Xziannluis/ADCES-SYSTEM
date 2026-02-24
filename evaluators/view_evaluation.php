@@ -8,6 +8,7 @@ if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'sub
 }
 
 require_once '../config/database.php';
+require_once '../includes/program_assignments.php';
 
 $db = (new Database())->getConnection();
 
@@ -35,6 +36,22 @@ if (!$eval) {
     http_response_code(404);
     echo 'Evaluation not found.';
     exit();
+}
+
+// Coordinators can only view their own evaluations within assigned programs
+if (in_array($_SESSION['role'] ?? '', ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
+    if ((int)$eval['evaluator_id'] !== (int)($_SESSION['user_id'] ?? 0)) {
+        http_response_code(403);
+        echo 'Access denied.';
+        exit();
+    }
+
+    $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
+    if (!empty($programs) && !in_array($eval['teacher_department'], $programs, true)) {
+        http_response_code(403);
+        echo 'Access denied.';
+        exit();
+    }
 }
 
 $detailsStmt = $db->prepare(

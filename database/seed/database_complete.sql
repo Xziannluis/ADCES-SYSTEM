@@ -153,22 +153,22 @@ CREATE TABLE `audit_logs` (
 -- ========================================
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `status`) VALUES
 ('edp_user', '$2y$10$YourHashedPasswordHere1', 'EDP Admin', 'edp', 'Administration', 'active'),
-('dean_ccs', '$2y$10$YourHashedPasswordHere2', 'Dr. Dean CCS', 'dean', 'Computer Science', 'active'),
+('dean_ccs', '$2y$10$YourHashedPasswordHere2', 'Dr. Dean CCS', 'dean', 'CCIS', 'active'),
 ('principal', '$2y$10$YourHashedPasswordHere3', 'Principal Santos', 'principal', NULL, 'active'),
-('chairperson_ccs', '$2y$10$YourHashedPasswordHere4', 'Prof. Chairperson CCS', 'chairperson', 'Computer Science', 'active'),
-('coordinator_ccs', '$2y$10$YourHashedPasswordHere5', 'Prof. Coordinator', 'subject_coordinator', 'Computer Science', 'active'),
+('chairperson_ccs', '$2y$10$YourHashedPasswordHere4', 'Prof. Chairperson CCS', 'chairperson', 'CCIS', 'active'),
+('coordinator_ccs', '$2y$10$YourHashedPasswordHere5', 'Prof. Coordinator', 'subject_coordinator', 'CCIS', 'active'),
 ('president', '$2y$10$YourHashedPasswordHere6', 'President Cruz', 'president', NULL, 'active'),
 ('vp_academics', '$2y$10$YourHashedPasswordHere7', 'VP Academics', 'vice_president', NULL, 'active'),
-('teacher_john', '$2y$10$YourHashedPasswordHere8', 'John Smith', 'teacher', 'Computer Science', 'active'),
-('teacher_mary', '$2y$10$YourHashedPasswordHere9', 'Mary Johnson', 'teacher', 'Computer Science', 'active'),
+('teacher_john', '$2y$10$YourHashedPasswordHere8', 'John Smith', 'teacher', 'CCIS', 'active'),
+('teacher_mary', '$2y$10$YourHashedPasswordHere9', 'Mary Johnson', 'teacher', 'CCIS', 'active'),
 ('teacher_robert', '$2y$10$YourHashedPasswordHere10', 'Robert Brown', 'teacher', 'Engineering', 'active');
 
 -- ========================================
 -- SAMPLE DATA - TEACHERS
 -- ========================================
 INSERT INTO `teachers` (`user_id`, `name`, `department`, `email`, `phone`, `evaluation_schedule`, `status`) VALUES
-(8, 'John Smith', 'Computer Science', 'john.smith@school.edu', '555-0001', '2023-11-20 10:00:00', 'active'),
-(9, 'Mary Johnson', 'Computer Science', 'mary.johnson@school.edu', '555-0002', '2023-11-21 14:00:00', 'active'),
+(8, 'John Smith', 'CCIS', 'john.smith@school.edu', '555-0001', '2023-11-20 10:00:00', 'active'),
+(9, 'Mary Johnson', 'CCIS', 'mary.johnson@school.edu', '555-0002', '2023-11-21 14:00:00', 'active'),
 (10, 'Robert Brown', 'Engineering', 'robert.brown@school.edu', '555-0003', '2023-11-22 09:00:00', 'active');
 
 -- ========================================

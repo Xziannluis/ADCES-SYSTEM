@@ -27,51 +27,9 @@ if (!$supervisor || !in_array($supervisor['role'], ['dean', 'principal'])) {
     exit();
 }
 
-// Handle coordinator assignment
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'assign_coordinator') {
-    $coordinator_id = $_POST['coordinator_id'];
-    
-    // Check if assignment already exists
-    $check_query = "SELECT id FROM evaluator_assignments WHERE evaluator_id = :coordinator_id AND supervisor_id = :supervisor_id";
-    $check_stmt = $db->prepare($check_query);
-    $check_stmt->bindParam(':coordinator_id', $coordinator_id);
-    $check_stmt->bindParam(':supervisor_id', $supervisor_id);
-    $check_stmt->execute();
-    
-    if ($check_stmt->rowCount() === 0) {
-        $insert_query = "INSERT INTO evaluator_assignments (evaluator_id, supervisor_id, assigned_at) 
-                        VALUES (:evaluator_id, :supervisor_id, NOW())";
-        $insert_stmt = $db->prepare($insert_query);
-        $insert_stmt->bindParam(':evaluator_id', $coordinator_id);
-        $insert_stmt->bindParam(':supervisor_id', $supervisor_id);
-        
-        if ($insert_stmt->execute()) {
-            $_SESSION['success'] = "Coordinator assigned successfully!";
-        } else {
-            $_SESSION['error'] = "Failed to assign coordinator.";
-        }
-    } else {
-        $_SESSION['error'] = "Coordinator is already assigned to this supervisor.";
-    }
-    
-    header("Location: assign_coordinators.php?supervisor_id=" . $supervisor_id);
-    exit();
-}
-
-// Handle coordinator removal
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'remove_assignment') {
-    $assignment_id = $_POST['assignment_id'];
-    
-    $delete_query = "DELETE FROM evaluator_assignments WHERE id = :assignment_id";
-    $delete_stmt = $db->prepare($delete_query);
-    $delete_stmt->bindParam(':assignment_id', $assignment_id);
-    
-    if ($delete_stmt->execute()) {
-        $_SESSION['success'] = "Coordinator assignment removed successfully!";
-    } else {
-        $_SESSION['error'] = "Failed to remove coordinator assignment.";
-    }
-    
+// EDP can only view coordinator assignments; deans manage assignments.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && in_array($_POST['action'], ['assign_coordinator', 'remove_assignment'], true)) {
+    $_SESSION['error'] = "Coordinator assignments are managed by deans.";
     header("Location: assign_coordinators.php?supervisor_id=" . $supervisor_id);
     exit();
 }
@@ -87,21 +45,7 @@ $assigned_stmt->bindParam(':supervisor_id', $supervisor_id);
 $assigned_stmt->execute();
 $assigned_coordinators = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get available coordinators (not assigned to this supervisor)
-$available_query = "SELECT u.id, u.name, u.role, u.department 
-                   FROM users u 
-                   WHERE u.role IN ('subject_coordinator', 'chairperson', 'grade_level_coordinator') 
-                   AND u.status = 'active' 
-                   AND u.department = :department
-                   AND u.id NOT IN (
-                       SELECT evaluator_id FROM evaluator_assignments WHERE supervisor_id = :supervisor_id
-                   )
-                   ORDER BY u.role, u.name";
-$available_stmt = $db->prepare($available_query);
-$available_stmt->bindParam(':supervisor_id', $supervisor_id);
-$available_stmt->bindParam(':department', $supervisor['department']);
-$available_stmt->execute();
-$available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
+// Assignment creation is disabled for EDP users.
 ?>
 
 <!DOCTYPE html>
@@ -209,35 +153,9 @@ $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
                 </div>
             </div>
 
-            <!-- Assign New Coordinator -->
-            <div class="form-container">
-                <h5><i class="fas fa-plus-circle me-2"></i>Assign New Coordinator</h5>
-                <form method="POST">
-                    <input type="hidden" name="action" value="assign_coordinator">
-                    <div class="row">
-                        <div class="col-md-8">
-                            <div class="mb-3">
-                                <label class="form-label">Coordinator</label>
-                                <select class="form-select" name="coordinator_id" required>
-                                    <option value="">Select Coordinator</option>
-                                    <?php foreach($available_coordinators as $coordinator): ?>
-                                        <option value="<?php echo $coordinator['id']; ?>">
-                                            <?php echo htmlspecialchars($coordinator['name']); ?> 
-                                            (<?php echo ucfirst(str_replace('_', ' ', $coordinator['role'])); ?> - <?php echo htmlspecialchars($coordinator['department']); ?>)
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="mb-3 d-flex align-items-end">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-user-plus me-2"></i>Assign Coordinator
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </form>
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle me-2"></i>
+                Coordinator assignments are managed by the Dean. This page is read-only for EDP users.
             </div>
 
             <!-- Current Assignments -->
@@ -250,7 +168,7 @@ $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
                         <div class="empty-state">
                             <i class="fas fa-users fa-3x mb-3"></i>
                             <h5>No Coordinators Assigned</h5>
-                            <p>Use the form above to assign coordinators to this supervisor.</p>
+                            <p>Coordinator assignments are managed by the Dean.</p>
                         </div>
                     <?php else: ?>
                         <div class="assignment-card">
@@ -263,14 +181,6 @@ $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
                                             <span class="role-badge"><?php echo ucfirst(str_replace('_', ' ', $assignment['coordinator_role'])); ?></span>
                                             <small class="text-muted ms-2"><?php echo htmlspecialchars($assignment['department']); ?></small>
                                         </div>
-                                        <form method="POST" style="display: inline;">
-                                            <input type="hidden" name="action" value="remove_assignment">
-                                            <input type="hidden" name="assignment_id" value="<?php echo $assignment['id']; ?>">
-                                            <button type="submit" class="btn btn-sm btn-danger" 
-                                                    onclick="return confirm('Remove <?php echo htmlspecialchars($assignment['coordinator_name']); ?> from <?php echo htmlspecialchars($supervisor['name']); ?>?')">
-                                                <i class="fas fa-times"></i> Remove
-                                            </button>
-                                        </form>
                                     </li>
                                     <?php endforeach; ?>
                                 </ul>

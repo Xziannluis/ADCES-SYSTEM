@@ -166,7 +166,12 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                     <div class="col-md-6">
                         <div class="card mb-3">
                             <div class="card-header bg-info text-white">
-                                <h5 class="mb-0"><i class="fas fa-users-cog me-2"></i>My Coordinators</h5>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <h5 class="mb-0"><i class="fas fa-users-cog me-2"></i>My Coordinators</h5>
+                                    <a href="assign_coordinators.php" class="btn btn-sm btn-light">
+                                        <i class="fas fa-user-plus me-1"></i>Manage
+                                    </a>
+                                </div>
                             </div>
                             <div class="card-body">
                                 <?php if(!empty($assigned_coordinators)): ?>

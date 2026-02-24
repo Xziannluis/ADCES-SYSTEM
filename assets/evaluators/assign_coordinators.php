@@ -16,6 +16,10 @@ $user = new User($db);
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'assign_coordinator') {
     $coordinator_id = $_POST['coordinator_id'];
     $supervisor_id = $_SESSION['user_id'];
+    $program = trim($_POST['program'] ?? '');
+    if ($program === '') {
+        $program = $_SESSION['department'] ?? '';
+    }
     
     // Check if assignment already exists
     $check_query = "SELECT id FROM evaluator_assignments WHERE evaluator_id = :coordinator_id AND supervisor_id = :supervisor_id";
@@ -25,11 +29,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $check_stmt->execute();
     
     if ($check_stmt->rowCount() === 0) {
-        $insert_query = "INSERT INTO evaluator_assignments (evaluator_id, supervisor_id, assigned_at) 
-                        VALUES (:evaluator_id, :supervisor_id, NOW())";
+    $insert_query = "INSERT INTO evaluator_assignments (evaluator_id, supervisor_id, program, assigned_at) 
+            VALUES (:evaluator_id, :supervisor_id, :program, NOW())";
         $insert_stmt = $db->prepare($insert_query);
         $insert_stmt->bindParam(':evaluator_id', $coordinator_id);
         $insert_stmt->bindParam(':supervisor_id', $supervisor_id);
+    $insert_stmt->bindParam(':program', $program);
         
         if ($insert_stmt->execute()) {
             $_SESSION['success'] = "Coordinator assigned successfully!";
@@ -37,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $_SESSION['error'] = "Failed to assign coordinator.";
         }
     } else {
-        $_SESSION['error'] = "Coordinator is already assigned to you.";
+        $_SESSION['error'] = "This coordinator is already assigned and cannot be assigned again.";
     }
     
     header("Location: assign_coordinators.php");
@@ -138,6 +143,20 @@ $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
             padding: 20px;
             border-radius: 8px;
             margin-bottom: 20px;
+        }
+        .form-container .form-label {
+            font-size: 0.9rem;
+            margin-bottom: 6px;
+        }
+        .form-container .form-select {
+            font-size: 0.9rem;
+            padding: 6px 10px;
+            min-height: 36px;
+            max-width: 520px;
+        }
+        .form-container .btn {
+            padding: 6px 14px;
+            font-size: 0.9rem;
         }
         .role-badge {
             background-color: #17a2b8;

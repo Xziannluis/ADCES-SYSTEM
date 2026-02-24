@@ -341,9 +341,9 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                                 $include_by_specialization = (strpos($teacher_dept, 'it') !== false || strpos($teacher_dept, 'information technology') !== false);
                                             }
 
-                                            // If evaluator specializes in Computer Science, only include CS teachers
-                                            if (in_array('computer science', $specs) || in_array('cs', $specs)) {
-                                                $include_by_specialization = (strpos($teacher_dept, 'cs') !== false || strpos($teacher_dept, 'computer science') !== false);
+                                            // If evaluator specializes in CCIS, only include CCIS teachers
+                                            if (in_array('ccis', $specs) || in_array('computer science', $specs) || in_array('cs', $specs)) {
+                                                $include_by_specialization = (strpos($teacher_dept, 'ccis') !== false || strpos($teacher_dept, 'computer science') !== false || strpos($teacher_dept, 'cs') !== false);
                                             }
                                         }
 
@@ -352,8 +352,8 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                         if (!empty($coord_dept)) {
                                             if (strpos($coord_dept, 'it') !== false || strpos($coord_dept, 'information technology') !== false) {
                                                 $include_by_department = (strpos($teacher_dept, 'it') !== false || strpos($teacher_dept, 'information technology') !== false);
-                                            } elseif (strpos($coord_dept, 'computer science') !== false || strpos($coord_dept, 'cs') !== false) {
-                                                $include_by_department = (strpos($teacher_dept, 'computer science') !== false || strpos($teacher_dept, 'cs') !== false);
+                                            } elseif (strpos($coord_dept, 'ccis') !== false || strpos($coord_dept, 'computer science') !== false || strpos($coord_dept, 'cs') !== false) {
+                                                $include_by_department = (strpos($teacher_dept, 'ccis') !== false || strpos($teacher_dept, 'computer science') !== false || strpos($teacher_dept, 'cs') !== false);
                                             } else {
                                                 // Fallback: require the faculty prefix (e.g., 'ccis') to match if present
                                                 if (preg_match('/^[a-z]+/i', $coord_dept, $m)) {
@@ -408,7 +408,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                         // Group assignments by subject/grade level
                         $grouped_assignments = [];
                         foreach ($assigned_teachers as $assignment) {
-                            $key = $assignment['subject'] ?: 'Grade ' . $assignment['grade_level'];
+                            $key = $assignment['subject'] ?: $assignment['grade_level'];
                             $grouped_assignments[$key][] = $assignment;
                         }
                         ?>

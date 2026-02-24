@@ -10,6 +10,7 @@ require_once '../config/database.php';
 require_once '../models/Teacher.php';
 require_once '../models/Evaluation.php';
 require_once '../controllers/EvaluationController.php';
+require_once '../includes/program_assignments.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -22,9 +23,23 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
     $teachers = $teacher->getAllTeachers('active');
 } elseif (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
     // Coordinators should only see teachers assigned to them by their supervisor
-    $assigned_query = "SELECT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id AND t.status = 'active' ORDER BY t.name";
+    $assignedPrograms = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
+    $assigned_query = "SELECT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id AND t.status = 'active'";
+    if (!empty($assignedPrograms)) {
+        $programPlaceholders = [];
+        foreach ($assignedPrograms as $idx => $dept) {
+            $programPlaceholders[] = ':program_' . $idx;
+        }
+        $assigned_query .= " AND t.department IN (" . implode(',', $programPlaceholders) . ")";
+    }
+    $assigned_query .= " ORDER BY t.name";
     $stmt = $db->prepare($assigned_query);
     $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    if (!empty($assignedPrograms)) {
+        foreach ($assignedPrograms as $idx => $dept) {
+            $stmt->bindValue(':program_' . $idx, $dept);
+        }
+    }
     $stmt->execute();
     $teachers = $stmt; // mimic PDOStatement for compatibility with view loop
 } else {

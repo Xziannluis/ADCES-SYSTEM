@@ -166,7 +166,7 @@ INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `stat
 
 -- Password: dean123
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `status`) VALUES
-('dean_ccs', '$2y$10$D9dVwkR/9.R9cRdWRj.u8.3M8wWwiyYTx4jAkAkAkAkAkAkAkAkAk', 'Dr. Dean CCS', 'dean', 'Computer Science', 'active');
+('dean_ccs', '$2y$10$D9dVwkR/9.R9cRdWRj.u8.3M8wWwiyYTx4jAkAkAkAkAkAkAkAkAk', 'Dr. Dean CCS', 'dean', 'CCIS', 'active');
 
 -- Password: principal123
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `status`) VALUES
@@ -174,11 +174,11 @@ INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `stat
 
 -- Password: chair123
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `status`) VALUES
-('chairperson_ccs', '$2y$10$F9fXymT/1.T1eRfYTl.w0.5O0yYykAVz6lCmCmCmCmCmCmCmCmCm', 'Prof. Chairperson CCS', 'chairperson', 'Computer Science', 'active');
+('chairperson_ccs', '$2y$10$F9fXymT/1.T1eRfYTl.w0.5O0yYykAVz6lCmCmCmCmCmCmCmCmCm', 'Prof. Chairperson CCS', 'chairperson', 'CCIS', 'active');
 
 -- Password: coord123
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `status`) VALUES
-('coordinator_ccs', '$2y$10$G9gYznU/2.U2fSgZUm.x1.6P1zZzlBWa7mDnDnDnDnDnDnDnDnDn', 'Prof. Coordinator', 'subject_coordinator', 'Computer Science', 'active');
+('coordinator_ccs', '$2y$10$G9gYznU/2.U2fSgZUm.x1.6P1zZzlBWa7mDnDnDnDnDnDnDnDnDn', 'Prof. Coordinator', 'subject_coordinator', 'CCIS', 'active');
 
 -- Password: president123
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `status`) VALUES
@@ -190,11 +190,11 @@ INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `stat
 
 -- Password: teacher123
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `status`) VALUES
-('teacher_john', '$2y$10$J9jCcqX/5.X5iVjCXp.0a.9S4cCcoEZd0pGqGqGqGqGqGqGqGqGq', 'John Smith', 'teacher', 'Computer Science', 'active');
+('teacher_john', '$2y$10$J9jCcqX/5.X5iVjCXp.0a.9S4cCcoEZd0pGqGqGqGqGqGqGqGqGq', 'John Smith', 'teacher', 'CCIS', 'active');
 
 -- Password: teacher123
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `status`) VALUES
-('teacher_mary', '$2y$10$K9kDdrY/6.Y6jWkDYq.1b.0T5dDdpFAe1qHrHrHrHrHrHrHrHrHr', 'Mary Johnson', 'teacher', 'Computer Science', 'active');
+('teacher_mary', '$2y$10$K9kDdrY/6.Y6jWkDYq.1b.0T5dDdpFAe1qHrHrHrHrHrHrHrHrHr', 'Mary Johnson', 'teacher', 'CCIS', 'active');
 
 -- Password: teacher123
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `department`, `status`) VALUES

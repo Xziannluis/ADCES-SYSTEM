@@ -8,6 +8,7 @@ if(!in_array($_SESSION['role'], ['dean', 'principal', 'subject_coordinator', 'ch
 require_once '../config/database.php';
 require_once '../models/Teacher.php';
 require_once '../models/User.php';
+require_once '../includes/program_assignments.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -44,6 +45,11 @@ if(isset($_GET['evaluator_id']) && in_array($_SESSION['role'], ['dean', 'princip
 $evaluator_specializations = [];
 $target_evaluator_id = $current_evaluator_id;
 $target_role = $coordinator_info['role'] ?? $_SESSION['role'];
+$target_programs = resolveEvaluatorPrograms(
+    $db,
+    $target_evaluator_id,
+    $coordinator_info['department'] ?? $_SESSION['department']
+);
 
 if (in_array($target_role, ['subject_coordinator', 'chairperson'])) {
     $subjects_query = "SELECT subject FROM evaluator_subjects WHERE evaluator_id = :evaluator_id";
@@ -92,6 +98,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
     
+    // Ensure teacher is within coordinator's program assignments
+    if (!empty($target_programs)) {
+        $deptCheck = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
+        $deptCheck->bindParam(':id', $teacher_id);
+        $deptCheck->execute();
+        $teacherDept = $deptCheck->fetchColumn();
+        if ($teacherDept === false || !in_array($teacherDept, $target_programs, true)) {
+            $_SESSION['error'] = "Selected teacher is outside the coordinator's assigned program.";
+            header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
+            exit();
+        }
+    }
+
     // Check if assignment already exists
     $check_query = "SELECT id FROM teacher_assignments WHERE evaluator_id = :evaluator_id AND teacher_id = :teacher_id";
     $check_stmt = $db->prepare($check_query);
@@ -159,20 +178,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit();
 }
 
-// Get assigned teachers
+// Get assigned teachers (scoped to program assignments when available)
 $assigned_query = "SELECT ta.*, t.name as teacher_name, t.department 
                   FROM teacher_assignments ta 
                   JOIN teachers t ON ta.teacher_id = t.id 
-                  WHERE ta.evaluator_id = :evaluator_id 
-                  ORDER BY ta.subject, ta.grade_level, t.name";
+                  WHERE ta.evaluator_id = :evaluator_id";
+if (!empty($target_programs)) {
+    $programPlaceholders = [];
+    foreach ($target_programs as $idx => $dept) {
+        $programPlaceholders[] = ':program_' . $idx;
+    }
+    $assigned_query .= " AND t.department IN (" . implode(',', $programPlaceholders) . ")";
+}
+$assigned_query .= " ORDER BY ta.subject, ta.grade_level, t.name";
 $assigned_stmt = $db->prepare($assigned_query);
 $assigned_stmt->bindParam(':evaluator_id', $current_evaluator_id);
+if (!empty($target_programs)) {
+    foreach ($target_programs as $idx => $dept) {
+        $assigned_stmt->bindValue(':program_' . $idx, $dept);
+    }
+}
 $assigned_stmt->execute();
 $assigned_teachers = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get available teachers scoped to the evaluator's department
-$target_department = $coordinator_info['department'] ?? $_SESSION['department'];
-$available_teachers = $teacher->getActiveByDepartment($target_department);
+// Get available teachers scoped to the evaluator's program assignments
+$available_teachers = $teacher->getActiveByDepartments($target_programs);
 
 // If current user is a supervisor, load coordinators list for dropdown (exclude chairpersons)
 $coordinators = [];
@@ -341,9 +371,9 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                                 $include_by_specialization = (strpos($teacher_dept, 'it') !== false || strpos($teacher_dept, 'information technology') !== false);
                                             }
 
-                                            // If evaluator specializes in Computer Science, only include CS teachers
-                                            if (in_array('computer science', $specs) || in_array('cs', $specs)) {
-                                                $include_by_specialization = (strpos($teacher_dept, 'cs') !== false || strpos($teacher_dept, 'computer science') !== false);
+                                            // If evaluator specializes in CCIS, only include CCIS teachers
+                                            if (in_array('ccis', $specs) || in_array('computer science', $specs) || in_array('cs', $specs)) {
+                                                $include_by_specialization = (strpos($teacher_dept, 'ccis') !== false || strpos($teacher_dept, 'computer science') !== false || strpos($teacher_dept, 'cs') !== false);
                                             }
                                         }
 
@@ -352,8 +382,8 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                         if (!empty($coord_dept)) {
                                             if (strpos($coord_dept, 'it') !== false || strpos($coord_dept, 'information technology') !== false) {
                                                 $include_by_department = (strpos($teacher_dept, 'it') !== false || strpos($teacher_dept, 'information technology') !== false);
-                                            } elseif (strpos($coord_dept, 'computer science') !== false || strpos($coord_dept, 'cs') !== false) {
-                                                $include_by_department = (strpos($teacher_dept, 'computer science') !== false || strpos($teacher_dept, 'cs') !== false);
+                                            } elseif (strpos($coord_dept, 'ccis') !== false || strpos($coord_dept, 'computer science') !== false || strpos($coord_dept, 'cs') !== false) {
+                                                $include_by_department = (strpos($teacher_dept, 'ccis') !== false || strpos($teacher_dept, 'computer science') !== false || strpos($teacher_dept, 'cs') !== false);
                                             } else {
                                                 // Fallback: require the faculty prefix (e.g., 'ccis') to match if present
                                                 if (preg_match('/^[a-z]+/i', $coord_dept, $m)) {
@@ -408,7 +438,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                         // Group assignments by subject/grade level
                         $grouped_assignments = [];
                         foreach ($assigned_teachers as $assignment) {
-                            $key = $assignment['subject'] ?: 'Grade ' . $assignment['grade_level'];
+                            $key = $assignment['subject'] ?: $assignment['grade_level'];
                             $grouped_assignments[$key][] = $assignment;
                         }
                         ?>

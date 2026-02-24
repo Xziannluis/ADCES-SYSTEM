@@ -29,64 +29,9 @@ if (!$evaluator) {
     exit();
 }
 
-// Get evaluator's subjects or grade levels
-$evaluator_specializations = [];
-if (in_array($evaluator['role'], ['subject_coordinator', 'chairperson'])) {
-    $subjects_query = "SELECT subject FROM evaluator_subjects WHERE evaluator_id = :evaluator_id";
-    $subjects_stmt = $db->prepare($subjects_query);
-    $subjects_stmt->bindParam(':evaluator_id', $evaluator_id);
-    $subjects_stmt->execute();
-    $evaluator_specializations = $subjects_stmt->fetchAll(PDO::FETCH_COLUMN, 0);
-} elseif ($evaluator['role'] === 'grade_level_coordinator') {
-    $grades_query = "SELECT grade_level FROM evaluator_grade_levels WHERE evaluator_id = :evaluator_id";
-    $grades_stmt = $db->prepare($grades_query);
-    $grades_stmt->bindParam(':evaluator_id', $evaluator_id);
-    $grades_stmt->execute();
-    $evaluator_specializations = $grades_stmt->fetchAll(PDO::FETCH_COLUMN, 0);
-}
-
-// Handle teacher assignment
+// EDP no longer assigns teachers; deans manage assignments.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'assign_teacher') {
-    $teacher_id = $_POST['teacher_id'];
-    $subject = $_POST['subject'] ?? '';
-    $grade_level = $_POST['grade_level'] ?? '';
-    
-    // Check if assignment already exists
-    $check_query = "SELECT id FROM teacher_assignments WHERE evaluator_id = :evaluator_id AND teacher_id = :teacher_id";
-    if (!empty($subject)) {
-        $check_query .= " AND subject = :subject";
-    } elseif (!empty($grade_level)) {
-        $check_query .= " AND grade_level = :grade_level";
-    }
-    
-    $check_stmt = $db->prepare($check_query);
-    $check_stmt->bindParam(':evaluator_id', $evaluator_id);
-    $check_stmt->bindParam(':teacher_id', $teacher_id);
-    if (!empty($subject)) {
-        $check_stmt->bindParam(':subject', $subject);
-    } elseif (!empty($grade_level)) {
-        $check_stmt->bindParam(':grade_level', $grade_level);
-    }
-    $check_stmt->execute();
-    
-    if ($check_stmt->rowCount() === 0) {
-        $insert_query = "INSERT INTO teacher_assignments (evaluator_id, teacher_id, subject, grade_level, assigned_at) 
-                        VALUES (:evaluator_id, :teacher_id, :subject, :grade_level, NOW())";
-        $insert_stmt = $db->prepare($insert_query);
-        $insert_stmt->bindParam(':evaluator_id', $evaluator_id);
-        $insert_stmt->bindParam(':teacher_id', $teacher_id);
-        $insert_stmt->bindParam(':subject', $subject);
-        $insert_stmt->bindParam(':grade_level', $grade_level);
-        
-        if ($insert_stmt->execute()) {
-            $_SESSION['success'] = "Teacher assigned successfully!";
-        } else {
-            $_SESSION['error'] = "Failed to assign teacher.";
-        }
-    } else {
-        $_SESSION['error'] = "Teacher is already assigned to this evaluator.";
-    }
-    
+    $_SESSION['error'] = "Teacher assignments are managed by deans.";
     header("Location: assign_teachers.php?evaluator_id=" . $evaluator_id);
     exit();
 }
@@ -120,8 +65,7 @@ $assigned_stmt->bindParam(':evaluator_id', $evaluator_id);
 $assigned_stmt->execute();
 $assigned_teachers = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get available teachers (not assigned to this evaluator for the same subject)
-$available_teachers = $teacher->getActiveByDepartment($evaluator['department']);
+// Teacher assignment creation is disabled for EDP users.
 ?>
 
 <!DOCTYPE html>
@@ -221,57 +165,9 @@ $available_teachers = $teacher->getActiveByDepartment($evaluator['department']);
                 </div>
             </div>
 
-            <!-- Assign New Teacher -->
-            <div class="form-container">
-                <h5><i class="fas fa-plus-circle me-2"></i>Assign New Teacher</h5>
-                <form method="POST">
-                    <input type="hidden" name="action" value="assign_teacher">
-                    <div class="row">
-                        <div class="col-md-4">
-                            <div class="mb-3">
-                                <label class="form-label">Teacher</label>
-                                <select class="form-select" name="teacher_id" required>
-                                    <option value="">Select Teacher</option>
-                                    <?php while($teacher_row = $available_teachers->fetch(PDO::FETCH_ASSOC)): ?>
-                                        <option value="<?php echo $teacher_row['id']; ?>"><?php echo htmlspecialchars($teacher_row['name']); ?></option>
-                                    <?php endwhile; ?>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <?php if (in_array($evaluator['role'], ['subject_coordinator', 'chairperson'])): ?>
-                            <div class="mb-3">
-                                <label class="form-label">Subject</label>
-                                <input type="text" class="form-control" name="subject" placeholder="e.g., English" required autocomplete="off">
-                            </div>
-                            <?php elseif ($evaluator['role'] === 'grade_level_coordinator'): ?>
-                            <div class="mb-3">
-                                <label class="form-label">Grade Level</label>
-                                <select class="form-select" name="grade_level" required>
-                                    <option value="">Select Grade Level</option>
-                                    <?php foreach($evaluator_specializations as $grade): ?>
-                                        <option value="<?php echo htmlspecialchars($grade); ?>">Grade <?php echo htmlspecialchars($grade); ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <?php else: ?>
-                            <div class="mb-3">
-                                <label class="form-label">Assignment Type</label>
-                                <select class="form-select" name="assignment_type" required>
-                                    <option value="general">General Evaluation</option>
-                                </select>
-                            </div>
-                            <?php endif; ?>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="mb-3 d-flex align-items-end">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-user-plus me-2"></i>Assign Teacher
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </form>
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle me-2"></i>
+                Teacher assignments are managed by the Dean. This page is read-only for EDP users.
             </div>
 
             <!-- Current Assignments -->
@@ -284,7 +180,7 @@ $available_teachers = $teacher->getActiveByDepartment($evaluator['department']);
                         <div class="empty-state">
                             <i class="fas fa-users fa-3x mb-3"></i>
                             <h5>No Teachers Assigned</h5>
-                            <p>Use the form above to assign teachers to this evaluator.</p>
+                            <p>Teacher assignments are managed by the Dean.</p>
                         </div>
                     <?php else: ?>
                         <?php
@@ -312,14 +208,6 @@ $available_teachers = $teacher->getActiveByDepartment($evaluator['department']);
                                             <strong><?php echo htmlspecialchars($assignment['teacher_name']); ?></strong>
                                             <small class="text-muted ms-2"><?php echo htmlspecialchars($assignment['department']); ?></small>
                                         </div>
-                                        <form method="POST" style="display: inline;">
-                                            <input type="hidden" name="action" value="remove_assignment">
-                                            <input type="hidden" name="assignment_id" value="<?php echo $assignment['id']; ?>">
-                                            <button type="submit" class="btn btn-sm btn-danger" 
-                                                    onclick="return confirm('Remove <?php echo htmlspecialchars($assignment['teacher_name']); ?> from <?php echo htmlspecialchars($category); ?>?')">
-                                                <i class="fas fa-times"></i> Remove
-                                            </button>
-                                        </form>
                                     </li>
                                     <?php endforeach; ?>
                                 </ul>
