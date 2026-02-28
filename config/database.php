@@ -1,4 +1,6 @@
 <?php
+date_default_timezone_set('Asia/Manila');
+
 class Database {
     private $host = "localhost";
     private $db_name = "ai_classroom_eval";

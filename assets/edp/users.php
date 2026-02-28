@@ -303,9 +303,23 @@ function getEvaluatorSupervisor($db, $evaluator_id) {
     return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
+// Check if a column exists on a table
+function columnExists($db, $table, $column) {
+    try {
+        $stmt = $db->prepare("SHOW COLUMNS FROM {$table} LIKE :column");
+        $stmt->bindParam(':column', $column);
+        $stmt->execute();
+        return (bool)$stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        error_log('columnExists fallback: ' . $e->getMessage());
+        return false;
+    }
+}
+
 // Get assigned coordinators for supervisors
 function getAssignedCoordinators($db, $supervisor_id) {
-    $query = "SELECT u.id, u.name, u.role, u.department, u.designation FROM evaluator_assignments ea 
+    $designationSelect = columnExists($db, 'users', 'designation') ? 'u.designation' : "'' AS designation";
+    $query = "SELECT u.id, u.name, u.role, u.department, {$designationSelect} FROM evaluator_assignments ea 
               JOIN users u ON ea.evaluator_id = u.id 
               WHERE ea.supervisor_id = :supervisor_id 
               ORDER BY u.role, u.name";
@@ -356,6 +370,19 @@ function getAssignedCoordinators($db, $supervisor_id) {
             box-shadow: 0 6px 16px rgba(15, 60, 120, 0.12);
         }
 
+        .page-actions .btn-action-dark {
+            background-color: #2b3a4a;
+            border-color: #2b3a4a;
+            color: #ffffff;
+        }
+
+        .page-actions .btn-action-dark:hover,
+        .page-actions .btn-action-dark:focus {
+            background-color: #24303d;
+            border-color: #24303d;
+            color: #ffffff;
+        }
+
         .filter-toolbar {
             display: flex;
             flex-wrap: wrap;
@@ -371,6 +398,16 @@ function getAssignedCoordinators($db, $supervisor_id) {
         .filter-label {
             font-weight: 600;
             color: #2b3a4a;
+        }
+
+        .filter-toolbar .form-select.all-selected {
+            background-color: #2b3a4a;
+            color: #ffffff;
+            border-color: #2b3a4a;
+        }
+
+        .filter-toolbar .form-select.all-selected:focus {
+            box-shadow: 0 0 0 0.2rem rgba(43, 58, 74, 0.25);
         }
 
         .section-card {
@@ -468,6 +505,47 @@ function getAssignedCoordinators($db, $supervisor_id) {
             font-size: 0.75rem;
         }
 
+        .btn-group-vertical {
+            flex-direction: row;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-group-vertical .btn-group {
+            display: flex;
+            flex-direction: row;
+            gap: 6px;
+        }
+
+        .btn-group-vertical .btn {
+            width: 130px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .table .btn-outline-primary,
+        .table .btn-outline-success,
+        .table .btn-outline-info,
+        .table .btn-outline-warning {
+            color: #ffffff;
+            border-color: #2b3a4a;
+            background-color: #2b3a4a;
+        }
+
+        .table .btn-outline-primary:hover,
+        .table .btn-outline-success:hover,
+        .table .btn-outline-info:hover,
+        .table .btn-outline-warning:hover,
+        .table .btn-outline-primary:focus,
+        .table .btn-outline-success:focus,
+        .table .btn-outline-info:focus,
+        .table .btn-outline-warning:focus {
+            color: #ffffff;
+            border-color: #24303d;
+            background-color: #24303d;
+        }
+
         /* Chip-style badges for coordinators and specializations */
         .coordinator-chips .badge,
         .specialization-chips .badge {
@@ -549,13 +627,13 @@ function getAssignedCoordinators($db, $supervisor_id) {
                     <p class="page-subtitle">Manage leadership, evaluators, coordinators, and teacher access in one place.</p>
                 </div>
                 <div class="page-actions">
-                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addLeadershipModal">
+                    <button class="btn btn-action-dark" data-bs-toggle="modal" data-bs-target="#addLeadershipModal">
                         <i class="fas fa-plus me-2"></i>Add President/VP
                     </button>
-                    <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addEvaluatorModal">
+                    <button class="btn btn-action-dark" data-bs-toggle="modal" data-bs-target="#addEvaluatorModal">
                         <i class="fas fa-plus me-2"></i>Add Evaluators
                     </button>
-                    <button class="btn btn-warning" data-bs-toggle="modal" data-bs-target="#addTeacherModal">
+                    <button class="btn btn-action-dark" data-bs-toggle="modal" data-bs-target="#addTeacherModal">
                         <i class="fas fa-plus me-2"></i>Add Teacher Account
                     
                 </div>
@@ -673,7 +751,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         <th class="d-none d-lg-table-cell">Username</th>
                         <th>Role</th>
                         <th class="d-none d-md-table-cell">Department</th>
-                        <th>Coordinators</th>
                         <th width="10%">Status</th>
                         <th width="25%">Actions</th>
                     </tr>
@@ -684,7 +761,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                     $supervisor_roles = ['dean', 'principal'];
                     foreach ($supervisor_roles as $role) {
                         while($row = $evaluators[$role]->fetch(PDO::FETCH_ASSOC)):
-                            $assigned_coordinators = getAssignedCoordinators($db, $row['id']);
                     ?>
                     <tr>
                         <td><?php echo $counter++; ?></td>
@@ -707,25 +783,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         </td>
                         <td class="d-none d-md-table-cell">
                             <?php echo htmlspecialchars($row['department']); ?>
-                        </td>
-                        <td>
-                            <?php if (!empty($assigned_coordinators)): ?>
-                                <div class="coordinator-chips">
-                                    <?php foreach(array_slice($assigned_coordinators, 0, 2) as $coordinator): ?>
-                                        <span class="badge bg-light text-dark border me-1 mb-1" title="<?php echo htmlspecialchars($coordinator['name'] . (!empty($coordinator['designation']) ? ' - ' . $coordinator['designation'] : '')); ?>">
-                                            <?php echo htmlspecialchars($coordinator['name']); ?>
-                                            <small>(<?php echo ucfirst(str_replace('_', ' ', $coordinator['role'])); ?>)</small>
-                                        </span>
-                                    <?php endforeach; ?>
-                                    <?php if(count($assigned_coordinators) > 2): ?>
-                                        <span class="badge bg-secondary" title="+<?php echo count($assigned_coordinators) - 2; ?> more">
-                                            +<?php echo count($assigned_coordinators) - 2; ?>
-                                        </span>
-                                    <?php endif; ?>
-                                </div>
-                            <?php else: ?>
-                                <span class="text-muted small">None assigned</span>
-                            <?php endif; ?>
                         </td>
                         <td>
                             <span class="badge bg-<?php echo $row['status'] == 'active' ? 'success' : 'secondary'; ?>">
@@ -780,8 +837,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         <th class="d-none d-lg-table-cell">Username</th>
                         <th>Role</th>
                         <th class="d-none d-md-table-cell">Department</th>
-                        <th>Specializations</th>
-                        <th class="d-none d-xl-table-cell">Supervisor</th>
                         <th width="10%">Status</th>
                         <th width="25%">Actions</th>
                     </tr>
@@ -792,17 +847,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                     $coordinator_roles = ['subject_coordinator', 'chairperson', 'grade_level_coordinator'];
                     foreach ($coordinator_roles as $role) {
                         while($row = $evaluators[$role]->fetch(PDO::FETCH_ASSOC)):
-                            if (in_array($row['role'], ['subject_coordinator', 'chairperson'])) {
-                                $items = getEvaluatorSubjects($db, $row['id']);
-                                $items_type = 'subjects';
-                            } elseif ($row['role'] === 'grade_level_coordinator') {
-                                $items = getEvaluatorGradeLevels($db, $row['id']);
-                                $items_type = 'grade_levels';
-                            } else {
-                                $items = [];
-                                $items_type = '';
-                            }
-                            $supervisor = getEvaluatorSupervisor($db, $row['id']);
                     ?>
                     <tr>
                         <td><?php echo $counter++; ?></td>
@@ -828,44 +872,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         </td>
                         <td class="d-none d-md-table-cell">
                             <?php echo htmlspecialchars($row['department']); ?>
-                        </td>
-                        <td>
-                            <?php if (!empty($items)): ?>
-                                <div class="specialization-chips">
-                                    <?php if ($items_type === 'subjects'): ?>
-                                        <?php foreach(array_slice($items, 0, 2) as $item): ?>
-                                            <span class="badge bg-light text-dark border me-1 mb-1"><?php echo htmlspecialchars($item); ?></span>
-                                        <?php endforeach; ?>
-                                        <?php if(count($items) > 2): ?>
-                                            <span class="badge bg-secondary">+<?php echo count($items) - 2; ?></span>
-                                        <?php endif; ?>
-                                    <?php elseif ($items_type === 'grade_levels'): ?>
-                                        <?php foreach(array_slice($items, 0, 3) as $grade): ?>
-                                            <span class="badge bg-primary me-1 mb-1">G<?php echo $grade; ?></span>
-                                        <?php endforeach; ?>
-                                        <?php if(count($items) > 3): ?>
-                                            <span class="badge bg-secondary">+<?php echo count($items) - 3; ?></span>
-                                        <?php endif; ?>
-                                    <?php endif; ?>
-                                </div>
-                            <?php else: ?>
-                                <span class="text-muted small">None assigned</span>
-                            <?php endif; ?>
-                        </td>
-                        <td class="d-none d-xl-table-cell">
-                            <?php if ($supervisor): ?>
-                                <div class="d-flex align-items-center">
-                                    <i class="fas fa-user-tie me-2 text-muted"></i>
-                                    <div>
-                                        <div class="small fw-bold"><?php echo htmlspecialchars($supervisor['name']); ?></div>
-                                        <div class="text-muted" style="font-size: 0.75rem;">
-                                            <?php echo ucfirst(str_replace('_', ' ', $supervisor['role'])); ?>
-                                        </div>
-                                    </div>
-                                </div>
-                            <?php else: ?>
-                                <span class="text-muted small">Not assigned</span>
-                            <?php endif; ?>
                         </td>
                         <td>
                             <span class="badge bg-<?php echo $row['status'] == 'active' ? 'success' : 'secondary'; ?>">
@@ -1260,6 +1266,15 @@ function getAssignedCoordinators($db, $supervisor_id) {
         const gradeLevels = ['7', '8', '9', '10', '11', '12'];
 
         document.addEventListener('DOMContentLoaded', function() {
+            const departmentFilter = document.querySelector('.filter-toolbar select[name="department"]');
+            if (departmentFilter) {
+                const updateFilterStyle = () => {
+                    departmentFilter.classList.toggle('all-selected', departmentFilter.value === '');
+                };
+                updateFilterStyle();
+                departmentFilter.addEventListener('change', updateFilterStyle);
+            }
+
             const roleSelect = document.getElementById('roleSelect');
             const departmentSelect = document.getElementById('departmentSelect');
             const supervisorContainer = document.getElementById('supervisorContainer');

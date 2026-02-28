@@ -367,14 +367,16 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                 <!-- Report Info -->
                 <div class="report-info">
                     <div class="row">
-                        <div class="col-md-6 text-center">
+                        <div class="col-12 text-center">
                             <!-- Show these only when printing (Ctrl+P) -->
                             <div class="print-only">
                                 <strong>CLASSROOM OBSERVATION REPORT</strong><br />
                                 <strong><?php echo htmlspecialchars($department_display); ?></strong>
                             </div>
                         </div>
-                        <div class="col-md-6 text-end">
+                    </div>
+                    <div class="row">
+                        <div class="col-12 text-end">
                             <strong>Academic Year:</strong> <?php echo htmlspecialchars($academic_year_label); ?><br>
                             <strong>Semester:</strong> <?php echo htmlspecialchars($semester_label); ?>
                         </div>

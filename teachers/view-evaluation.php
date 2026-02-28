@@ -225,12 +225,29 @@ foreach($eval_details as $detail) {
                 <i class="fas fa-graduation-cap me-2"></i>Evaluation Details
             </a>
             <div class="ms-auto">
-                <span class="navbar-text me-3">
-                    <i class="fas fa-user me-2"></i><?php echo htmlspecialchars($_SESSION['name']); ?>
-                </span>
-                <a class="nav-link d-inline-block" href="../auth/logout.php">
-                    <i class="fas fa-sign-out-alt me-2"></i>Logout
-                </a>
+                <div class="dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="teacherMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-user me-2"></i><?php echo htmlspecialchars($_SESSION['name']); ?>
+                    </a>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="teacherMenu">
+                        <li>
+                            <a class="dropdown-item" href="profile.php">
+                                <i class="fas fa-user me-2"></i>Profile
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item" href="change-password.php">
+                                <i class="fas fa-key me-2"></i>Change Password
+                            </a>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <a class="dropdown-item" href="../auth/logout.php">
+                                <i class="fas fa-sign-out-alt me-2"></i>Sign Out
+                            </a>
+                        </li>
+                    </ul>
+                </div>
             </div>
         </div>
     </nav>

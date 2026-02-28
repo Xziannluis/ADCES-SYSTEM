@@ -112,6 +112,29 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
             font-weight: 700;
         }
 
+        .schedule-bell {
+            border: none;
+            background: #fff;
+            color: #2c3e50;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        }
+
+        .schedule-bell .schedule-dot {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #dc3545;
+            border: 1px solid #fff;
+            display: none;
+        }
+
+        .schedule-bell.show-dot .schedule-dot {
+            display: inline-block;
+        }
+
         .teacher-info-card p {
             margin: 5px 0 0 0;
             opacity: 0.9;
@@ -212,15 +235,28 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
-                    <li class="nav-item">
-                        <span class="navbar-text me-3">
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="teacherMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                             <i class="fas fa-user me-2"></i><?php echo htmlspecialchars($_SESSION['name']); ?>
-                        </span>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="../auth/logout.php">
-                            <i class="fas fa-sign-out-alt me-2"></i>Logout
                         </a>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="teacherMenu">
+                            <li>
+                                <a class="dropdown-item" href="profile.php">
+                                    <i class="fas fa-user me-2"></i>Profile
+                                </a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item" href="change-password.php">
+                                    <i class="fas fa-key me-2"></i>Change Password
+                                </a>
+                            </li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item" href="../auth/logout.php">
+                                    <i class="fas fa-sign-out-alt me-2"></i>Sign Out
+                                </a>
+                            </li>
+                        </ul>
                     </li>
                 </ul>
             </div>
@@ -248,9 +284,16 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 </div>
                 <?php endif; ?>
 
+
                 <!-- Teacher Info Card -->
                 <div class="teacher-info-card mt-4">
-                    <h3>Welcome, <?php echo htmlspecialchars($teacher_data['name']); ?>!</h3>
+                    <h3>
+                        Welcome, <?php echo htmlspecialchars($teacher_data['name']); ?>!
+                        <button type="button" class="btn btn-sm schedule-bell ms-2 position-relative" id="scheduleBell" data-bs-toggle="popover" data-bs-placement="bottom">
+                            <i class="fas fa-bell"></i>
+                            <span class="schedule-dot"></span>
+                        </button>
+                    </h3>
                     <p><i class="fas fa-building me-2"></i>Department: <?php echo htmlspecialchars($teacher_data['department']); ?></p>
                     <p><i class="fas fa-check-circle me-2"></i>Status: <span class="badge badge-success">Active</span></p>
                 </div>
@@ -343,5 +386,39 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        (function () {
+            const bell = document.getElementById('scheduleBell');
+            if (!bell) return;
+
+            const scheduleText = <?php echo json_encode(!empty($teacher_data['evaluation_schedule'])
+                ? date('F d, Y \a\t h:i A', strtotime($teacher_data['evaluation_schedule']))
+                : 'No schedule assigned'); ?>;
+            const roomText = <?php echo json_encode($teacher_data['evaluation_room'] ?? 'Not assigned yet'); ?>;
+            const hasSchedule = <?php echo !empty($teacher_data['evaluation_schedule']) ? 'true' : 'false'; ?>;
+            const teacherId = <?php echo json_encode($teacher_data['id'] ?? ''); ?>;
+            const scheduleKey = `schedule_seen_${teacherId}_${scheduleText}_${roomText}`;
+
+            const content = hasSchedule
+                ? `<div><strong>Schedule:</strong> ${scheduleText}</div><div><strong>Room:</strong> ${roomText}</div>`
+                : '<div>No schedule assigned yet.</div>';
+
+            new bootstrap.Popover(bell, {
+                html: true,
+                trigger: 'focus',
+                content: content
+            });
+
+            if (hasSchedule && !localStorage.getItem(scheduleKey)) {
+                bell.classList.add('show-dot');
+            }
+
+            bell.addEventListener('click', () => {
+                if (!hasSchedule) return;
+                localStorage.setItem(scheduleKey, 'seen');
+                bell.classList.remove('show-dot');
+            });
+        })();
+    </script>
 </body>
 </html>

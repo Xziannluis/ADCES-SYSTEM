@@ -7,6 +7,7 @@ if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_co
 
 require_once '../config/database.php';
 require_once '../models/Teacher.php';
+require_once '../includes/mailer.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -51,10 +52,22 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule')
             $success_message = "Evaluation schedule and room updated successfully!";
             // If the updated teacher record is linked to a coordinator user, create a notification (audit log)
             try {
-                $tq = $db->prepare("SELECT user_id, name FROM teachers WHERE id = :id LIMIT 1");
+                $tq = $db->prepare("SELECT user_id, name, email FROM teachers WHERE id = :id LIMIT 1");
                 $tq->bindParam(':id', $teacher_id);
                 $tq->execute();
                 $tdata = $tq->fetch(PDO::FETCH_ASSOC);
+                if ($tdata && !empty($tdata['email']) && (!empty($schedule) || !empty($room))) {
+                    $sent = sendScheduleNotificationEmail(
+                        $tdata['email'],
+                        $tdata['name'] ?? 'Teacher',
+                        $schedule,
+                        $room,
+                        $_SESSION['name'] ?? 'Evaluator'
+                    );
+                    if (!$sent) {
+                        error_log('Schedule email was not sent (mailer disabled or failed).');
+                    }
+                }
                 if ($tdata && !empty($tdata['user_id'])) {
                     $uid = $tdata['user_id'];
                     $uq = $db->prepare("SELECT id, name, role FROM users WHERE id = :id LIMIT 1");
