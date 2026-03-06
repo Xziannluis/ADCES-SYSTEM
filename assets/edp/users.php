@@ -334,53 +334,15 @@ function getAssignedCoordinators($db, $supervisor_id) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Deans - AI Classroom Evaluation</title>
+    <title>Create User Accounts</title>
     <?php include '../includes/header.php'; ?>
     <style>
-        .page-header {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px 20px;
-            margin-bottom: 18px;
-        }
-
-        .page-title {
-            font-weight: 700;
-            margin-bottom: 4px;
-        }
-
-        .page-subtitle {
-            color: #6c757d;
-            font-size: 0.9rem;
-            margin-bottom: 0;
-        }
-
-        .page-actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-
-        .page-actions .btn {
-            border-radius: 999px;
-            padding: 0.45rem 1rem;
-            font-weight: 600;
-            box-shadow: 0 6px 16px rgba(15, 60, 120, 0.12);
-        }
-
-        .page-actions .btn-action-dark {
+        /* Action button style used in page header */
+        .btn-action-dark {
             background-color: #2b3a4a;
-            border-color: #2b3a4a;
-            color: #ffffff;
-        }
-
-        .page-actions .btn-action-dark:hover,
-        .page-actions .btn-action-dark:focus {
-            background-color: #24303d;
             border-color: #24303d;
             color: #ffffff;
+            margin-bottom: 18px;
         }
 
         .filter-toolbar {
@@ -670,70 +632,38 @@ function getAssignedCoordinators($db, $supervisor_id) {
     <div class="card-header bg-primary text-white">
         <h5 class="mb-0"><i class="fas fa-crown me-2"></i>President & Vice President</h5>
     </div>
-    <div class="card-body">
-        <div class="table-responsive">
-            <table class="table table-striped table-hover">
-                <thead class="table-dark">
-                    <tr>
-                        <th width="5%">#</th>
-                        <th>Name</th>
-                        <th>Username</th>
-                        <th>Role</th>
-                        <th width="10%">Status</th>
-                        <th width="20%">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php 
-                    $counter = 1;
-                    $leadership_roles = ['president', 'vice_president'];
-                    foreach ($leadership_roles as $role) {
-                        while($row = $evaluators[$role]->fetch(PDO::FETCH_ASSOC)):
-                    ?>
                     <tr>
                         <td><?php echo $counter++; ?></td>
                         <td>
                             <div class="d-flex align-items-center">
                                 <i class="fas fa-user-circle me-2 text-muted"></i>
                                 <?php echo htmlspecialchars($row['name']); ?>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3" id="programContainer">
+                                        <label class="form-label">Program</label>
+                                        <select class="form-select" name="program" id="programSelect">
+                                            <option value="">Select Program</option>
+                                            <option value="BASIC ED">Basic Ed</option>
+                                            <option value="COLLEGE">College</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="mb-3" id="roleContainer" style="display: none;">
+                                        <label class="form-label">Role</label>
+                                        <select class="form-select" name="role" id="roleSelect" required>
+                                            <option value="">Select Role</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
-                        </td>
-                        <td>
-                            <code><?php echo htmlspecialchars($row['username']); ?></code>
-                        </td>
-                        <td>
-                            <span class="badge bg-primary">
-                                <?php echo ucfirst(str_replace('_', ' ', $row['role'])); ?>
-                            </span>
-                        </td>
-                        <td>
-                            <span class="badge bg-<?php echo $row['status'] == 'active' ? 'success' : 'secondary'; ?>">
-                                <i class="fas fa-circle me-1" style="font-size: 0.6em;"></i>
-                                <?php echo ucfirst($row['status']); ?>
-                            </span>
-                        </td>
-                        <td>
-                            <div class="btn-group btn-group-sm" role="group">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <div class="mb-3" id="departmentContainer">
                                 <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-outline-primary">
                                     <i class="fas fa-edit"></i>
                                     <span class="d-none d-md-inline">Edit</span>
-                                </a>
-                                <form method="POST" style="display: inline;">
-                                    <input type="hidden" name="user_id" value="<?php echo $row['id']; ?>">
-                                    <input type="hidden" name="action" value="<?php echo $row['status'] == 'active' ? 'deactivate' : 'activate'; ?>">
-                                    <button type="submit" class="btn btn-<?php echo $row['status'] == 'active' ? 'outline-warning' : 'outline-success'; ?>">
-                                        <i class="fas fa-<?php echo $row['status'] == 'active' ? 'user-slash' : 'user-check'; ?>"></i>
-                                        <span class="d-none d-md-inline"><?php echo $row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?></span>
-                                    </button>
-                                </form>
-                            </div>
-                        </td>
-                    </tr>
-                    <?php endwhile; } ?>
-                </tbody>
-            </table>
-        </div>
-    </div>
 </div>
 
 <!-- Supervisors Section (Deans & Principals) -->
@@ -1186,24 +1116,17 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             <input type="password" class="form-control" name="password" required placeholder="Enter password">
                         </div>
                         <div class="mb-3">
+                            <label class="form-label">Program</label>
+                            <select class="form-select" name="program" id="teacherProgramSelect" required>
+                                <option value="">Select Program</option>
+                                <option value="BASIC ED">Basic Ed</option>
+                                <option value="COLLEGE">College</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
                             <label class="form-label">Department</label>
-                            <select class="form-select" name="department" required>
+                            <select class="form-select" name="department" id="teacherDepartmentSelect" required>
                                 <option value="">Select Department</option>
-                                <?php
-                                $dept_list = [
-                                    'CTE' => '(CTE) College of Teacher Education',
-                                    'CAS' => '(CAS) College of Arts and Sciences',
-                                    'CCJE' => '(CCJE) College of Criminal Justice Education',
-                                    'CBM' => '(CBM) College of Business Management',
-                                    'CCIS' => '(CCIS) College of Computing and Information Sciences',
-                                    'CTHM' => '(CTHM) College of Tourism and Hospitality Management',
-                                    'ELEM' => '(ELEM) Elementary School',
-                                    'JHS' => '(JHS) Junior High School',
-                                    'SHS' => '(SHS) Senior High School'
-                                ];
-                                foreach($dept_list as $key => $label): ?>
-                                    <option value="<?php echo $key; ?>"><?php echo $label; ?></option>
-                                <?php endforeach; ?>
                             </select>
                         </div>
                     </div>
@@ -1275,14 +1198,72 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 departmentFilter.addEventListener('change', updateFilterStyle);
             }
 
+            const programContainer = document.getElementById('programContainer');
+            const programSelect = document.getElementById('programSelect');
+            const teacherProgramSelect = document.getElementById('teacherProgramSelect');
+            const roleContainer = document.getElementById('roleContainer');
             const roleSelect = document.getElementById('roleSelect');
+            const departmentContainer = document.getElementById('departmentContainer');
             const departmentSelect = document.getElementById('departmentSelect');
+            const teacherDepartmentSelect = document.getElementById('teacherDepartmentSelect');
             const supervisorContainer = document.getElementById('supervisorContainer');
             const designationContainer = document.getElementById('designationContainer');
             const designationInput = document.getElementById('designationInput');
             const subjectsContainer = document.getElementById('subjectsContainer');
             const gradeLevelsContainer = document.getElementById('gradeLevelsContainer');
             const gradeLevelsList = document.getElementById('gradeLevelsList');
+
+            const basicEdDepartments = [
+                { value: 'ELEMENTARY DEPARTMENT', label: 'Elementary Department' },
+                { value: 'HIGH SCHOOL DEPARTMENT', label: 'High School Department' },
+                { value: 'JUNIOR HIGH SCHOOL DEPARTMENT', label: 'Junior High School Department' }
+            ];
+
+            const collegeDepartments = [
+                { value: 'CAS', label: 'CAS' },
+                { value: 'CCJE', label: 'CCJE' },
+                { value: 'CCIS', label: 'CCIS' },
+                { value: 'CBM', label: 'CBM' },
+                { value: 'CTHM', label: 'CTHM' },
+                { value: 'CTE', label: 'CTE' }
+            ];
+
+            const basicEdRoles = [
+                { value: 'principal', label: 'Principal' },
+                { value: 'grade_level_coordinator', label: 'Grade Level Coordinator' },
+                { value: 'subject_coordinator', label: 'Subject Coordinator' }
+            ];
+
+            const collegeRoles = [
+                { value: 'dean', label: 'Dean' },
+                { value: 'chairperson', label: 'Chairperson' }
+            ];
+
+            const teacherBasicEdDepartments = [
+                { value: 'ELEMENTARY DEPARTMENT', label: 'Elementary Department' },
+                { value: 'HIGH SCHOOL DEPARTMENT', label: 'High School Department' },
+                { value: 'JUNIOR HIGH SCHOOL DEPARTMENT', label: 'Junior High School Department' }
+            ];
+
+            const teacherCollegeDepartments = [
+                { value: 'CAS', label: 'CAS' },
+                { value: 'CCJE', label: 'CCJE' },
+                { value: 'CCIS', label: 'CCIS' },
+                { value: 'CBM', label: 'CBM' },
+                { value: 'CTHM', label: 'CTHM' },
+                { value: 'CTE', label: 'CTE' }
+            ];
+
+            function populateRolesByProgram(program) {
+                roleSelect.innerHTML = '<option value="">Select Role</option>';
+                const options = program === 'BASIC ED' ? basicEdRoles : program === 'COLLEGE' ? collegeRoles : [];
+                options.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item.value;
+                    option.textContent = item.label;
+                    roleSelect.appendChild(option);
+                });
+            }
 
             const designationMap = {
                 'CCIS': 'IT Program Head',
@@ -1298,9 +1279,46 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 'BSED': 'BSED Program Head'
             };
 
+            function populateDepartmentsByProgram(program) {
+                departmentSelect.innerHTML = '<option value="">Select Department</option>';
+                const options = program === 'BASIC ED' ? basicEdDepartments : program === 'COLLEGE' ? collegeDepartments : [];
+                options.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item.value;
+                    option.textContent = item.label;
+                    departmentSelect.appendChild(option);
+                });
+            }
+
+            function populateTeacherDepartments(program) {
+                if (!teacherDepartmentSelect) return;
+                teacherDepartmentSelect.innerHTML = '<option value="">Select Department</option>';
+                const options = program === 'BASIC ED' ? teacherBasicEdDepartments : program === 'COLLEGE' ? teacherCollegeDepartments : [];
+                options.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item.value;
+                    option.textContent = item.label;
+                    teacherDepartmentSelect.appendChild(option);
+                });
+            }
+
             function toggleSpecializations() {
                 const role = roleSelect.value;
                 const department = departmentSelect.value;
+                const hasProgram = !!programSelect.value;
+
+                roleContainer.style.display = hasProgram ? 'block' : 'none';
+                roleSelect.required = hasProgram;
+                departmentContainer.style.display = hasProgram ? 'block' : 'none';
+                departmentSelect.required = hasProgram && !!role && !!programSelect.value;
+
+                if (!hasProgram) {
+                    roleSelect.value = '';
+                    departmentSelect.value = '';
+                    departmentSelect.innerHTML = '<option value="">Select Department</option>';
+                } else {
+                    populateDepartmentsByProgram(programSelect.value);
+                }
                 
                 // Hide all containers first
                 supervisorContainer.style.display = 'none';
@@ -1350,6 +1368,22 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 });
             }
 
+            programSelect.addEventListener('change', function() {
+                populateRolesByProgram(programSelect.value);
+                roleSelect.value = '';
+                populateDepartmentsByProgram(programSelect.value);
+                departmentSelect.value = '';
+                toggleSpecializations();
+            });
+            if (teacherProgramSelect) {
+                teacherProgramSelect.addEventListener('change', function() {
+                    populateTeacherDepartments(teacherProgramSelect.value);
+                    if (teacherDepartmentSelect) {
+                        teacherDepartmentSelect.value = '';
+                    }
+                });
+                populateTeacherDepartments(teacherProgramSelect.value);
+            }
             roleSelect.addEventListener('change', toggleSpecializations);
             departmentSelect.addEventListener('change', toggleSpecializations);
             

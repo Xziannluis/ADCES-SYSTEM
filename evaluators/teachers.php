@@ -218,9 +218,9 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'mark_done') {
     }
 }
 
-// Handle teacher assignment (only dean may assign)
+// Handle teacher assignment (dean/principal may assign)
 if ($_POST && isset($_POST['action']) && $_POST['action'] === 'assign_teacher') {
-    if ($_SESSION['role'] !== 'dean') {
+    if (!in_array($_SESSION['role'], ['dean', 'principal'])) {
         $error_message = "You are not allowed to assign teachers.";
     } else {
         $teacher_id = $_POST['teacher_id'];
@@ -265,11 +265,11 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'assign_teacher') 
     }
 }
 
-// Handle teacher removal (only dean may remove assignments)
+// Handle teacher removal (dean/principal may remove assignments)
 if ($_POST && isset($_POST['action']) && $_POST['action'] === 'remove_assignment') {
     $assignment_id = $_POST['assignment_id'];
     
-    if ($_SESSION['role'] !== 'dean') {
+    if (!in_array($_SESSION['role'], ['dean', 'principal'])) {
         $error_message = "You are not allowed to remove assignments.";
     } else {
         // Deans/Principals may remove any assignment by id

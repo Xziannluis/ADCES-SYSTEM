@@ -20,6 +20,15 @@ if (!$teacher_data) {
     exit();
 }
 
+$accountUsername = '';
+if (!empty($teacher_data['user_id'])) {
+    $userStmt = $db->prepare("SELECT username FROM users WHERE id = :id LIMIT 1");
+    $userStmt->bindValue(':id', $teacher_data['user_id']);
+    $userStmt->execute();
+    $userRow = $userStmt->fetch(PDO::FETCH_ASSOC);
+    $accountUsername = $userRow['username'] ?? '';
+}
+
 function generateVerificationCode() {
     return str_pad((string)random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 }
@@ -35,17 +44,33 @@ $emailVerified = (int)($teacher_data['email_verified'] ?? 0) === 1;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_profile') {
     $name = trim($_POST['name'] ?? '');
+    $username = trim($_POST['username'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
     $emailChanged = $email !== (string)($teacher_data['email'] ?? '');
 
     if ($name === '') {
         $_SESSION['error'] = "Name is required.";
+    } elseif ($username === '') {
+        $_SESSION['error'] = "Username is required.";
     } elseif ($email === '') {
         $_SESSION['error'] = "Email address is required.";
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $_SESSION['error'] = "Please enter a valid email address.";
     } else {
+        if (!empty($teacher_data['user_id'])) {
+            $usernameCheck = $db->prepare("SELECT id FROM users WHERE username = :username AND id != :id LIMIT 1");
+            $usernameCheck->bindValue(':username', $username);
+            $usernameCheck->bindValue(':id', $teacher_data['user_id']);
+            $usernameCheck->execute();
+
+            if ($usernameCheck->fetch(PDO::FETCH_ASSOC)) {
+                $_SESSION['error'] = "The username provided is already associated with another account.";
+                header("Location: profile.php");
+                exit();
+            }
+        }
+
         $verificationCode = null;
         $verificationExpires = null;
 
@@ -66,11 +91,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if ($stmt->execute()) {
             $_SESSION['success'] = "Profile updated successfully.";
             if (!empty($teacher_data['user_id'])) {
-                $userUpdate = $db->prepare("UPDATE users SET name = :name, updated_at = NOW() WHERE id = :id");
+                $userUpdate = $db->prepare("UPDATE users SET name = :name, username = :username, updated_at = NOW() WHERE id = :id");
                 $userUpdate->bindValue(':name', $name);
+                $userUpdate->bindValue(':username', $username);
                 $userUpdate->bindValue(':id', $teacher_data['user_id']);
                 $userUpdate->execute();
                 $_SESSION['name'] = $name;
+                $_SESSION['username'] = $username;
+                $accountUsername = $username;
             }
             if ($verificationCode) {
                 $sent = sendEmailVerificationCode($email, $name ?: ($teacher_data['name'] ?? 'Teacher'), $verificationCode, $verificationExpires);
@@ -270,6 +298,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     <input type="text" class="form-control" name="name" value="<?php echo htmlspecialchars($teacher_data['name'] ?? ''); ?>" placeholder="Enter your name" required>
                 </div>
                 <div class="info-item">
+                    <label class="form-label"><i class="fas fa-id-badge me-2"></i>Username</label>
+                    <input type="text" class="form-control" name="username" value="<?php echo htmlspecialchars($accountUsername); ?>" placeholder="Enter your username" required>
+                </div>
+                <div class="info-item">
                     <label class="form-label"><i class="fas fa-envelope me-2"></i>Email</label>
                     <input type="email" class="form-control" name="email" value="<?php echo htmlspecialchars($teacher_data['email'] ?? ''); ?>" placeholder="Enter your email" required>
                     <?php if (!$emailVerified): ?>
@@ -289,10 +321,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         </div>
                     </div>
                 <?php endif; ?>
-                <div class="info-item">
-                    <label class="form-label"><i class="fas fa-phone me-2"></i>Phone</label>
-                    <input type="text" class="form-control" name="phone" value="<?php echo htmlspecialchars($teacher_data['phone'] ?? ''); ?>" placeholder="Enter your phone number (optional)">
-                </div>
                 <div class="mt-4 d-flex gap-2">
                     <button type="submit" class="btn btn-primary" name="action" value="update_profile">
                         <i class="fas fa-save me-2"></i>Save Changes

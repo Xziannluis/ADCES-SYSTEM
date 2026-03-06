@@ -9,6 +9,13 @@ require_once '../models/User.php';
 $database = new Database();
 $db = $database->getConnection();
 $user = new User($db);
+$hasProgramColumn = false;
+try {
+    $programColumnStmt = $db->query("SHOW COLUMNS FROM users LIKE 'program'");
+    $hasProgramColumn = $programColumnStmt && $programColumnStmt->fetch(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $hasProgramColumn = false;
+}
 $roles = ['president', 'vice_president', 'dean', 'principal', 'subject_coordinator', 'chairperson'];
 $evaluators = [];
 foreach ($roles as $role) {
@@ -90,19 +97,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['user_id'], $_POST['ac
                                 <option value="chairperson">Chairperson</option>
                             </select>
                         </div>
+                        <div class="mb-3" id="programDiv" style="display:none;">
+                            <label class="form-label">Program</label>
+                            <select class="form-select" name="program" id="programSelect">
+                                <option value="">Select Program</option>
+                                <option value="BASIC ED">Basic Ed</option>
+                                <option value="COLLEGE">College</option>
+                            </select>
+                            <?php if (!$hasProgramColumn): ?>
+                                <div class="form-text text-warning">The `users.program` column was not found, so program selection will only drive the department choices until that column is added.</div>
+                            <?php endif; ?>
+                        </div>
                         <div class="mb-3" id="departmentDiv" style="display:none;">
                             <label class="form-label">Department/Category</label>
                             <select class="form-select" name="department" id="departmentSelect">
                                 <option value="">Select Department/Category</option>
-                                <option value="CTE">College of Teacher Education</option>
-                                <option value="BSED">Bachelor of Secondary Education</option>
-                                <option value="CAS">College of Arts and Sciences</option>
-                                <option value="CCJE">College of Criminal Justice Education</option>
-                                <option value="CBM">College of Business Management</option>
-                                <option value="CCIS">College of Computing and Information Sciences</option>
-                                <option value="CTHM">College of Tourism and Hospitality Management</option>
-                                <option value="BASIC ED">BASIC ED (Nursery, Kindergarten, Elementary, Junior High School)</option>
-                                <option value="SHS">Senior High School (SHS)</option>
                             </select>
                         </div>
                     </div>
@@ -118,20 +127,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['user_id'], $_POST['ac
     // Show/hide department/category based on role
     document.addEventListener('DOMContentLoaded', function() {
         var roleSelect = document.getElementById('roleSelect');
+        var programDiv = document.getElementById('programDiv');
+        var programSelect = document.getElementById('programSelect');
         var departmentDiv = document.getElementById('departmentDiv');
         var departmentSelect = document.getElementById('departmentSelect');
+        var basicEdDepartments = [
+            { value: 'ELEMENTARY DEPARTMENT', label: 'Elementary Department' },
+            { value: 'HIGH SCHOOL DEPARTMENT', label: 'High School Department' },
+            { value: 'JUNIOR HIGH SCHOOL DEPARTMENT', label: 'Junior High School Department' }
+        ];
+        var collegeDepartments = [
+            { value: 'CAS', label: 'CAS' },
+            { value: 'CCJE', label: 'CCJE' },
+            { value: 'CCIS', label: 'CCIS' },
+            { value: 'CBM', label: 'CBM' },
+            { value: 'CTHM', label: 'CTHM' },
+            { value: 'CTE', label: 'CTE' }
+        ];
+
+        function renderDepartmentOptions(program) {
+            var items = [];
+            if (program === 'BASIC ED') {
+                items = basicEdDepartments;
+            } else if (program === 'COLLEGE') {
+                items = collegeDepartments;
+            }
+
+            departmentSelect.innerHTML = '<option value="">Select Department/Category</option>';
+            items.forEach(function(item) {
+                var option = document.createElement('option');
+                option.value = item.value;
+                option.textContent = item.label;
+                departmentSelect.appendChild(option);
+            });
+        }
+
         function toggleDepartment() {
             var role = roleSelect.value;
             if(role === 'dean' || role === 'principal' || role === 'subject_coordinator' || role === 'chairperson') {
+                programDiv.style.display = '';
+                programSelect.required = true;
                 departmentDiv.style.display = '';
-                departmentSelect.required = true;
+                departmentSelect.required = !!programSelect.value;
+                renderDepartmentOptions(programSelect.value);
             } else {
+                programDiv.style.display = 'none';
+                programSelect.required = false;
+                programSelect.value = '';
                 departmentDiv.style.display = 'none';
                 departmentSelect.required = false;
                 departmentSelect.value = '';
+                departmentSelect.innerHTML = '<option value="">Select Department/Category</option>';
             }
         }
         roleSelect.addEventListener('change', toggleDepartment);
+        programSelect.addEventListener('change', function() {
+            renderDepartmentOptions(programSelect.value);
+            departmentSelect.required = !!programSelect.value;
+            departmentSelect.value = '';
+        });
         toggleDepartment();
     });
     </script>

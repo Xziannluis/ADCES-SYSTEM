@@ -8,6 +8,7 @@ class User {
     public $password;
     public $name;
     public $role;
+    public $program;
     public $department;
     public $designation;
     public $status;
@@ -39,6 +40,23 @@ class User {
         }
 
         return $hasDesignation;
+    }
+
+    private function hasProgramColumn() {
+        static $hasProgram = null;
+        if ($hasProgram !== null) {
+            return $hasProgram;
+        }
+
+        try {
+            $stmt = $this->conn->query("SHOW COLUMNS FROM " . $this->table_name . " LIKE 'program'");
+            $hasProgram = ($stmt && $stmt->fetch(PDO::FETCH_ASSOC)) ? true : false;
+        } catch (PDOException $e) {
+            $hasProgram = false;
+            error_log('hasProgramColumn check failed: ' . $e->getMessage());
+        }
+
+        return $hasProgram;
     }
 
     // Get users by role and department
@@ -200,9 +218,10 @@ class User {
         }
 
       $hasDesignation = $this->hasDesignationColumn();
+      $hasProgram = $this->hasProgramColumn();
       $query = "INSERT INTO " . $this->table_name . " 
-          (username, password, name, role, department" . ($hasDesignation ? ", designation" : "") . ", status, created_at) 
-          VALUES (:username, :password, :name, :role, :department" . ($hasDesignation ? ", :designation" : "") . ", 'active', NOW())";
+          (username, password, name, role" . ($hasProgram ? ", program" : "") . ", department" . ($hasDesignation ? ", designation" : "") . ", status, created_at) 
+          VALUES (:username, :password, :name, :role" . ($hasProgram ? ", :program" : "") . ", :department" . ($hasDesignation ? ", :designation" : "") . ", 'active', NOW())";
         $stmt = $this->conn->prepare($query);
         // Hash password
         $hashed_password = password_hash($data['password'], PASSWORD_DEFAULT);
@@ -210,6 +229,10 @@ class User {
         $stmt->bindParam(':password', $hashed_password);
         $stmt->bindParam(':name', $data['name']);
         $stmt->bindParam(':role', $data['role']);
+        if ($hasProgram) {
+            $program = isset($data['program']) ? $data['program'] : null;
+            $stmt->bindParam(':program', $program);
+        }
         $stmt->bindParam(':department', $data['department']);
         if ($hasDesignation) {
             $designation = isset($data['designation']) ? $data['designation'] : null;
@@ -221,8 +244,9 @@ class User {
     // Update user
     public function update($id, $data) {
       $hasDesignation = $this->hasDesignationColumn();
+      $hasProgram = $this->hasProgramColumn();
       $query = "UPDATE " . $this->table_name . " 
-          SET name = :name, role = :role, department = :department" . ($hasDesignation ? ", designation = :designation" : "");
+          SET name = :name, role = :role" . ($hasProgram ? ", program = :program" : "") . ", department = :department" . ($hasDesignation ? ", designation = :designation" : "");
         
         // Add password update if provided
         if(!empty($data['password'])) {
@@ -235,6 +259,10 @@ class User {
         
         $stmt->bindParam(':name', $data['name']);
         $stmt->bindParam(':role', $data['role']);
+        if ($hasProgram) {
+            $program = isset($data['program']) ? $data['program'] : null;
+            $stmt->bindParam(':program', $program);
+        }
         $stmt->bindParam(':department', $data['department']);
         if ($hasDesignation) {
             $designation = isset($data['designation']) ? $data['designation'] : null;

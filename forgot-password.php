@@ -85,7 +85,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             display: flex;
             align-items: center;
             justify-content: center;
-            font-family: 'Roboto', sans-serif;
+            font-family: Arial, Helvetica, sans-serif;
             position: relative;
         }
         .login-body::before {

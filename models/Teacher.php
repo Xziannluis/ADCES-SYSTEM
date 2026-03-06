@@ -15,7 +15,11 @@ class Teacher {
 
     // Get teacher by ID
     public function getById($id) {
-        $query = "SELECT * FROM " . $this->table_name . " WHERE id = :id";
+        $query = "SELECT t.*, GROUP_CONCAT(td.department ORDER BY td.department SEPARATOR ',') AS secondary_departments
+                  FROM " . $this->table_name . " t
+                  LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                  WHERE t.id = :id
+                  GROUP BY t.id";
         $stmt = $this->conn->prepare($query);
         $stmt->bindParam(':id', $id);
         $stmt->execute();
@@ -48,7 +52,11 @@ class Teacher {
 
     // Get teachers by department
     public function getByDepartment($department) {
-        $query = "SELECT * FROM " . $this->table_name . " WHERE department = :department ORDER BY name ASC";
+        $query = "SELECT DISTINCT t.*
+                  FROM " . $this->table_name . " t
+                  LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                  WHERE t.department = :department OR td.department = :department
+                  ORDER BY t.name ASC";
         $stmt = $this->conn->prepare($query);
         $stmt->bindParam(':department', $department);
         $stmt->execute();
@@ -58,9 +66,10 @@ class Teacher {
     // Get active teachers by department
     public function getActiveByDepartment($department) {
                 // Exclude teachers who are linked to user accounts with roles 'chairperson' or 'principal'
-                $query = "SELECT t.* FROM " . $this->table_name . " t 
+                $query = "SELECT DISTINCT t.* FROM " . $this->table_name . " t 
                                     LEFT JOIN users u ON t.user_id = u.id 
-                                    WHERE t.department = :department 
+                                    LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                                    WHERE (t.department = :department OR td.department = :department)
                                         AND t.status = 'active' 
                                         AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
                                     ORDER BY t.name ASC";
@@ -88,18 +97,54 @@ class Teacher {
         }
 
         $placeholders = implode(',', array_fill(0, count($departments), '?'));
-        $query = "SELECT t.* FROM " . $this->table_name . " t 
+        $query = "SELECT DISTINCT t.* FROM " . $this->table_name . " t 
                   LEFT JOIN users u ON t.user_id = u.id 
-                  WHERE t.department IN ($placeholders)
+                  LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                  WHERE (t.department IN ($placeholders) OR td.department IN ($placeholders))
                     AND t.status = 'active'
                     AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
                   ORDER BY t.name ASC";
         $stmt = $this->conn->prepare($query);
-        foreach ($departments as $idx => $dept) {
-            $stmt->bindValue($idx + 1, $dept);
+        $position = 1;
+        foreach ($departments as $dept) {
+            $stmt->bindValue($position++, $dept);
+        }
+        foreach ($departments as $dept) {
+            $stmt->bindValue($position++, $dept);
         }
         $stmt->execute();
         return $stmt;
+    }
+
+    public function getSecondaryDepartments($teacherId) {
+        $query = "SELECT department FROM teacher_departments WHERE teacher_id = :teacher_id ORDER BY department ASC";
+        $stmt = $this->conn->prepare($query);
+        $stmt->bindParam(':teacher_id', $teacherId);
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_COLUMN, 0);
+    }
+
+    public function syncSecondaryDepartments($teacherId, array $departments) {
+        $departments = array_values(array_unique(array_filter(array_map('trim', $departments), function ($department) {
+            return $department !== '';
+        })));
+
+        $deleteStmt = $this->conn->prepare("DELETE FROM teacher_departments WHERE teacher_id = :teacher_id");
+        $deleteStmt->bindParam(':teacher_id', $teacherId);
+        $deleteStmt->execute();
+
+        if (empty($departments)) {
+            return true;
+        }
+
+        $insertStmt = $this->conn->prepare("INSERT INTO teacher_departments (teacher_id, department, created_at) VALUES (:teacher_id, :department, NOW())");
+        foreach ($departments as $department) {
+            $insertStmt->bindParam(':teacher_id', $teacherId);
+            $insertStmt->bindParam(':department', $department);
+            $insertStmt->execute();
+        }
+
+        return true;
     }
 
     // Create new teacher

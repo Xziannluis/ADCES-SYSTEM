@@ -37,7 +37,7 @@ if(isset($_SESSION['user_id'])) {
             display: flex;
             align-items: center;
             justify-content: center;
-            font-family: 'Roboto', sans-serif;
+            font-family: Arial, Helvetica, sans-serif;
             position: relative;
         }
         

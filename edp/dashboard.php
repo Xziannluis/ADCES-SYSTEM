@@ -46,7 +46,7 @@ $coordinators = $user->getUsersByRole('subject_coordinator')->rowCount();
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h3>EDP Dashboard</h3>
                 <div class="dropdown">
-                    <button class="btn btn-primary dropdown-toggle" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                    <button class="btn user-menu-btn dropdown-toggle" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
                         <i class="fas fa-user-circle me-1"></i> <?php echo $_SESSION['name']; ?>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end shadow" aria-labelledby="userDropdown">

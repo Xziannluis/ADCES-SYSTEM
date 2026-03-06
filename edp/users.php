@@ -19,10 +19,12 @@ if($_SESSION['role'] != 'edp') {
 
 require_once '../config/database.php';
 require_once '../models/User.php';
+require_once '../models/Teacher.php';
 
 $database = new Database();
 $db = $database->getConnection();
 $user = new User($db);
+$teacherModel = new Teacher($db);
 
 // Handle form submissions
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -244,6 +246,22 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $ut->bindParam(':email', $_POST['email']);
                         $ut->bindParam(':user_id', $uid);
                         $ut->execute();
+
+                        $teacherIdQuery = $db->prepare("SELECT id FROM teachers WHERE user_id = :user_id LIMIT 1");
+                        $teacherIdQuery->bindParam(':user_id', $uid);
+                        $teacherIdQuery->execute();
+                        $teacherId = $teacherIdQuery->fetchColumn();
+
+                        if ($teacherId) {
+                            $secondaryDepartments = $_POST['secondary_departments'] ?? [];
+                            if (!is_array($secondaryDepartments)) {
+                                $secondaryDepartments = [];
+                            }
+                            $secondaryDepartments = array_values(array_filter($secondaryDepartments, function ($department) use ($updData) {
+                                return $department !== '' && $department !== $updData['department'];
+                            }));
+                            $teacherModel->syncSecondaryDepartments((int)$teacherId, $secondaryDepartments);
+                        }
 
                         $_SESSION['success'] = "Teacher account updated successfully.";
                     } else {
@@ -494,6 +512,57 @@ function getAssignedCoordinators($db, $supervisor_id) {
             font-size: 0.85em;
         }
         .supervisor-badge {
+
+        .department-picker-menu {
+            width: 100%;
+            max-height: 240px;
+            overflow-y: auto;
+            padding: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+        }
+
+        .department-picker-item {
+            display: block;
+            width: 100%;
+            margin: 0;
+            padding: 0.2rem 0;
+        }
+
+        .department-picker-item .form-check {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+            margin: 0;
+            min-height: auto;
+        }
+
+        .department-picker-item .form-check-input {
+            flex: 0 0 auto;
+            margin: 0.2rem 0 0 0;
+            float: none;
+        }
+
+        .department-picker-item .form-check-label {
+            display: block;
+            flex: 1 1 auto;
+            width: 100%;
+            line-height: 1.4;
+            margin: 0;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        .department-picker-item:hover {
+            background: rgba(44, 62, 80, 0.06);
+        }
+
+        .department-picker-summary {
+            min-height: 38px;
+            text-align: left;
+            white-space: normal;
+        }
             background-color: #6c757d;
             color: white;
             padding: 4px 8px;
@@ -653,15 +722,28 @@ function getAssignedCoordinators($db, $supervisor_id) {
                     <p class="page-subtitle">Manage leadership, evaluators, coordinators, and teacher access in one place.</p>
                 </div>
                 <div class="page-actions">
-                    <button class="btn btn-action-dark" data-bs-toggle="modal" data-bs-target="#addLeadershipModal">
-                        <i class="fas fa-plus me-2"></i>Add President/VP
-                    </button>
-                    <button class="btn btn-action-dark" data-bs-toggle="modal" data-bs-target="#addEvaluatorModal">
-                        <i class="fas fa-plus me-2"></i>Add Evaluators
-                    </button>
-                    <button class="btn btn-action-dark" data-bs-toggle="modal" data-bs-target="#addTeacherModal">
-                        <i class="fas fa-plus me-2"></i>Add Teacher Account
-                    
+                    <div class="dropdown">
+                        <button class="btn btn-action-dark dropdown-toggle" type="button" id="addAccountDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                            <i class="fas fa-plus me-2"></i>Add Account
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="addAccountDropdown">
+                            <li>
+                                <button class="dropdown-item add-account-option" type="button" data-target-modal="addLeadershipModal">
+                                    <i class="fas fa-crown me-2"></i>Add President/VP
+                                </button>
+                            </li>
+                            <li>
+                                <button class="dropdown-item add-account-option" type="button" data-target-modal="addEvaluatorModal">
+                                    <i class="fas fa-user-tie me-2"></i>Add Evaluators
+                                </button>
+                            </li>
+                            <li>
+                                <button class="dropdown-item add-account-option" type="button" data-target-modal="addTeacherModal">
+                                    <i class="fas fa-chalkboard-teacher me-2"></i>Add Teacher Account
+                                </button>
+                            </li>
+                        </ul>
+                    </div>
                 </div>
             </div>
 
@@ -945,13 +1027,16 @@ function getAssignedCoordinators($db, $supervisor_id) {
     <div class="card-body">
         <?php
         // Get teachers with user accounts (filter by selected department if provided)
-        $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id FROM teachers t 
+        $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id,
+                                GROUP_CONCAT(td.department ORDER BY td.department SEPARATOR ', ') AS secondary_departments
+                        FROM teachers t 
                         LEFT JOIN users u ON t.user_id = u.id 
+                        LEFT JOIN teacher_departments td ON td.teacher_id = t.id
                         WHERE (u.role = 'teacher' AND u.id IS NOT NULL)";
         if (!empty($selected_department)) {
-            $teacher_query .= " AND t.department = :department";
+            $teacher_query .= " AND (t.department = :department OR td.department = :department)";
         }
-        $teacher_query .= " ORDER BY t.name ASC";
+        $teacher_query .= " GROUP BY t.id ORDER BY t.name ASC";
 
         $teacher_stmt = $db->prepare($teacher_query);
         if (!empty($selected_department)) {
@@ -987,6 +1072,9 @@ function getAssignedCoordinators($db, $supervisor_id) {
                                     <div class="fw-bold"><?php echo htmlspecialchars($row['name']); ?></div>
                                     <small class="text-muted d-md-none"><?php echo htmlspecialchars($row['username']); ?></small>
                                     <small class="text-muted d-lg-none"><?php echo htmlspecialchars($row['department']); ?></small>
+                                    <?php if (!empty($row['secondary_departments'])): ?>
+                                        <small class="text-muted d-block">Also in: <?php echo htmlspecialchars($row['secondary_departments']); ?></small>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </td>
@@ -995,6 +1083,9 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         </td>
                         <td class="d-none d-lg-table-cell">
                             <?php echo htmlspecialchars($row['department']); ?>
+                            <?php if (!empty($row['secondary_departments'])): ?>
+                                <div><small class="text-muted">Also in: <?php echo htmlspecialchars($row['secondary_departments']); ?></small></div>
+                            <?php endif; ?>
                         </td>
                         <td>
                             <span class="badge bg-<?php echo $row['status'] == 'active' ? 'success' : 'secondary'; ?>">
@@ -1004,7 +1095,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         </td>
                         <td>
                             <div class="btn-group btn-group-sm" role="group">
-                                <button class="btn btn-outline-primary btn-edit-teacher" data-userid="<?php echo $row['user_id']; ?>" data-username="<?php echo htmlspecialchars($row['username']); ?>" data-name="<?php echo htmlspecialchars($row['name']); ?>" data-department="<?php echo htmlspecialchars($row['department']); ?>" data-email="<?php echo htmlspecialchars($row['email'] ?? ''); ?>">
+                                <button class="btn btn-outline-primary btn-edit-teacher" data-userid="<?php echo $row['user_id']; ?>" data-username="<?php echo htmlspecialchars($row['username']); ?>" data-name="<?php echo htmlspecialchars($row['name']); ?>" data-department="<?php echo htmlspecialchars($row['department']); ?>" data-email="<?php echo htmlspecialchars($row['email'] ?? ''); ?>" data-secondary-departments="<?php echo htmlspecialchars($row['secondary_departments'] ?? ''); ?>">
                                     <i class="fas fa-edit"></i>
                                     <span class="d-none d-sm-inline">Edit</span>
                                 </button>
@@ -1072,7 +1163,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
 
     <!-- Add Evaluator Modal -->
     <div class="modal fade" id="addEvaluatorModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
+        <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title">Add Evaluator</h5>
@@ -1081,86 +1172,55 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 <form method="POST" id="evaluatorForm">
                     <div class="modal-body">
                         <input type="hidden" name="action" value="create">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">Name</label>
-                                    <input type="text" class="form-control" name="name" required>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">Username</label>
-                                    <input type="text" class="form-control" name="username" required>
-                                </div>
-                            </div>
+                        <div class="mb-3">
+                            <label class="form-label">Name</label>
+                            <input type="text" class="form-control" name="name" required placeholder="Enter evaluator's full name">
                         </div>
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">Password</label>
-                                    <input type="password" class="form-control" name="password" required>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">Role</label>
-                                    <select class="form-select" name="role" id="roleSelect" required>
-                                        <option value="">Select Role</option>
-                                        <option value="dean">Dean</option>
-                                        <option value="principal">Principal</option>
-                                        <option value="subject_coordinator">Subject Coordinator</option>
-                                        <option value="chairperson">Chairperson</option>
-                                        <option value="grade_level_coordinator">Grade Level Coordinator</option>
-                                    </select>
-                                </div>
-                            </div>
+                        <div class="mb-3">
+                            <label class="form-label">Username</label>
+                            <input type="text" class="form-control" name="username" required placeholder="Enter username">
                         </div>
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="mb-3">
-                                    <label class="form-label">Department</label>
-                                    <select class="form-select" name="department" id="departmentSelect" required>
-                                        <option value="">Select Department</option>
-                                        <?php
-                                        $departments = [
-                                            'CTE' => 'College of Teacher Education',
-                                            'BSED' => 'Bachelor of Secondary Education',
-                                            'CAS' => 'College of Arts and Sciences',
-                                            'CCJE' => 'College of Criminal Justice Education',
-                                            'CBM' => 'College of Business Management',
-                                            'CCIS' => 'College of Computing and Information Sciences',
-                                            'CTHM' => 'College of Tourism and Hospitality Management',
-                                            'ELEM' => 'Elementary',
-                                            'JHS' => 'Junior High School',
-                                            'SHS' => 'Senior High School (SHS)'
-                                        ];
-                                        foreach($departments as $key => $value):
-                                        ?>
-                                        <option value="<?php echo $key; ?>"><?php echo $value; ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <!-- Supervisor Selection (for Coordinators) -->
-                                <div class="mb-3" id="supervisorContainer" style="display: none;">
-                                    <label class="form-label">Assign to Supervisor</label>
-                                    <select class="form-select" name="supervisor_id" id="supervisorSelect">
-                                        <option value="">Select Supervisor (Optional)</option>
-                                        <?php
-                                        // Get all deans and principals
-                                        $supervisors_query = "SELECT id, name, role, department FROM users WHERE role IN ('dean', 'principal') AND status = 'active' ORDER BY role, name";
-                                        $supervisors_result = $db->query($supervisors_query);
-                                        while($supervisor = $supervisors_result->fetch(PDO::FETCH_ASSOC)):
-                                        ?>
-                                        <option value="<?php echo $supervisor['id']; ?>">
-                                            <?php echo htmlspecialchars($supervisor['name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $supervisor['role'])); ?> - <?php echo htmlspecialchars($supervisor['department']); ?>)
-                                        </option>
-                                        <?php endwhile; ?>
-                                    </select>
-                                </div>
-                            </div>
+                        <div class="mb-3">
+                            <label class="form-label">Password</label>
+                            <input type="password" class="form-control" name="password" required placeholder="Enter password">
+                        </div>
+                        <div class="mb-3" id="programContainer">
+                            <label class="form-label">Program</label>
+                            <select class="form-select" name="program" id="programSelect">
+                                <option value="">Select Program</option>
+                                <option value="BASIC ED">Basic Ed</option>
+                                <option value="COLLEGE">College</option>
+                            </select>
+                        </div>
+                        <div class="mb-3" id="roleContainer" style="display: none;">
+                            <label class="form-label">Role</label>
+                            <select class="form-select" name="role" id="roleSelect" required>
+                                <option value="">Select Role</option>
+                            </select>
+                        </div>
+                        <div class="mb-3" id="departmentContainer">
+                            <label class="form-label">Department</label>
+                            <select class="form-select" name="department" id="departmentSelect" required>
+                                <option value="">Select Department</option>
+                            </select>
+                        </div>
+
+                        <!-- Supervisor Selection (for Coordinators) -->
+                        <div class="mb-3" id="supervisorContainer" style="display: none;">
+                            <label class="form-label">Assign to Supervisor</label>
+                            <select class="form-select" name="supervisor_id" id="supervisorSelect">
+                                <option value="">Select Supervisor (Optional)</option>
+                                <?php
+                                // Get all deans and principals
+                                $supervisors_query = "SELECT id, name, role, department FROM users WHERE role IN ('dean', 'principal') AND status = 'active' ORDER BY role, name";
+                                $supervisors_result = $db->query($supervisors_query);
+                                while($supervisor = $supervisors_result->fetch(PDO::FETCH_ASSOC)):
+                                ?>
+                                <option value="<?php echo $supervisor['id']; ?>">
+                                    <?php echo htmlspecialchars($supervisor['name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $supervisor['role'])); ?> - <?php echo htmlspecialchars($supervisor['department']); ?>)
+                                </option>
+                                <?php endwhile; ?>
+                            </select>
                         </div>
 
                         <!-- Designation (for Coordinators) -->
@@ -1212,29 +1272,22 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             <input type="password" class="form-control" name="password" required placeholder="Enter password">
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Email Address (optional)</label>
-                            <input type="email" class="form-control" name="email" placeholder="Enter teacher's email (optional)">
+                            <label class="form-label">Program</label>
+                            <select class="form-select" name="program" id="teacherProgramSelect" required>
+                                <option value="">Select Program</option>
+                                <option value="BASIC ED">Basic Ed</option>
+                                <option value="COLLEGE">College</option>
+                            </select>
+                        </div>
+                        <div class="mb-3" id="teacherDepartmentContainer" style="display: none;">
+                            <label class="form-label">Department</label>
+                            <select class="form-select" name="department" id="teacherDepartmentSelect" required>
+                                <option value="">Select Department</option>
+                            </select>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Department</label>
-                            <select class="form-select" name="department" required>
-                                <option value="">Select Department</option>
-                                <?php
-                                $dept_list = [
-                                    'CTE' => '(CTE) College of Teacher Education',
-                                    'CAS' => '(CAS) College of Arts and Sciences',
-                                    'CCJE' => '(CCJE) College of Criminal Justice Education',
-                                    'CBM' => '(CBM) College of Business Management',
-                                    'CCIS' => '(CCIS) College of Computing and Information Sciences',
-                                    'CTHM' => '(CTHM) College of Tourism and Hospitality Management',
-                                    'ELEM' => '(ELEM) Elementary School',
-                                    'JHS' => '(JHS) Junior High School',
-                                    'SHS' => '(SHS) Senior High School'
-                                ];
-                                foreach($dept_list as $key => $label): ?>
-                                    <option value="<?php echo $key; ?>"><?php echo $label; ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                            <label class="form-label">Email Address (optional)</label>
+                            <input type="email" class="form-control" name="email" placeholder="Enter teacher's email (optional)">
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -1276,6 +1329,24 @@ function getAssignedCoordinators($db, $supervisor_id) {
                                     </select>
                                 </div>
                                 <div class="mb-3">
+                                    <label class="form-label">Additional Departments</label>
+                                    <div class="dropdown w-100">
+                                        <button class="btn btn-outline-secondary dropdown-toggle w-100 department-picker-summary" type="button" id="editTeacherSecondaryDepartmentsToggle" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                                            Select additional departments
+                                        </button>
+                                        <div class="dropdown-menu department-picker-menu" aria-labelledby="editTeacherSecondaryDepartmentsToggle">
+                                            <?php foreach($departments as $key => $label): ?>
+                                                <div class="department-picker-item" data-department-option="<?php echo htmlspecialchars($key, ENT_QUOTES); ?>">
+                                                    <div class="form-check">
+                                                        <input class="form-check-input secondary-department-checkbox" type="checkbox" name="secondary_departments[]" value="<?php echo $key; ?>" id="secondary_department_<?php echo $key; ?>">
+                                                        <label class="form-check-label" for="secondary_department_<?php echo $key; ?>"><?php echo $label; ?></label>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
                                     <label class="form-label">Password (leave blank to keep current)</label>
                                     <input type="password" class="form-control" name="password">
                                 </div>
@@ -1301,6 +1372,19 @@ function getAssignedCoordinators($db, $supervisor_id) {
 
         document.addEventListener('DOMContentLoaded', function() {
             const departmentFilter = document.querySelector('.filter-toolbar select[name="department"]');
+            const addAccountOptions = document.querySelectorAll('.add-account-option');
+
+            addAccountOptions.forEach(option => {
+                option.addEventListener('click', function() {
+                    const targetModalId = this.getAttribute('data-target-modal');
+                    const modalElement = document.getElementById(targetModalId);
+                    if (modalElement) {
+                        const modal = new bootstrap.Modal(modalElement);
+                        modal.show();
+                    }
+                });
+            });
+
             if (departmentFilter) {
                 const updateFilterStyle = () => {
                     departmentFilter.classList.toggle('all-selected', departmentFilter.value === '');
@@ -1309,14 +1393,73 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 departmentFilter.addEventListener('change', updateFilterStyle);
             }
 
+            const programContainer = document.getElementById('programContainer');
+            const programSelect = document.getElementById('programSelect');
+            const teacherProgramSelect = document.getElementById('teacherProgramSelect');
+            const teacherDepartmentContainer = document.getElementById('teacherDepartmentContainer');
+            const roleContainer = document.getElementById('roleContainer');
             const roleSelect = document.getElementById('roleSelect');
+            const departmentContainer = document.getElementById('departmentContainer');
             const departmentSelect = document.getElementById('departmentSelect');
+            const teacherDepartmentSelect = document.getElementById('teacherDepartmentSelect');
             const supervisorContainer = document.getElementById('supervisorContainer');
             const designationContainer = document.getElementById('designationContainer');
             const designationInput = document.getElementById('designationInput');
             const subjectsContainer = document.getElementById('subjectsContainer');
             const gradeLevelsContainer = document.getElementById('gradeLevelsContainer');
             const gradeLevelsList = document.getElementById('gradeLevelsList');
+
+            const basicEdDepartments = [
+                { value: 'ELEMENTARY DEPARTMENT', label: 'Elementary Department' },
+                { value: 'HIGH SCHOOL DEPARTMENT', label: 'High School Department' },
+                { value: 'JUNIOR HIGH SCHOOL DEPARTMENT', label: 'Junior High School Department' }
+            ];
+
+            const collegeDepartments = [
+                { value: 'CAS', label: 'CAS' },
+                { value: 'CCJE', label: 'CCJE' },
+                { value: 'CCIS', label: 'CCIS' },
+                { value: 'CBM', label: 'CBM' },
+                { value: 'CTHM', label: 'CTHM' },
+                { value: 'CTE', label: 'CTE' }
+            ];
+
+            const basicEdRoles = [
+                { value: 'principal', label: 'Principal' },
+                { value: 'grade_level_coordinator', label: 'Grade Level Coordinator' },
+                { value: 'subject_coordinator', label: 'Subject Coordinator' }
+            ];
+
+            const collegeRoles = [
+                { value: 'dean', label: 'Dean' },
+                { value: 'chairperson', label: 'Chairperson' }
+            ];
+
+            const teacherBasicEdDepartments = [
+                { value: 'ELEMENTARY DEPARTMENT', label: 'Elementary Department' },
+                { value: 'HIGH SCHOOL DEPARTMENT', label: 'High School Department' },
+                { value: 'JUNIOR HIGH SCHOOL DEPARTMENT', label: 'Junior High School Department' }
+            ];
+
+            const teacherCollegeDepartments = [
+                { value: 'CAS', label: 'CAS' },
+                { value: 'CCJE', label: 'CCJE' },
+                { value: 'CCIS', label: 'CCIS' },
+                { value: 'CBM', label: 'CBM' },
+                { value: 'CTHM', label: 'CTHM' },
+                { value: 'CTE', label: 'CTE' }
+            ];
+
+            function populateRolesByProgram(program) {
+                roleSelect.innerHTML = '<option value="">Select Role</option>';
+                const options = program === 'BASIC ED' ? basicEdRoles : program === 'COLLEGE' ? collegeRoles : [];
+                options.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item.value;
+                    option.textContent = item.label;
+                    roleSelect.appendChild(option);
+                });
+            }
 
             const designationMap = {
                 'CCIS': 'IT Program Head',
@@ -1332,9 +1475,61 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 'BSED': 'BSED Program Head'
             };
 
+            function populateDepartmentsByProgram(program) {
+                departmentSelect.innerHTML = '<option value="">Select Department</option>';
+                const options = program === 'BASIC ED' ? basicEdDepartments : program === 'COLLEGE' ? collegeDepartments : [];
+                options.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item.value;
+                    option.textContent = item.label;
+                    departmentSelect.appendChild(option);
+                });
+            }
+
+            function populateTeacherDepartments(program) {
+                if (!teacherDepartmentSelect) return;
+                teacherDepartmentSelect.innerHTML = '<option value="">Select Department</option>';
+                const options = program === 'BASIC ED' ? teacherBasicEdDepartments : program === 'COLLEGE' ? teacherCollegeDepartments : [];
+                options.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item.value;
+                    option.textContent = item.label;
+                    teacherDepartmentSelect.appendChild(option);
+                });
+            }
+
+            function toggleTeacherDepartment(program) {
+                if (!teacherDepartmentContainer || !teacherDepartmentSelect) return;
+                const hasProgram = !!program;
+                teacherDepartmentContainer.style.display = hasProgram ? 'block' : 'none';
+                teacherDepartmentSelect.required = hasProgram;
+
+                if (!hasProgram) {
+                    teacherDepartmentSelect.value = '';
+                    teacherDepartmentSelect.innerHTML = '<option value="">Select Department</option>';
+                    return;
+                }
+
+                populateTeacherDepartments(program);
+            }
+
             function toggleSpecializations() {
                 const role = roleSelect.value;
                 const department = departmentSelect.value;
+                const hasProgram = !!programSelect.value;
+
+                roleContainer.style.display = hasProgram ? 'block' : 'none';
+                roleSelect.required = hasProgram;
+                departmentContainer.style.display = hasProgram ? 'block' : 'none';
+                departmentSelect.required = hasProgram && !!role && !!programSelect.value;
+
+                if (!hasProgram) {
+                    roleSelect.value = '';
+                    departmentSelect.value = '';
+                    departmentSelect.innerHTML = '<option value="">Select Department</option>';
+                } else {
+                    populateDepartmentsByProgram(programSelect.value);
+                }
                 
                 // Hide all containers first
                 supervisorContainer.style.display = 'none';
@@ -1384,6 +1579,20 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 });
             }
 
+            programSelect.addEventListener('change', function() {
+                populateRolesByProgram(programSelect.value);
+                roleSelect.value = '';
+                populateDepartmentsByProgram(programSelect.value);
+                departmentSelect.value = '';
+                toggleSpecializations();
+            });
+            if (teacherProgramSelect) {
+                teacherProgramSelect.addEventListener('change', function() {
+                    toggleTeacherDepartment(teacherProgramSelect.value);
+                    teacherDepartmentSelect.value = '';
+                });
+                toggleTeacherDepartment(teacherProgramSelect.value);
+            }
             roleSelect.addEventListener('change', toggleSpecializations);
             departmentSelect.addEventListener('change', toggleSpecializations);
             
@@ -1413,6 +1622,54 @@ function getAssignedCoordinators($db, $supervisor_id) {
             const editButtons = document.querySelectorAll('.btn-edit-teacher');
             const editModalEl = document.getElementById('editTeacherModal');
             const editModal = new bootstrap.Modal(editModalEl);
+            const editTeacherDepartment = document.getElementById('editTeacherDepartment');
+            const secondaryDepartmentCheckboxes = document.querySelectorAll('.secondary-department-checkbox');
+            const secondaryDepartmentItems = document.querySelectorAll('[data-department-option]');
+            const secondaryDepartmentToggle = document.getElementById('editTeacherSecondaryDepartmentsToggle');
+
+            function updateSecondaryDepartmentSummary() {
+                if (!secondaryDepartmentToggle) {
+                    return;
+                }
+
+                const selectedDepartments = Array.from(secondaryDepartmentCheckboxes)
+                    .filter(checkbox => checkbox.checked)
+                    .map(checkbox => checkbox.closest('.form-check')?.querySelector('.form-check-label')?.textContent?.trim() || checkbox.value);
+
+                secondaryDepartmentToggle.textContent = selectedDepartments.length > 0
+                    ? selectedDepartments.join(', ')
+                    : 'Select additional departments';
+            }
+
+            function syncSecondaryDepartmentOptions(mainDepartment) {
+                secondaryDepartmentItems.forEach(item => {
+                    const optionDepartment = item.getAttribute('data-department-option');
+                    const checkbox = item.querySelector('.secondary-department-checkbox');
+                    const isMainDepartment = optionDepartment === mainDepartment;
+
+                    item.style.display = isMainDepartment ? 'none' : '';
+
+                    if (checkbox) {
+                        if (isMainDepartment) {
+                            checkbox.checked = false;
+                        }
+                        checkbox.disabled = isMainDepartment;
+                    }
+                });
+
+                updateSecondaryDepartmentSummary();
+            }
+
+            secondaryDepartmentCheckboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', updateSecondaryDepartmentSummary);
+            });
+
+            if (editTeacherDepartment) {
+                editTeacherDepartment.addEventListener('change', function() {
+                    syncSecondaryDepartmentOptions(editTeacherDepartment.value);
+                });
+            }
+
             editButtons.forEach(btn => {
                 btn.addEventListener('click', () => {
                     const userId = btn.getAttribute('data-userid');
@@ -1420,14 +1677,24 @@ function getAssignedCoordinators($db, $supervisor_id) {
                     const name = btn.getAttribute('data-name');
                     const department = btn.getAttribute('data-department');
                     const email = btn.getAttribute('data-email');
+                    const secondaryDepartments = (btn.getAttribute('data-secondary-departments') || '')
+                        .split(',')
+                        .map(value => value.trim())
+                        .filter(Boolean);
                     document.getElementById('editTeacherUserId').value = userId;
                     document.getElementById('editTeacherUsername').value = username;
                     document.getElementById('editTeacherName').value = name;
-                    document.getElementById('editTeacherDepartment').value = department;
+                    editTeacherDepartment.value = department;
                     document.getElementById('editTeacherEmail').value = email || '';
+                    secondaryDepartmentCheckboxes.forEach(checkbox => {
+                        checkbox.checked = secondaryDepartments.includes(checkbox.value);
+                    });
+                    syncSecondaryDepartmentOptions(department);
                     editModal.show();
                 });
             });
+
+            syncSecondaryDepartmentOptions(editTeacherDepartment ? editTeacherDepartment.value : '');
         });
     </script>
 </body>

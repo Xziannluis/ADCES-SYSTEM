@@ -28,11 +28,17 @@ if ($evaluator['role'] === 'grade_level_coordinator') {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $postedRole = $_POST['role'] ?? '';
+    $postedDepartment = $_POST['department'] ?? '';
+    if (in_array($postedRole, ['president', 'vice_president'], true)) {
+        $postedDepartment = '';
+    }
+
     $data = [
         'name' => $_POST['name'],
         'username' => $_POST['username'],
-        'role' => $_POST['role'],
-        'department' => $_POST['department'],
+        'role' => $postedRole,
+        'department' => $postedDepartment,
         'password' => $_POST['password'] ?? '',
         'designation' => isset($_POST['designation']) ? $_POST['designation'] : ''
     ];
@@ -134,7 +140,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="mb-3">
+                <div class="mb-3" id="departmentFieldWrap">
                     <label class="form-label">Department</label>
                     <select class="form-select" name="department" id="departmentSelect">
                         <option value="">Select Department/Category</option>
@@ -188,8 +194,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             function toggleSpecializations() {
                 const role = roleSelect.value;
-                const department = departmentSelect.value;
+                const departmentFieldWrap = document.getElementById('departmentFieldWrap');
                 
+                if (role === 'president' || role === 'vice_president') {
+                    departmentFieldWrap.style.display = 'none';
+                    departmentSelect.value = '';
+                } else {
+                    departmentFieldWrap.style.display = 'block';
+                }
+
                 // Hide grade levels container first
                 gradeLevelsContainer.style.display = 'none';
                 if (role === 'grade_level_coordinator') {

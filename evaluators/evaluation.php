@@ -24,13 +24,17 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
 } elseif (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
     // Coordinators should only see teachers assigned to them by their supervisor
     $assignedPrograms = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
-    $assigned_query = "SELECT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id AND t.status = 'active'";
+    $assigned_query = "SELECT DISTINCT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id AND t.status = 'active'";
     if (!empty($assignedPrograms)) {
         $programPlaceholders = [];
         foreach ($assignedPrograms as $idx => $dept) {
             $programPlaceholders[] = ':program_' . $idx;
         }
-        $assigned_query .= " AND t.department IN (" . implode(',', $programPlaceholders) . ")";
+        $secondaryProgramPlaceholders = [];
+        foreach ($assignedPrograms as $idx => $dept) {
+            $secondaryProgramPlaceholders[] = ':secondary_program_' . $idx;
+        }
+        $assigned_query .= " AND (t.department IN (" . implode(',', $programPlaceholders) . ") OR EXISTS (SELECT 1 FROM teacher_departments td WHERE td.teacher_id = t.id AND td.department IN (" . implode(',', $secondaryProgramPlaceholders) . ")))";
     }
     $assigned_query .= " ORDER BY t.name";
     $stmt = $db->prepare($assigned_query);
@@ -38,18 +42,20 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
     if (!empty($assignedPrograms)) {
         foreach ($assignedPrograms as $idx => $dept) {
             $stmt->bindValue(':program_' . $idx, $dept);
+            $stmt->bindValue(':secondary_program_' . $idx, $dept);
         }
     }
     $stmt->execute();
     $teachers = $stmt; // mimic PDOStatement for compatibility with view loop
 } else {
     // Deans/principals can evaluate teachers in their department AND teachers assigned to them (cross-department)
-    $query = "SELECT DISTINCT t.*
+        $query = "SELECT DISTINCT t.*
               FROM teachers t
               LEFT JOIN users u ON t.user_id = u.id
               LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id
+                            LEFT JOIN teacher_departments td ON td.teacher_id = t.id
               WHERE t.status = 'active'
-                AND (t.department = :department OR ta.evaluator_id IS NOT NULL)
+                                AND (t.department = :department OR td.department = :department OR ta.evaluator_id IS NOT NULL)
                 AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);

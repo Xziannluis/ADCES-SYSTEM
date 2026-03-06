@@ -6,7 +6,12 @@ require_once '../auth/session-check.php';
 if (in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
     $r = $_SESSION['role'];
     if ($r === 'chairperson') header('Location: chairperson.php');
-    if ($r === 'subject_coordinator') header('Location: subject_coordinator.php');
+    if ($r === 'subject_coordinator') {
+        if (($_SESSION['department'] ?? '') === 'ELEM') {
+            header('Location: chairperson.php');
+        }
+        header('Location: subject_coordinator.php');
+    }
     if ($r === 'grade_level_coordinator') header('Location: grade_level_coordinator.php');
     exit();
 }
@@ -131,7 +136,29 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
         <div class="container-fluid">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h3>Dashboard - <?php echo $_SESSION['department']; ?></h3>
-                <span>Welcome, <?php echo $_SESSION['name']; ?> (<?php echo ucfirst(str_replace('_', ' ', $_SESSION['role'])); ?>)</span>
+                <div class="dropdown">
+                    <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-user me-2"></i><?php echo $_SESSION['name']; ?> (<?php echo ucfirst(str_replace('_', ' ', $_SESSION['role'])); ?>)
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="evaluatorMenu">
+                        <li>
+                            <a class="dropdown-item" href="settings.php">
+                                <i class="fas fa-cog me-2"></i>Settings
+                            </a>
+                        </li>
+                        <li>
+                            <a class="dropdown-item" href="change-password.php">
+                                <i class="fas fa-key me-2"></i>Change Password
+                            </a>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
+                            <a class="dropdown-item" href="../auth/logout.php">
+                                <i class="fas fa-sign-out-alt me-2"></i>Logout
+                            </a>
+                        </li>
+                    </ul>
+                </div>
             </div>
             
             <?php if(isset($_SESSION['success'])): ?>

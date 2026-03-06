@@ -11,7 +11,7 @@ $database = new Database();
 $db = $database->getConnection();
 
 // Fetch current user details
-$stmt = $db->prepare("SELECT id, username, name, email FROM users WHERE id = :id LIMIT 1");
+$stmt = $db->prepare("SELECT id, username, name, email, is_email_verified FROM users WHERE id = :id LIMIT 1");
 $stmt->bindParam(':id', $_SESSION['user_id']);
 $stmt->execute();
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -23,48 +23,63 @@ if (!$user) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $name = trim($_POST['name'] ?? '');
-    $email = trim($_POST['email'] ?? ''); // username mapping
+    $username = trim($_POST['username'] ?? '');
+    $email = trim($_POST['email'] ?? '');
 
-    if ($name === '' || $email === '') {
-        $_SESSION['error'] = "Name and Email are required fields.";
+    if ($name === '' || $username === '' || $email === '') {
+        $_SESSION['error'] = "Name, Username, and Email are required fields.";
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $_SESSION['error'] = "Please enter a valid email address.";
     } else {
-        // Check if another user has this username (email)
+        // Check if another user has this username
         $checkStmt = $db->prepare("SELECT id FROM users WHERE username = :username AND id != :id LIMIT 1");
-        $checkStmt->bindParam(':username', $email);
+        $checkStmt->bindParam(':username', $username);
         $checkStmt->bindParam(':id', $_SESSION['user_id']);
         $checkStmt->execute();
 
         if ($checkStmt->rowCount() > 0) {
-            $_SESSION['error'] = "The email/username provided is already associated with another account.";
+            $_SESSION['error'] = "The username provided is already associated with another account.";
         } else {
-            // Update users table
-            $update = $db->prepare("UPDATE users SET name = :name, username = :username, email = :email WHERE id = :id");
-            $update->bindParam(':name', $name);
-            $update->bindParam(':username', $email);
-            $update->bindParam(':email', $email);
-            $update->bindParam(':id', $_SESSION['user_id']);
+            // Check if another user has this email
+            $emailCheck = $db->prepare("SELECT id FROM users WHERE email = :email AND id != :id LIMIT 1");
+            $emailCheck->bindParam(':email', $email);
+            $emailCheck->bindParam(':id', $_SESSION['user_id']);
+            $emailCheck->execute();
 
-            if ($update->execute()) {
-                if ($email !== $user['email']) {
-                    // Email changed, require verification
-                    $token = bin2hex(random_bytes(32));
-                    $db->prepare("UPDATE users SET is_email_verified = 0, email = :email, verification_token = :t WHERE id = :id")->execute([':email' => $email, ':t' => $token, ':id' => $_SESSION['user_id']]);
-                    require_once '../includes/mailer.php';
-                    $link = "http://" . $_SERVER['HTTP_HOST'] . "/ADCES-SYSTEM/verify-email.php?token=" . $token;
-                    sendVerificationLinkEmail($email, $name, $link);
-                    $_SESSION['success'] = "Settings updated. A verification link has been sent to your new email.";
-                } else {
-                    $_SESSION['success'] = "Settings updated successfully.";
-                }
-                
-                $_SESSION['name'] = $name;
-                $_SESSION['username'] = $email;
-                
-                // Update local user array for the current render loop
-                $user['name'] = $name;
-                $user['username'] = $email;
+            if ($emailCheck->rowCount() > 0) {
+                $_SESSION['error'] = "The email provided is already associated with another account.";
             } else {
-                $_SESSION['error'] = "Unable to update settings. Please try again.";
+                // Update users table
+                $update = $db->prepare("UPDATE users SET name = :name, username = :username, email = :email WHERE id = :id");
+                $update->bindParam(':name', $name);
+                $update->bindParam(':username', $username);
+                $update->bindParam(':email', $email);
+                $update->bindParam(':id', $_SESSION['user_id']);
+
+                if ($update->execute()) {
+                    if ($email !== $user['email']) {
+                        // Email changed, require verification
+                        $token = bin2hex(random_bytes(32));
+                        $db->prepare("UPDATE users SET is_email_verified = 0, email = :email, verification_token = :t WHERE id = :id")->execute([':email' => $email, ':t' => $token, ':id' => $_SESSION['user_id']]);
+                        require_once '../includes/mailer.php';
+                        $link = "http://" . $_SERVER['HTTP_HOST'] . "/ADCES-SYSTEM/verify-email.php?token=" . $token;
+                        sendVerificationLinkEmail($email, $name, $link);
+                        $_SESSION['success'] = "Settings updated. A verification link has been sent to your new email.";
+                    } else {
+                        $_SESSION['success'] = "Settings updated successfully.";
+                    }
+                    
+                    $_SESSION['name'] = $name;
+                    $_SESSION['username'] = $username;
+                    $_SESSION['email'] = $email;
+                    
+                    // Update local user array for the current render loop
+                    $user['name'] = $name;
+                    $user['username'] = $username;
+                    $user['email'] = $email;
+                } else {
+                    $_SESSION['error'] = "Unable to update settings. Please try again.";
+                }
             }
         }
     }
@@ -89,7 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h3>Settings</h3>
                 <div class="dropdown">
-                    <button class="btn btn-primary dropdown-toggle" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                    <button class="btn user-menu-btn dropdown-toggle" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
                         <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end shadow" aria-labelledby="userDropdown">
@@ -123,9 +138,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <input type="text" class="form-control" id="name" name="name" value="<?php echo htmlspecialchars($user['name']); ?>" required>
                         </div>
                         <div class="mb-3">
-                            <label for="email" class="form-label">Username / Email</label>
-                            <input type="text" class="form-control" id="email" name="email" value="<?php echo htmlspecialchars($user['username']); ?>" required>
-                            <div class="form-text">This is used for logging in.</div>
+                            <label for="username" class="form-label">Username</label>
+                            <input type="text" class="form-control" id="username" name="username" value="<?php echo htmlspecialchars($user['username']); ?>" required>
+                            <div class="form-text"></div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="email" class="form-label">Email Address</label>
+                            <input type="email" class="form-control" id="email" name="email" value="<?php echo htmlspecialchars($user['email'] ?? ''); ?>" required>
+                            <div class="form-text">
+                                
+                                <?php if(isset($user['is_email_verified']) && (int)$user['is_email_verified'] === 1): ?>
+                                    <span class="badge bg-success">Verified</span>
+                                <?php else: ?>
+                                    <span class="badge bg-warning text-dark">Not verified</span>
+                                <?php endif; ?>
+                            </div>
                         </div>
                         <button type="submit" class="btn btn-primary">
                             <i class="fas fa-save me-2"></i>Save Changes

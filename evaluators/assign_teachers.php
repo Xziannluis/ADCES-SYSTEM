@@ -68,10 +68,9 @@ if (in_array($target_role, ['subject_coordinator', 'chairperson'])) {
 
 // Handle teacher assignment
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'assign_teacher') {
-    // Chairpersons are no longer allowed to assign; keep subject_coordinators and grade_level_coordinators able to assign themselves
-    // Only dean may perform assignment actions (no principals, chairpersons, or coordinators)
+    // Principals mirror dean behavior for elementary/school flows
     $canAssignSelf = false;
-    $canAssignOthers = ($_SESSION['role'] === 'dean');
+    $canAssignOthers = in_array($_SESSION['role'], ['dean', 'principal']);
     if (!$canAssignSelf && !$canAssignOthers) {
         $_SESSION['error'] = "You are not allowed to assign teachers.";
         header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
@@ -151,10 +150,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
 // Handle teacher removal
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'remove_assignment') {
-    // Chairpersons are no longer allowed to remove assignments
-    // Only dean may remove assignments
+    // Principals mirror dean behavior for elementary/school flows
     $canRemoveSelf = false;
-    $canRemoveOthers = ($_SESSION['role'] === 'dean');
+    $canRemoveOthers = in_array($_SESSION['role'], ['dean', 'principal']);
     if (!$canRemoveSelf && !$canRemoveOthers) {
         $_SESSION['error'] = "You are not allowed to remove assignments.";
         header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
@@ -204,10 +202,10 @@ $assigned_teachers = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
 // Get available teachers scoped to the evaluator's program assignments
 $available_teachers = $teacher->getActiveByDepartments($target_programs);
 
-// If current user is a supervisor, load coordinators list for dropdown (exclude chairpersons)
+// If current user is a supervisor, load coordinators list for dropdown
 $coordinators = [];
 if (in_array($_SESSION['role'], ['dean', 'principal'])) {
-    $coord_query = "SELECT id, name, role FROM users WHERE role IN ('subject_coordinator','grade_level_coordinator') AND department = :dept AND status = 'active' ORDER BY name";
+    $coord_query = "SELECT id, name, role FROM users WHERE role IN ('subject_coordinator','chairperson','grade_level_coordinator') AND department = :dept AND status = 'active' ORDER BY role, name";
     $coord_stmt = $db->prepare($coord_query);
     $coord_stmt->bindParam(':dept', $_SESSION['department']);
     $coord_stmt->execute();

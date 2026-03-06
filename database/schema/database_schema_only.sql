@@ -52,6 +52,20 @@ CREATE TABLE `teachers` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ========================================
+-- TEACHER_DEPARTMENTS TABLE
+-- ========================================
+CREATE TABLE `teacher_departments` (
+  `id` INT PRIMARY KEY AUTO_INCREMENT,
+  `teacher_id` INT NOT NULL,
+  `department` VARCHAR(100) NOT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (`teacher_id`) REFERENCES `teachers`(`id`) ON DELETE CASCADE,
+  UNIQUE KEY `teacher_department_unique` (`teacher_id`, `department`),
+  KEY `teacher_department_teacher_idx` (`teacher_id`),
+  KEY `teacher_department_department_idx` (`department`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ========================================
 -- EVALUATOR_ASSIGNMENTS TABLE
 -- ========================================
 CREATE TABLE `evaluator_assignments` (
