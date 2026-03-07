@@ -81,6 +81,34 @@ TOP_K_RETRIEVAL = 5
 OUTPUT_RECOMMENDATIONS = 3
 DEFAULT_SIMILARITY_THRESHOLD = 0.15
 
+RATING_BAND_GUIDANCE = {
+    "Excellent": {
+        "strengths": "The observed lesson demonstrates highly consistent teaching practice with visible strengths across the rated indicators.",
+        "improvement": "Only minor refinements are needed to sustain and extend the teacher's already strong performance.",
+        "recommendation": "Recommendations should focus on sustaining strong routines, deepening impact, and extending already effective practice.",
+    },
+    "Very satisfactory": {
+        "strengths": "The lesson shows strong and dependable teaching practice with several indicators already performed well.",
+        "improvement": "Targeted refinements in the lower-rated indicators can move the overall performance toward an excellent level.",
+        "recommendation": "Recommendations should strengthen consistency and help the teacher turn good practice into highly visible, repeatable evidence.",
+    },
+    "Satisfactory": {
+        "strengths": "The lesson shows acceptable teaching practice, with clear strengths that can be built on further.",
+        "improvement": "Several practices still need more consistent classroom evidence to lift the overall quality of the lesson.",
+        "recommendation": "Recommendations should target the weakest domain with practical steps that produce visible improvement in the next observation.",
+    },
+    "Below satisfactory": {
+        "strengths": "Some positive teaching behaviors are present, but they appear less consistent across the observed indicators.",
+        "improvement": "The current profile shows notable gaps that require focused support, stronger routines, and more reliable follow-through.",
+        "recommendation": "Recommendations should be concrete, manageable, and centered on establishing consistent practice in the weakest area first.",
+    },
+    "Needs improvement": {
+        "strengths": "Only limited strengths are currently visible in the observation, and these need support to become more consistent.",
+        "improvement": "Immediate support is needed in the lowest-rated indicators so the teacher can build more stable and observable classroom practice.",
+        "recommendation": "Recommendations should prioritize foundational actions, close monitoring, and one clear improvement target at a time.",
+    },
+}
+
 DOMAIN_ALIASES = {
     "communications": "Communication & instruction",
     "communication": "Communication & instruction",
@@ -346,16 +374,27 @@ def _evaluation_signature(req: GenerateRequest) -> Dict[str, Any]:
     domains = _domain_scores(req)
     weakest = min(domains, key=domains.get) if domains else "Instructional practice"
     strongest = max(domains, key=domains.get) if domains else "Professional practice"
+    overall_level = _score_band(req.averages.overall)
     return {
         "teacher": _normalize_whitespace(req.faculty_name or "") or "The teacher",
         "subject": _normalize_whitespace(req.subject_observed or "") or "the observed class",
         "observation_type": _normalize_whitespace(req.observation_type or "") or "Classroom observation",
         "department": _normalize_whitespace(req.department or ""),
-        "overall_level": _score_band(req.averages.overall),
+        "overall_level": overall_level,
+        "overall_numeric": float(req.averages.overall or 0),
         "weakest": weakest,
         "strongest": strongest,
         "domains": domains,
     }
+
+
+def _rating_guidance(req: GenerateRequest) -> Dict[str, str]:
+    sig = _evaluation_signature(req)
+    return RATING_BAND_GUIDANCE.get(sig["overall_level"], RATING_BAND_GUIDANCE["Satisfactory"])
+
+
+def _band_label(score: float) -> str:
+    return _score_band(float(score or 0)).lower()
 
 
 def _dedupe_preserve_order(items: List[str]) -> List[str]:
@@ -459,6 +498,23 @@ def _load_sbert():
 def _build_dataset_entries() -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
 
+    def ingest_reference_file(path: pathlib.Path, source_label: str) -> None:
+        if not path.exists():
+            return
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    raw = _normalize_whitespace(line)
+                    if not raw:
+                        continue
+                    try:
+                        payload = json.loads(raw)
+                    except Exception:
+                        continue
+                    ingest_reference_payload(payload, payload.get("source") or source_label)
+        except Exception:
+            return
+
     def add_entry(text: str, category: str, source: str, meta: Optional[Dict[str, Any]] = None) -> None:
         normalized = _normalize_sentence(text)
         if not normalized:
@@ -534,6 +590,9 @@ def _build_dataset_entries() -> List[Dict[str, Any]]:
                     "template_field": field_name,
                 },
             )
+
+    ingest_reference_file(REFERENCE_EVALS_PATH, "reference_eval")
+    ingest_reference_file(IMPORTED_REFERENCE_EVALS_PATH, "imported_reference_eval")
 
     deduped: List[Dict[str, Any]] = []
     seen = set()
@@ -816,6 +875,7 @@ def _generate_recommendation_variations(req: GenerateRequest, retrieved: List[Di
 def _build_strengths(req: GenerateRequest, comments: List[Dict[str, Any]]) -> str:
     sig = _evaluation_signature(req)
     strongest = sig["strongest"]
+    guidance = _rating_guidance(req)
     matching = [item["comment"] for item in comments if item["comment"] and item["domain"] == strongest]
     evidence = _dedupe_preserve_order(matching)[:2]
     if not evidence:
@@ -825,6 +885,7 @@ def _build_strengths(req: GenerateRequest, comments: List[Dict[str, Any]]) -> st
         ]
     pieces = [
         f"The observation reflects {sig['overall_level'].lower()} performance, with the strongest indicators appearing in {strongest.lower()}.",
+        guidance["strengths"],
         _normalize_sentence(evidence[0]),
     ]
     if len(evidence) > 1:
@@ -835,10 +896,12 @@ def _build_strengths(req: GenerateRequest, comments: List[Dict[str, Any]]) -> st
 def _build_improvement_areas(req: GenerateRequest, comments: List[Dict[str, Any]]) -> str:
     sig = _evaluation_signature(req)
     weakest = sig["weakest"]
+    guidance = _rating_guidance(req)
     matching = [item["comment"] for item in comments if item["comment"] and item["domain"] == weakest]
     evidence = _dedupe_preserve_order(matching)[:2]
     pieces = [
         f"The clearest opportunity for refinement is {weakest.lower()}, where further consistency would strengthen the overall lesson experience.",
+        guidance["improvement"],
     ]
     if evidence:
         pieces.append(_normalize_sentence(evidence[0]))
@@ -846,6 +909,70 @@ def _build_improvement_areas(req: GenerateRequest, comments: List[Dict[str, Any]
         pieces.append(_normalize_sentence(f"Additional attention to {weakest.lower()} would help balance current strengths with more consistent follow-through during instruction"))
     if len(evidence) > 1:
         pieces.append(_normalize_sentence(evidence[1]))
+    return " ".join(_dedupe_preserve_order(pieces))
+
+
+def _relevant_comments_for_field(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> List[str]:
+    sig = _evaluation_signature(req)
+    target_domain = sig["strongest"] if field_name == "strengths" else sig["weakest"]
+    field_comments = [item for item in comments if item["comment"] and item["domain"] == target_domain]
+    if not field_comments:
+        field_comments = [item for item in comments if item["comment"]]
+
+    if field_name == "strengths":
+        field_comments.sort(key=lambda item: (-float(item["rating"]), item["index"]))
+    else:
+        field_comments.sort(key=lambda item: (float(item["rating"]), item["index"]))
+
+    return _dedupe_preserve_order([item["comment"] for item in field_comments])[:3]
+
+
+def _compose_field_query(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> str:
+    sig = _evaluation_signature(req)
+    relevant = _relevant_comments_for_field(req, comments, field_name)
+    band = sig["overall_level"].lower()
+    if field_name == "strengths":
+        focus = sig["strongest"]
+        prompt = f"{sig['subject']} {sig['observation_type']} strength in {focus.lower()} with {band} performance"
+    elif field_name == "areas_for_improvement":
+        focus = sig["weakest"]
+        prompt = f"{sig['subject']} {sig['observation_type']} improvement needed in {focus.lower()} with {band} performance"
+    else:
+        focus = sig["weakest"]
+        prompt = f"{sig['subject']} {sig['observation_type']} recommendation for {focus.lower()} with {band} performance"
+
+    if relevant:
+        prompt = f"{prompt}. Evidence: " + "; ".join(relevant)
+    return _normalize_whitespace(prompt)
+
+
+def _blend_feedback_with_evidence(field_name: str, template_text: str, evidence_lines: List[str], req: GenerateRequest) -> str:
+    template_sentence = _normalize_sentence(template_text)
+    evidence = [_normalize_sentence(line) for line in evidence_lines if _normalize_whitespace(line)]
+    sig = _evaluation_signature(req)
+    guidance = _rating_guidance(req)
+
+    if field_name == "strengths":
+        intro = _normalize_sentence(
+            f"The evaluation shows the strongest evidence in {sig['strongest'].lower()}, based on the indicators marked during the observation"
+        )
+        guidance_line = guidance["strengths"]
+    elif field_name == "areas_for_improvement":
+        intro = _normalize_sentence(
+            f"The evaluation results point to {sig['weakest'].lower()} as the clearest area that still needs improvement"
+        )
+        guidance_line = guidance["improvement"]
+    else:
+        intro = _normalize_sentence(
+            f"Based on the evaluation results, the next improvement step should focus on {sig['weakest'].lower()}"
+        )
+        guidance_line = guidance["recommendation"]
+
+    pieces = [intro, _normalize_sentence(guidance_line)]
+    if evidence:
+        pieces.extend(evidence[:2])
+    if template_sentence:
+        pieces.append(template_sentence)
     return " ".join(_dedupe_preserve_order(pieces))
 
 
@@ -884,14 +1011,19 @@ def _summarize_comments_for_field(req: GenerateRequest, comments: List[Dict[str,
 def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]) -> Dict[str, str]:
     retrieval_system = _load_feedback_retrieval_system()
     queries = {
-        "strengths": _normalize_whitespace(req.strengths or "") or _summarize_comments_for_field(req, comments, "strengths"),
-        "areas_for_improvement": _normalize_whitespace(req.improvement_areas or "") or _summarize_comments_for_field(req, comments, "areas_for_improvement"),
-        "recommendations": _normalize_whitespace(req.recommendations or "") or _summarize_comments_for_field(req, comments, "recommendations"),
+        "strengths": _normalize_whitespace(req.strengths or "") or _compose_field_query(req, comments, "strengths"),
+        "areas_for_improvement": _normalize_whitespace(req.improvement_areas or "") or _compose_field_query(req, comments, "areas_for_improvement"),
+        "recommendations": _normalize_whitespace(req.recommendations or "") or _compose_field_query(req, comments, "recommendations"),
     }
 
     matched = retrieval_system.retrieve_feedback_for_form(queries)
     return {
-        field_name: (matched[field_name].feedback_text if matched[field_name] else queries[field_name])
+        field_name: _blend_feedback_with_evidence(
+            field_name,
+            matched[field_name].feedback_text if matched[field_name] else queries[field_name],
+            _relevant_comments_for_field(req, comments, field_name),
+            req,
+        )
         for field_name in queries
     }
 
@@ -916,6 +1048,7 @@ def _ensure_2_3_sentences(text: str, fallback: str = "") -> str:
 
 def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, retrieved: List[Dict[str, Any]]) -> List[str]:
     sig = _evaluation_signature(req)
+    guidance = _rating_guidance(req)
     rng = random.Random(_stable_seed(field_name, sig["teacher"], sig["subject"], datetime.utcnow().isoformat(timespec="seconds")))
     weak = sig["weakest"]
     strong = sig["strongest"]
@@ -926,13 +1059,13 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
     if field_name == "strengths":
         alt = (
             f"The observed lesson showed strong evidence in {strong.lower()}, especially in classroom clarity and structure. "
-            f"Instruction was delivered in a way that supported learner understanding and lesson flow. "
+            f"{guidance['strengths']} "
             f"These practices can be sustained in succeeding observations."
         )
     elif field_name == "areas_for_improvement":
         alt = (
             f"The most visible area for improvement is {weak.lower()}, where consistency can still be strengthened. "
-            f"Learner participation and follow-through can improve with more inclusive classroom routines. "
+            f"{guidance['improvement']} "
             f"This can create stronger evidence of progress in future evaluations."
         )
     else:
@@ -941,6 +1074,7 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
         act1 = actions[0]
         act2 = actions[1] if len(actions) > 1 else actions[0]
         alt = (
+            f"{guidance['recommendation']} "
             f"A practical next step is to {act1}. "
             f"You may also {act2} to reinforce the target area during class activities. "
             f"These actions can improve learner response and instructional consistency."
@@ -999,6 +1133,7 @@ def generate(req: GenerateRequest):
     strengths = field_feedback["strengths"] or _build_strengths(req, comments)
     improvement_areas = field_feedback["areas_for_improvement"] or _build_improvement_areas(req, comments)
     recommendations = field_feedback["recommendations"]
+    sig = _evaluation_signature(req)
 
     strengths_options = _make_three_options(strengths, req, "strengths", retrieved)
     improvement_options = _make_three_options(improvement_areas, req, "areas_for_improvement", retrieved)
@@ -1018,6 +1153,8 @@ def generate(req: GenerateRequest):
             "dataset_size": len(_build_dataset_entries()),
             "model": os.getenv("SBERT_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
             "generator": "retrieval-only",
+            "overall_band": sig["overall_level"],
+            "domain_bands": {domain: _band_label(score) for domain, score in sig["domains"].items()},
             "feedback_queries": {
                 "strengths": _normalize_whitespace(req.strengths or "") or _summarize_comments_for_field(req, comments, "strengths"),
                 "areas_for_improvement": _normalize_whitespace(req.improvement_areas or "") or _summarize_comments_for_field(req, comments, "areas_for_improvement"),

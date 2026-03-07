@@ -663,12 +663,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             <textarea class="form-control" id="strengths" name="strengths" rows="3" placeholder="List the teacher's strengths observed during the evaluation"></textarea>
                                         </div>
                                         <div class="mt-2 ai-category-panel" id="aiStrengthsPanel" style="display:none;">
-                                            <div class="border rounded p-3 h-100 bg-light">
-                                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                                    <h6 class="mb-0">Strengths</h6>
-                                                    <button type="button" class="btn btn-sm btn-outline-primary ai-apply-btn" data-target="strengths">Use in textbox</button>
-                                                </div>
-                                                <div class="small text-muted mb-2">3 paragraphs • 2-3 sentences each</div>
+                                            <div class="ai-suggestion-wrap">
+                                                <div class="ai-suggestion-label">Click a suggestion to add it:</div>
                                                 <div id="aiSuggestionStrengths" class="ai-suggestion-content small"></div>
                                             </div>
                                         </div>
@@ -681,12 +677,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             <textarea class="form-control" id="improvementAreas" name="improvement_areas" rows="3" placeholder="List areas where the teacher can improve"></textarea>
                                         </div>
                                         <div class="mt-2 ai-category-panel" id="aiImprovementsPanel" style="display:none;">
-                                            <div class="border rounded p-3 h-100 bg-light">
-                                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                                    <h6 class="mb-0">Areas for Improvement</h6>
-                                                    <button type="button" class="btn btn-sm btn-outline-primary ai-apply-btn" data-target="improvementAreas">Use in textbox</button>
-                                                </div>
-                                                <div class="small text-muted mb-2">3 paragraphs • 2-3 sentences each</div>
+                                            <div class="ai-suggestion-wrap">
+                                                <div class="ai-suggestion-label">Click a suggestion to add it:</div>
                                                 <div id="aiSuggestionImprovements" class="ai-suggestion-content small"></div>
                                             </div>
                                         </div>
@@ -702,12 +694,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             <textarea class="form-control" id="recommendations" name="recommendations" rows="3" placeholder="Provide specific recommendations for improvement"></textarea>
                                         </div>
                                         <div class="mt-2 ai-category-panel" id="aiRecommendationsPanel" style="display:none;">
-                                            <div class="border rounded p-3 h-100 bg-light">
-                                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                                    <h6 class="mb-0">Recommendations</h6>
-                                                    <button type="button" class="btn btn-sm btn-outline-primary ai-apply-btn" data-target="recommendations">Use in textbox</button>
-                                                </div>
-                                                <div class="small text-muted mb-2">3 paragraphs • 2-3 sentences each</div>
+                                            <div class="ai-suggestion-wrap">
+                                                <div class="ai-suggestion-label">Click a suggestion to add it:</div>
                                                 <div id="aiSuggestionRecommendations" class="ai-suggestion-content small"></div>
                                             </div>
                                         </div>
@@ -845,6 +833,46 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 .teacher-item.disabled:hover { background: inherit; }
                 .signature-canvas { width: 100%; max-width: 420px; border: 1px solid #ced4da; border-radius: 4px; background: #fff; touch-action: none; }
                 .signature-canvas-wrap { user-select: none; }
+                .ai-suggestion-wrap { margin-top: 10px; }
+                .ai-suggestion-label { font-size: 0.9rem; color: #6c757d; margin-bottom: 8px; }
+                .ai-suggestion-list { display: flex; flex-direction: column; gap: 8px; }
+                .ai-suggestion-chip {
+                    border: 1px solid #adb5bd;
+                    border-radius: 6px;
+                    background: #f8f9fa;
+                    color: #5f6b76;
+                    padding: 10px 44px 10px 12px;
+                    position: relative;
+                    font-size: 0.83rem;
+                    line-height: 1.4;
+                    cursor: pointer;
+                    transition: all 0.15s ease-in-out;
+                    text-align: center;
+                    width: 100%;
+                }
+                .ai-suggestion-chip:hover {
+                    border-color: #0d6efd;
+                    background: #eef5ff;
+                    color: #34495e;
+                }
+                .ai-suggestion-chip.is-selected {
+                    border-color: #0d6efd;
+                    background: #eaf3ff;
+                    box-shadow: 0 0 0 0.15rem rgba(13,110,253,.12);
+                }
+                .ai-suggestion-chip-action {
+                    position: absolute;
+                    top: 50%;
+                    right: 8px;
+                    transform: translateY(-50%);
+                    font-size: 0.68rem;
+                    border: 1px solid #0d6efd;
+                    color: #0d6efd;
+                    background: #fff;
+                    border-radius: 4px;
+                    padding: 3px 6px;
+                    white-space: nowrap;
+                }
             `;
             document.head.appendChild(style);
         })();
@@ -1635,7 +1663,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 }
             } catch (err) {
                 console.error(err);
-                const msg = 'AI generation error. Is the AI server running on 127.0.0.1:8008?';
+                const msg = 'AI generation error. Is the AI server running on 127.0.0.1:8001?';
                 setAIDebugStatus(msg, true);
                 if (showAlerts) alert(msg);
             } finally {
@@ -1937,20 +1965,19 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     const list = Array.isArray(options) ? options : [];
                     if (!list.length) return '<div class="text-muted small">No suggestions yet.</div>';
 
-                    return list.map((txt, idx) => `
-                        <div class="border rounded p-2 mb-2 bg-white">
-                            <div class="d-flex justify-content-between align-items-center mb-1">
-                                <strong class="small">Choice ${idx + 1}</strong>
+                    return `
+                        <div class="ai-suggestion-list">
+                            ${list.map((txt) => `
                                 <button type="button"
-                                        class="btn btn-sm btn-outline-primary ai-use-option-btn"
+                                        class="ai-suggestion-chip ai-use-option-btn"
                                         data-target="${targetField}"
-                                        data-text="${encodeURIComponent(txt)}">
-                                    Use in textbox
+                                        data-text="${encodeURIComponent(txt)}"
+                                        style="text-align: center; justify-content: center; align-items: center; white-space: normal;">
+                                    <span style="display: block; width: 100%; text-align: center; text-justify: inter-word;">${escapeHtml(txt)}</span>
                                 </button>
-                            </div>
-                            <div class="small">${escapeHtml(txt)}</div>
+                            `).join('')}
                         </div>
-                    `).join('');
+                    `;
                 }
     </script>
 </body>

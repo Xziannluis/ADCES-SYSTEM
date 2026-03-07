@@ -250,34 +250,45 @@ class FeedbackRetrievalSystem:
         field_name: str,
         evaluation_comment: str,
     ) -> Optional[FeedbackTemplate]:
+        matches = self.retrieve_top_feedback(field_name, evaluation_comment, top_k=1)
+        return matches[0] if matches else None
+
+    def retrieve_top_feedback(
+        self,
+        field_name: str,
+        evaluation_comment: str,
+        top_k: int = 3,
+    ) -> List[FeedbackTemplate]:
         if field_name not in SUPPORTED_FIELDS:
             raise ValueError(f"Unsupported field_name '{field_name}'. Expected one of: {', '.join(SUPPORTED_FIELDS)}")
 
         templates = self.fetch_templates(field_name)
         if not templates:
-            return None
+            return []
 
         query_embedding = self.encode_text(evaluation_comment)
-        best_row: Optional[Dict[str, Any]] = None
-        best_score = -1.0
+        scored_rows: List[Dict[str, Any]] = []
 
         for row in templates:
             stored_embedding = self.deserialize_embedding(row["embedding_vector"])
             score = self.cosine_similarity(query_embedding, stored_embedding)
-            if score > best_score:
-                best_score = score
-                best_row = row
+            copy = dict(row)
+            copy["_score"] = score
+            scored_rows.append(copy)
 
-        if best_row is None:
-            return None
+        scored_rows.sort(key=lambda item: item.get("_score", -1.0), reverse=True)
+        selected = scored_rows[: max(1, int(top_k or 1))]
 
-        return FeedbackTemplate(
-            id=int(best_row["id"]),
-            field_name=str(best_row["field_name"]),
-            evaluation_comment=str(best_row["evaluation_comment"]),
-            feedback_text=str(best_row["feedback_text"]),
-            similarity=best_score,
-        )
+        return [
+            FeedbackTemplate(
+                id=int(row["id"]),
+                field_name=str(row["field_name"]),
+                evaluation_comment=str(row["evaluation_comment"]),
+                feedback_text=str(row["feedback_text"]),
+                similarity=float(row.get("_score", 0.0)),
+            )
+            for row in selected
+        ]
 
     def retrieve_feedback_for_form(self, evaluation_inputs: Dict[str, str]) -> Dict[str, Optional[FeedbackTemplate]]:
         results: Dict[str, Optional[FeedbackTemplate]] = {}
@@ -361,11 +372,25 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
     if per_field <= 0:
         return []
 
-    rating_bands: List[Tuple[str, str, str, str]] = [
-        ("high", "high-performing", "consistently strong", "The observed class shows strong evidence of effective practice"),
-        ("mid", "developing", "partially established", "The observed class shows acceptable but still developing evidence of effective practice"),
-        ("low", "priority support", "not yet consistent", "The observed class shows limited evidence in this area and needs focused improvement support"),
+    rating_bands: List[Tuple[str, str, str, str, str]] = [
+        ("excellent", "high-performing", "highly consistent", "The observed class shows strong evidence of effective practice", "Performance is already strong and should now be sustained and deepened."),
+        ("very satisfactory", "well-developed", "consistently visible", "The observed class shows dependable evidence of effective teaching practice", "Performance is solid, with targeted refinements needed to reach an excellent level."),
+        ("satisfactory", "developing", "partially established", "The observed class shows acceptable but still developing evidence of effective practice", "Performance is workable but still needs more consistent classroom evidence."),
+        ("below satisfactory", "priority support", "not yet consistent", "The observed class shows limited evidence in this area and needs focused improvement support", "Performance needs stronger routines, follow-through, and targeted support."),
+        ("needs improvement", "intensive support", "rarely visible", "The observed class shows minimal evidence in this area and needs immediate instructional support", "Performance should focus first on foundational routines and observable classroom improvement."),
     ]
+
+    subjects = [
+        "Mathematics lesson",
+        "Science lesson",
+        "English lesson",
+        "Programming lesson",
+        "Social studies lesson",
+        "Business class",
+        "General education class",
+        "Laboratory session",
+    ]
+    observation_types = ["formal observation", "informal observation", "classroom walk-through"]
 
     strengths_focuses = [
         ("instructional clarity", "explains concepts clearly and connects examples to lesson goals", "demonstrates strong instructional clarity by presenting key concepts through clear explanations and relevant examples"),
@@ -376,6 +401,10 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         ("learner support", "adapts explanations and guidance when learners need support", "responds to learner needs with appropriate guidance and instructional adjustments"),
         ("questioning technique", "uses questions that encourage thinking and learner participation", "uses purposeful questioning to keep learners thinking and participating throughout the lesson"),
         ("learning climate", "creates a respectful atmosphere where learners remain focused and cooperative", "builds a positive learning climate that supports concentration, respect, and classroom participation"),
+        ("content mastery", "shows command of the lesson content and answers learner questions with confidence", "shows strong content mastery by explaining ideas accurately and responding confidently to learner questions"),
+        ("instructional delivery", "presents lesson steps in a logical sequence and keeps tasks aligned to objectives", "delivers instruction in a logical, objective-aligned sequence that helps learners follow the lesson clearly"),
+        ("student support", "monitors struggling learners and provides timely support during tasks", "supports learner progress by monitoring needs closely and offering timely guidance during classroom tasks"),
+        ("use of resources", "uses instructional materials that help learners understand the lesson", "uses classroom resources and instructional materials effectively to support learner understanding"),
     ]
     strengths_modifiers = [
         ("during whole-class discussion", "throughout the observation period"),
@@ -397,6 +426,10 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         ("instructional differentiation", "activities are delivered in one way and do not yet address varied learner needs", "instructional differentiation could be strengthened so activities better address varied learner readiness and participation levels"),
         ("classroom routines", "classroom routines are not yet applied consistently during shifts in lesson activities", "classroom routines could be strengthened to improve consistency during transitions and independent work"),
         ("learner accountability", "learners are not always held accountable for completing and responding to tasks", "learner accountability routines could be reinforced so more students stay engaged and complete lesson tasks"),
+        ("lesson objectives", "lesson objectives are not always revisited clearly during the observation", "lesson objectives could be emphasized more consistently so learners remain aware of the target outcomes throughout the class"),
+        ("feedback quality", "feedback is present but not always specific enough to guide learner improvement", "feedback quality could be improved by giving learners more specific guidance linked to lesson expectations"),
+        ("engagement strategies", "activities do not always sustain learner attention across the full lesson", "engagement strategies could be strengthened so learner attention remains more consistent from beginning to end of the lesson"),
+        ("monitoring of learning", "learner understanding is not always monitored before the lesson progresses", "monitoring of learning could be more visible so instructional decisions are clearly guided by learner responses"),
     ]
     improvement_modifiers = [
         ("during independent work", "before the lesson moves to the next task"),
@@ -418,6 +451,10 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         ("differentiation", "prepare adjusted supports and extension prompts for learners with different readiness levels", "Provide differentiated supports and extension prompts so lesson tasks remain accessible and challenging for a wider range of learners."),
         ("accountability", "use visible monitoring routines and quick completion checks during learner tasks", "Use visible monitoring routines and quick completion checks so learners remain accountable during guided and independent work."),
         ("routines", "model procedures clearly and revisit classroom routines before each major activity", "Reinforce classroom routines by modeling procedures clearly and revisiting expectations before major lesson activities."),
+        ("lesson objectives", "restate lesson objectives during key transitions and connect each task to the target outcome", "Restate lesson objectives during key transitions and connect each task clearly to the target outcome so learners understand the purpose of each activity."),
+        ("feedback specificity", "give more specific feedback statements linked to learner responses and performance criteria", "Provide more specific feedback statements linked to learner responses and performance criteria so learners know exactly how to improve."),
+        ("content checks", "pause after key explanations and use short oral or written checks before moving on", "Pause after key explanations and use quick oral or written checks before moving forward so learner understanding is confirmed during the lesson."),
+        ("support routines", "plan short teacher check-ins for learners who need additional support during tasks", "Plan brief teacher check-ins for learners who need additional support so instructional guidance becomes more visible during classroom activities."),
     ]
     recommendation_modifiers = [
         "This can make the targeted improvement more visible in the next observation.",
@@ -465,10 +502,12 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         modifier = strengths_modifiers[(index // (len(rating_bands) * len(strengths_focuses))) % len(strengths_modifiers)]
         opener = reflection_phrases[index % len(reflection_phrases)]
         closer = human_closers[(index // len(reflection_phrases)) % len(human_closers)]
+        subject = subjects[index % len(subjects)]
+        observation = observation_types[(index // len(subjects)) % len(observation_types)]
         add(
             "strengths",
-            f"{opener} the teacher shows {band[1]} evidence of {focus[0]} and {focus[1]} {modifier[0]}",
-            f"The teacher {focus[2]} {modifier[1]}. For a {band[0]} rating pattern, this reflects {band[2]} performance in the observed area. {closer}",
+            f"{opener} in the {subject}, the teacher shows {band[1]} evidence of {focus[0]} and {focus[1]} {modifier[0]} during a {observation}",
+            f"The teacher {focus[2]} {modifier[1]}. For a {band[0]} rating pattern, this reflects {band[2]} performance in the observed area. {band[4]} {closer}",
         )
 
     for index in range(per_field):
@@ -477,10 +516,12 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         modifier = improvement_modifiers[(index // (len(rating_bands) * len(improvement_focuses))) % len(improvement_modifiers)]
         opener = reflection_phrases[index % len(reflection_phrases)]
         closer = human_closers[(index // len(reflection_phrases)) % len(human_closers)]
+        subject = subjects[index % len(subjects)]
+        observation = observation_types[(index // len(subjects)) % len(observation_types)]
         add(
             "areas_for_improvement",
-            f"{opener} {focus[1]} {modifier[0]} and reflects a {band[0]}-to-mid performance concern in this criterion",
-            f"The teacher's practice indicates that {focus[2]} {modifier[1]}. This pattern is more common in {band[0]} or developing ratings where the target practice is {band[2]}. {closer}",
+            f"{opener} in the {subject}, {focus[1]} {modifier[0]} during a {observation} and reflects a {band[0]} performance concern in this criterion",
+            f"The teacher's practice indicates that {focus[2]} {modifier[1]}. This pattern is more common in {band[0]} profiles where the target practice is {band[2]}. {band[4]} {closer}",
         )
 
     for index in range(per_field):
@@ -488,10 +529,12 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         focus = recommendation_focuses[(index // len(rating_bands)) % len(recommendation_focuses)]
         closer = recommendation_modifiers[(index // (len(rating_bands) * len(recommendation_focuses))) % len(recommendation_modifiers)]
         opener = reflection_phrases[index % len(reflection_phrases)]
+        subject = subjects[index % len(subjects)]
+        observation = observation_types[(index // len(subjects)) % len(observation_types)]
         add(
             "recommendations",
-            f"{opener} the teacher needs support in {focus[0]} and should {focus[1]} to address a {band[0]} or developing classroom performance pattern",
-            f"{focus[2]} This recommendation is appropriate for {band[0]}, mid, and emerging improvement needs when the observed practice is {band[2]}. {closer}",
+            f"{opener} in the {subject}, the teacher needs support in {focus[0]} and should {focus[1]} to address a {band[0]} classroom performance pattern noted in the {observation}",
+            f"{focus[2]} This recommendation is appropriate when the observed practice is {band[2]} and the rating pattern trends toward {band[0]}. {band[4]} {closer}",
         )
 
     return output

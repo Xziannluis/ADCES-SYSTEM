@@ -25,7 +25,7 @@ if (!in_array($_SESSION['role'] ?? '', [
 $aiBase = getenv('AI_SERVICE_URL');
 if (!$aiBase) {
     // default local base URL
-    $aiBase = 'http://127.0.0.1:8008';
+    $aiBase = 'http://127.0.0.1:8001';
 }
 
 // Debug helper:
