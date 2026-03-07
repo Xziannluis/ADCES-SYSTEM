@@ -1027,16 +1027,36 @@ function getAssignedCoordinators($db, $supervisor_id) {
     <div class="card-body">
         <?php
         // Get teachers with user accounts (filter by selected department if provided)
-        $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id,
-                                GROUP_CONCAT(td.department ORDER BY td.department SEPARATOR ', ') AS secondary_departments
-                        FROM teachers t 
-                        LEFT JOIN users u ON t.user_id = u.id 
-                        LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-                        WHERE (u.role = 'teacher' AND u.id IS NOT NULL)";
-        if (!empty($selected_department)) {
-            $teacher_query .= " AND (t.department = :department OR td.department = :department)";
+        $hasTeacherDepartments = false;
+        try {
+            $teacherDepartmentsCheck = $db->query("SHOW TABLES LIKE 'teacher_departments'");
+            $hasTeacherDepartments = $teacherDepartmentsCheck && $teacherDepartmentsCheck->fetch(PDO::FETCH_NUM);
+        } catch (PDOException $e) {
+            $hasTeacherDepartments = false;
         }
-        $teacher_query .= " GROUP BY t.id ORDER BY t.name ASC";
+
+        if ($hasTeacherDepartments) {
+            $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id,
+                                    GROUP_CONCAT(td.department ORDER BY td.department SEPARATOR ', ') AS secondary_departments
+                            FROM teachers t 
+                            LEFT JOIN users u ON t.user_id = u.id 
+                            LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                            WHERE (u.role = 'teacher' AND u.id IS NOT NULL)";
+            if (!empty($selected_department)) {
+                $teacher_query .= " AND (t.department = :department OR td.department = :department)";
+            }
+            $teacher_query .= " GROUP BY t.id ORDER BY t.name ASC";
+        } else {
+            $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id,
+                                    NULL AS secondary_departments
+                            FROM teachers t 
+                            LEFT JOIN users u ON t.user_id = u.id 
+                            WHERE (u.role = 'teacher' AND u.id IS NOT NULL)";
+            if (!empty($selected_department)) {
+                $teacher_query .= " AND t.department = :department";
+            }
+            $teacher_query .= " ORDER BY t.name ASC";
+        }
 
         $teacher_stmt = $db->prepare($teacher_query);
         if (!empty($selected_department)) {

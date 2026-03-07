@@ -482,12 +482,68 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 </div>
 
                                 <div class="d-flex justify-content-center">
-                                    <button type="button" class="btn" style="color: white; background-color: #31b5c9ff;">
+                                    <button
+                                        type="button"
+                                        id="generateAI"
+                                        class="btn"
+                                        style="color: white; background-color: #31b5c9ff;"
+                                    >
                                         <i class="fas fa-magic me-2"></i> Generate AI Recommendation
                                     </button>
                                 </div>
 
-                                
+                                <div class="mt-2" id="aiDebugPanel" style="display:none; max-width: 900px; margin: 0 auto;">
+                                    <div class="alert alert-info py-2 mb-0" style="font-size: 0.9rem;">
+                                        <strong>AI status:</strong> <span id="aiDebugText">Idle</span>
+                                    </div>
+                                </div>
+
+                                <div class="mt-3" id="aiSuggestionPanel" style="display:none; max-width: 1100px; margin: 0 auto;">
+                                    <div class="card border-0 shadow-sm">
+                                        <div class="card-header d-flex justify-content-between align-items-center" style="background: #eef9fc;">
+                                            <div>
+                                                <strong>AI Suggestion Box</strong>
+                                                <div class="small text-muted">Generated comments stay here first. Use the button inside a category if you want to copy it into the textbox.</div>
+                                            </div>
+                                            <span class="badge bg-info text-dark" id="aiSuggestionMeta">Waiting for generation</span>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="row g-3">
+                                                <div class="col-md-4">
+                                                    <div class="border rounded p-3 h-100 bg-light">
+                                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                                            <h6 class="mb-0">Strengths</h6>
+                                                            <button type="button" class="btn btn-sm btn-outline-primary ai-apply-btn" data-target="strengths">Use in textbox</button>
+                                                        </div>
+                                                        <div class="small text-muted mb-2">3 paragraphs • 2-3 sentences each</div>
+                                                        <div id="aiSuggestionStrengths" class="ai-suggestion-content small"></div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <div class="border rounded p-3 h-100 bg-light">
+                                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                                            <h6 class="mb-0">Areas for Improvement</h6>
+                                                            <button type="button" class="btn btn-sm btn-outline-primary ai-apply-btn" data-target="improvementAreas">Use in textbox</button>
+                                                        </div>
+                                                        <div class="small text-muted mb-2">3 paragraphs • 2-3 sentences each</div>
+                                                        <div id="aiSuggestionImprovements" class="ai-suggestion-content small"></div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <div class="border rounded p-3 h-100 bg-light">
+                                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                                            <h6 class="mb-0">Recommendations</h6>
+                                                            <button type="button" class="btn btn-sm btn-outline-primary ai-apply-btn" data-target="recommendations">Use in textbox</button>
+                                                        </div>
+                                                        <div class="small text-muted mb-2">3 paragraphs • 2-3 sentences each</div>
+                                                        <div id="aiSuggestionRecommendations" class="ai-suggestion-content small"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <!-- Strengths and Areas for Improvement -->
                                 <div class="row mt-4">
                                     <div class="col-md-6">
@@ -1166,7 +1222,249 @@ if($_POST && isset($_POST['submit_evaluation'])) {
         function initializeEvaluationForm() {
             setupAutoSave();
             calculateAverages();
-            generateAIRecommendations();
+
+            const genBtn = document.getElementById('generateAI');
+            if (genBtn && !genBtn.dataset.aiBound) {
+                genBtn.dataset.aiBound = '1';
+                genBtn.addEventListener('click', function () {
+                    if (this.disabled) return;
+                    generateAINarratives({ force: true, showAlerts: true });
+                });
+            }
+
+            document.querySelectorAll('.ai-apply-btn').forEach(btn => {
+                if (btn.dataset.aiBound) return;
+                btn.dataset.aiBound = '1';
+                btn.addEventListener('click', () => applyAISuggestion(btn.dataset.target));
+            });
+        }
+
+        document.addEventListener('click', function (e) {
+            const btn = e.target.closest('.ai-use-option-btn');
+            if (!btn) return;
+
+            const target = btn.getAttribute('data-target');
+            const text = btn.getAttribute('data-text') || '';
+            const fieldMap = {
+                strengths: 'strengths',
+                improvement_areas: 'improvementAreas',
+                recommendations: 'recommendations'
+            };
+            const fieldId = fieldMap[target];
+            const textarea = fieldId ? document.getElementById(fieldId) : null;
+            if (!textarea) return;
+            textarea.value = text;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+
+        function setAIDebug(text) {
+            const panel = document.getElementById('aiDebugPanel');
+            const textEl = document.getElementById('aiDebugText');
+            if (!panel || !textEl) return;
+            panel.style.display = 'block';
+            textEl.textContent = text || 'Idle';
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function renderOptionCards(options, targetField) {
+            const list = Array.isArray(options) && options.length ? options : [];
+
+            if (!list.length) {
+                return '<div class="text-muted fst-italic">No AI suggestions available yet.</div>';
+            }
+
+            return list.map((option, idx) => {
+                const safeText = escapeHtml(option).replace(/\n/g, '<br>');
+                const attrText = escapeHtml(option);
+                return `
+                    <div class="border rounded bg-white p-2 mb-2">
+                        <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+                            <span class="badge bg-secondary">Choice ${idx + 1}</span>
+                            <button
+                                type="button"
+                                class="btn btn-sm btn-outline-primary ai-use-option-btn"
+                                data-target="${targetField}"
+                                data-text="${attrText}"
+                            >
+                                Use in textbox
+                            </button>
+                        </div>
+                        <div>${safeText}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function showAISuggestions(data = {}, dbg = {}) {
+            const panel = document.getElementById('aiSuggestionPanel');
+            const meta = document.getElementById('aiSuggestionMeta');
+            const strengths = document.getElementById('aiSuggestionStrengths');
+            const improvements = document.getElementById('aiSuggestionImprovements');
+            const recommendations = document.getElementById('aiSuggestionRecommendations');
+
+            if (!panel || !strengths || !improvements || !recommendations) return;
+
+            strengths.innerHTML = renderOptionCards(data.strengths_options, 'strengths');
+            improvements.innerHTML = renderOptionCards(data.improvement_areas_options, 'improvement_areas');
+            recommendations.innerHTML = renderOptionCards(data.recommendations_options, 'recommendations');
+
+            if (meta) {
+                const retrieved = Number(dbg?.retrieved_matches || 0);
+                meta.textContent = retrieved > 0
+                    ? `Ready • ${retrieved} reference match${retrieved === 1 ? '' : 'es'}`
+                    : 'Ready • Retrieval fallback used';
+            }
+
+            panel.style.display = 'block';
+        }
+
+        function applyAISuggestion(target) {
+            const data = window.__lastAISuggestions || {};
+            const map = {
+                strengths: {
+                    fieldId: 'strengths',
+                    value: Array.isArray(data.strengths_options) && data.strengths_options.length ? data.strengths_options[0] : (data.strengths || '')
+                },
+                improvementAreas: {
+                    fieldId: 'improvementAreas',
+                    value: Array.isArray(data.improvement_areas_options) && data.improvement_areas_options.length ? data.improvement_areas_options[0] : (data.improvement_areas || '')
+                },
+                recommendations: {
+                    fieldId: 'recommendations',
+                    value: Array.isArray(data.recommendations_options) && data.recommendations_options.length ? data.recommendations_options[0] : (data.recommendations || '')
+                }
+            };
+
+            const item = map[target];
+            if (!item) return;
+            const field = document.getElementById(item.fieldId);
+            if (!field) return;
+
+            field.value = item.value || '';
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        function collectEvaluationComments() {
+            const comments = [];
+            document.querySelectorAll('input[name$="comment0"], input[name$="comment1"], input[name$="comment2"], input[name$="comment3"], input[name$="comment4"], input[name$="comment5"], input[name$="comment6"], input[name$="comment7"], input[name$="comment8"], input[name$="comment9"], input[name$="comment10"], input[name$="comment11"]').forEach(input => {
+                const value = (input.value || '').trim();
+                if (value) comments.push(value);
+            });
+            return comments;
+        }
+
+        function hasMeaningfulEvaluationInput() {
+            const checkedRatings = document.querySelectorAll(
+                'input[name^="communications"]:checked, input[name^="management"]:checked, input[name^="assessment"]:checked'
+            ).length;
+            const filledComments = collectEvaluationComments().length > 0;
+            return checkedRatings > 0 || filledComments;
+        }
+
+        async function generateAINarratives(options = {}) {
+            const { force = false, showAlerts = false } = options;
+            const btn = document.getElementById('generateAI');
+            const formData = getFormData();
+            const averages = calculateAverages();
+
+            if (!force && btn?.disabled) {
+                return;
+            }
+
+            if (!hasMeaningfulEvaluationInput()) {
+                const msg = 'Please rate at least one indicator or enter evaluation comments first so the AI can base its suggestions on the actual evaluation form.';
+                setAIDebug(msg);
+                if (showAlerts) {
+                    alert(msg);
+                }
+                return;
+            }
+
+            const payload = {
+                comments: collectEvaluationComments(),
+                average_ratings: {
+                    communications: Number(averages.communications || 0),
+                    management: Number(averages.management || 0),
+                    assessment: Number(averages.assessment || 0),
+                    overall: Number(averages.overall || 0)
+                },
+                subject: formData.subject_observed || '',
+                observation_type: formData.observation_type || '',
+                evaluator_role: <?php echo json_encode($_SESSION['role'] ?? ''); ?>,
+                department: formData.department || ''
+            };
+
+            const originalHtml = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Generating...';
+            }
+            setAIDebug('Generating retrieval-based suggestions...');
+
+            try {
+                const response = await fetch('../controllers/AIController.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                if (!response.ok || !result.success || !result.data) {
+                    throw new Error(result.message || 'AI generation failed.');
+                }
+
+                const ai = result.data;
+                const dbg = result.debug || {};
+                window.__lastAISuggestions = {
+                    strengths: ai.strengths || '',
+                    improvement_areas: ai.improvement_areas || '',
+                    recommendations: ai.recommendations || '',
+                    strengths_options: Array.isArray(ai.strengths_options) ? ai.strengths_options : (ai.strengths ? [ai.strengths] : []),
+                    improvement_areas_options: Array.isArray(ai.improvement_areas_options) ? ai.improvement_areas_options : (ai.improvement_areas ? [ai.improvement_areas] : []),
+                    recommendations_options: Array.isArray(ai.recommendations_options) ? ai.recommendations_options : (ai.recommendations ? [ai.recommendations] : [])
+                };
+
+                showAISuggestions(window.__lastAISuggestions, dbg);
+                setAIDebug(`Done. Retrieved ${Number(dbg?.retrieved_matches || 0)} reference match(es). Choose one option per category if you want to copy it into the textbox.`);
+
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-magic me-2"></i>Generate AI Recommendation Again';
+                    btn.classList.remove('btn-secondary');
+                    btn.style.backgroundColor = '#31b5c9ff';
+                }
+
+                if (showAlerts) {
+                    console.log('AI narratives generated successfully.');
+                }
+            } catch (error) {
+                console.error(error);
+                setAIDebug(`Failed: ${error.message}`);
+                if (showAlerts) {
+                    alert(`Failed to generate AI suggestions: ${error.message}`);
+                }
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
+            } finally {
+                if (btn && btn.innerHTML.includes('Generating...')) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
+            }
         }
 
         // Enhanced teacher selection with search

@@ -42,6 +42,12 @@ if (!empty($_POST)) {
 
     $database = new Database();
     $db = $database->getConnection();
+
+    if(!$db) {
+        $_SESSION['error'] = "Database connection is unavailable right now. Please make sure MySQL is running in XAMPP, then try again.";
+        header("Location: ../login.php");
+        exit();
+    }
     
     $user = new User($db);
     $user->username = $_POST['username'];

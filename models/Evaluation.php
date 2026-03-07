@@ -263,7 +263,7 @@ class Evaluation {
     // Create new evaluation
     public function create($data) {
         $query = "INSERT INTO " . $this->table_name . " 
-                 (teacher_id, evaluator_id, academic_year, semester, 
+                 (teacher_id, faculty_name, department, evaluator_id, academic_year, semester, 
                   subject_observed, observation_date, observation_type,
                   seat_plan, course_syllabi, others_requirements, others_specify,
                   communications_avg, management_avg, assessment_avg, overall_avg,
@@ -271,7 +271,7 @@ class Evaluation {
                   rater_signature, rater_date, faculty_signature, faculty_date,
                   status, created_at) 
                  VALUES 
-                 (:teacher_id, :evaluator_id, :academic_year, :semester,
+                 (:teacher_id, :faculty_name, :department, :evaluator_id, :academic_year, :semester,
                   :subject_observed, :observation_date, :observation_type,
                   :seat_plan, :course_syllabi, :others_requirements, :others_specify,
                   :communications_avg, :management_avg, :assessment_avg, :overall_avg,
@@ -283,6 +283,8 @@ class Evaluation {
         
         // Bind parameters
         $stmt->bindParam(':teacher_id', $data['teacher_id']);
+    $stmt->bindParam(':faculty_name', $data['faculty_name']);
+    $stmt->bindParam(':department', $data['department']);
         $stmt->bindParam(':evaluator_id', $data['evaluator_id']);
         $stmt->bindParam(':academic_year', $data['academic_year']);
         $stmt->bindParam(':semester', $data['semester']);

@@ -4,9 +4,19 @@
  * Imports the database and sets up test users
  */
 
+$dbHost = '127.0.0.1';
+$dbPort = '3306';
+$dbName = 'ai_classroom_eval';
+$dbUser = 'root';
+$dbPass = '';
+
 // Connection to MySQL server (no database selected yet)
 try {
-    $conn = new PDO("mysql:host=localhost", "root", "");
+    $conn = new PDO("mysql:host={$dbHost};port={$dbPort};charset=utf8mb4", $dbUser, $dbPass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_TIMEOUT => 5,
+    ]);
     $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     echo "<h2>✓ Connected to MySQL server</h2>";
 } catch(PDOException $e) {
@@ -15,10 +25,10 @@ try {
 
 // Drop and recreate database
 try {
-    $conn->exec("DROP DATABASE IF EXISTS `ai_classroom_eval`");
+    $conn->exec("DROP DATABASE IF EXISTS `{$dbName}`");
     echo "<p>✓ Dropped old database (if exists)</p>";
     
-    $conn->exec("CREATE DATABASE `ai_classroom_eval` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    $conn->exec("CREATE DATABASE `{$dbName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
     echo "<p>✓ Created new database</p>";
 } catch(PDOException $e) {
     die("<h2 style='color: red;'>✗ Cannot create database: " . $e->getMessage() . "</h2>");
@@ -26,10 +36,13 @@ try {
 
 // Now connect to the new database
 try {
-    $db = new PDO("mysql:host=localhost;dbname=ai_classroom_eval", "root", "");
-    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $db = new PDO("mysql:host={$dbHost};port={$dbPort};dbname={$dbName};charset=utf8mb4", $dbUser, $dbPass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_TIMEOUT => 5,
+    ]);
     $db->exec("set names utf8mb4");
-    echo "<p>✓ Connected to ai_classroom_eval database</p>";
+    echo "<p>✓ Connected to {$dbName} database</p>";
 } catch(PDOException $e) {
     die("<h2 style='color: red;'>✗ Cannot connect to database: " . $e->getMessage() . "</h2>");
 }
@@ -60,7 +73,7 @@ foreach ($lines as $line) {
 $filtered_sql = implode("\n", $filtered);
 
 // Use mysqli multi_query to execute the SQL script reliably
-$mysqli = new mysqli('localhost', 'root', '', 'ai_classroom_eval');
+$mysqli = new mysqli($dbHost, $dbUser, $dbPass, $dbName, (int)$dbPort);
 if ($mysqli->connect_errno) {
     die("<h2 style='color: red;'>✗ MySQLi connection failed: " . htmlspecialchars($mysqli->connect_error) . "</h2>");
 }
@@ -85,6 +98,25 @@ if ($mysqli->multi_query($filtered_sql)) {
 }
 
 $mysqli->close();
+
+// Ensure newer support tables exist even if the imported seed file is older.
+try {
+    $db->exec(
+        "CREATE TABLE IF NOT EXISTS `teacher_departments` (
+            `id` INT PRIMARY KEY AUTO_INCREMENT,
+            `teacher_id` INT NOT NULL,
+            `department` VARCHAR(100) NOT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (`teacher_id`) REFERENCES `teachers`(`id`) ON DELETE CASCADE,
+            UNIQUE KEY `teacher_department_unique` (`teacher_id`, `department`),
+            KEY `teacher_department_teacher_idx` (`teacher_id`),
+            KEY `teacher_department_department_idx` (`department`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    echo "<p>✓ Ensured teacher_departments table exists</p>";
+} catch (PDOException $e) {
+    echo "<p style='color: orange;'>Could not create teacher_departments table automatically: " . htmlspecialchars($e->getMessage()) . "</p>";
+}
 
 // Update passwords with bcrypt hashes
 $test_users = [

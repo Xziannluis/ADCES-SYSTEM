@@ -15,6 +15,14 @@ require_once '../includes/program_assignments.php';
 $database = new Database();
 $db = $database->getConnection();
 
+$hasTeacherDepartments = false;
+try {
+    $teacherDepartmentsCheck = $db ? $db->query("SHOW TABLES LIKE 'teacher_departments'") : false;
+    $hasTeacherDepartments = $teacherDepartmentsCheck && $teacherDepartmentsCheck->fetch(PDO::FETCH_NUM);
+} catch (PDOException $e) {
+    $hasTeacherDepartments = false;
+}
+
 $teacher = new Teacher($db);
 $evaluation = new Evaluation($db);
 
@@ -30,11 +38,15 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
         foreach ($assignedPrograms as $idx => $dept) {
             $programPlaceholders[] = ':program_' . $idx;
         }
-        $secondaryProgramPlaceholders = [];
-        foreach ($assignedPrograms as $idx => $dept) {
-            $secondaryProgramPlaceholders[] = ':secondary_program_' . $idx;
+        if ($hasTeacherDepartments) {
+            $secondaryProgramPlaceholders = [];
+            foreach ($assignedPrograms as $idx => $dept) {
+                $secondaryProgramPlaceholders[] = ':secondary_program_' . $idx;
+            }
+            $assigned_query .= " AND (t.department IN (" . implode(',', $programPlaceholders) . ") OR EXISTS (SELECT 1 FROM teacher_departments td WHERE td.teacher_id = t.id AND td.department IN (" . implode(',', $secondaryProgramPlaceholders) . ")))";
+        } else {
+            $assigned_query .= " AND t.department IN (" . implode(',', $programPlaceholders) . ")";
         }
-        $assigned_query .= " AND (t.department IN (" . implode(',', $programPlaceholders) . ") OR EXISTS (SELECT 1 FROM teacher_departments td WHERE td.teacher_id = t.id AND td.department IN (" . implode(',', $secondaryProgramPlaceholders) . ")))";
     }
     $assigned_query .= " ORDER BY t.name";
     $stmt = $db->prepare($assigned_query);
@@ -42,22 +54,35 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
     if (!empty($assignedPrograms)) {
         foreach ($assignedPrograms as $idx => $dept) {
             $stmt->bindValue(':program_' . $idx, $dept);
-            $stmt->bindValue(':secondary_program_' . $idx, $dept);
+            if ($hasTeacherDepartments) {
+                $stmt->bindValue(':secondary_program_' . $idx, $dept);
+            }
         }
     }
     $stmt->execute();
     $teachers = $stmt; // mimic PDOStatement for compatibility with view loop
 } else {
     // Deans/principals can evaluate teachers in their department AND teachers assigned to them (cross-department)
+    if ($hasTeacherDepartments) {
         $query = "SELECT DISTINCT t.*
               FROM teachers t
               LEFT JOIN users u ON t.user_id = u.id
               LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id
-                            LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+              LEFT JOIN teacher_departments td ON td.teacher_id = t.id
               WHERE t.status = 'active'
-                                AND (t.department = :department OR td.department = :department OR ta.evaluator_id IS NOT NULL)
+                AND (t.department = :department OR td.department = :department OR ta.evaluator_id IS NOT NULL)
                 AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
               ORDER BY t.name ASC";
+    } else {
+        $query = "SELECT DISTINCT t.*
+              FROM teachers t
+              LEFT JOIN users u ON t.user_id = u.id
+              LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id
+              WHERE t.status = 'active'
+                AND (t.department = :department OR ta.evaluator_id IS NOT NULL)
+                AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
+              ORDER BY t.name ASC";
+    }
     $stmt = $db->prepare($query);
     $stmt->bindParam(':department', $_SESSION['department']);
     $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
@@ -622,6 +647,12 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     </div>
                                 </div>
 
+                                <div class="mt-3" id="aiSuggestionPanel" style="display:none; max-width: 1100px; margin: 0 auto;">
+                                    <div class="d-flex justify-content-end align-items-center mb-2">
+                                        <span class="badge bg-info text-dark" id="aiSuggestionMeta">Waiting for generation</span>
+                                    </div>
+                                </div>
+
                                 <!-- Strengths and Areas for Improvement -->
                                 <div class="row mt-4">
                                     <div class="col-md-6">
@@ -631,6 +662,16 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             </span>
                                             <textarea class="form-control" id="strengths" name="strengths" rows="3" placeholder="List the teacher's strengths observed during the evaluation"></textarea>
                                         </div>
+                                        <div class="mt-2 ai-category-panel" id="aiStrengthsPanel" style="display:none;">
+                                            <div class="border rounded p-3 h-100 bg-light">
+                                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                                    <h6 class="mb-0">Strengths</h6>
+                                                    <button type="button" class="btn btn-sm btn-outline-primary ai-apply-btn" data-target="strengths">Use in textbox</button>
+                                                </div>
+                                                <div class="small text-muted mb-2">3 paragraphs • 2-3 sentences each</div>
+                                                <div id="aiSuggestionStrengths" class="ai-suggestion-content small"></div>
+                                            </div>
+                                        </div>
                                     </div>
                                     <div class="col-md-6">
                                         <div class="input-group">
@@ -638,6 +679,16 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                                 AREAS FOR IMPROVEMENT:
                                             </span>
                                             <textarea class="form-control" id="improvementAreas" name="improvement_areas" rows="3" placeholder="List areas where the teacher can improve"></textarea>
+                                        </div>
+                                        <div class="mt-2 ai-category-panel" id="aiImprovementsPanel" style="display:none;">
+                                            <div class="border rounded p-3 h-100 bg-light">
+                                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                                    <h6 class="mb-0">Areas for Improvement</h6>
+                                                    <button type="button" class="btn btn-sm btn-outline-primary ai-apply-btn" data-target="improvementAreas">Use in textbox</button>
+                                                </div>
+                                                <div class="small text-muted mb-2">3 paragraphs • 2-3 sentences each</div>
+                                                <div id="aiSuggestionImprovements" class="ai-suggestion-content small"></div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -649,6 +700,16 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                                 RECOMMENDATIONS:
                                             </span>
                                             <textarea class="form-control" id="recommendations" name="recommendations" rows="3" placeholder="Provide specific recommendations for improvement"></textarea>
+                                        </div>
+                                        <div class="mt-2 ai-category-panel" id="aiRecommendationsPanel" style="display:none;">
+                                            <div class="border rounded p-3 h-100 bg-light">
+                                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                                    <h6 class="mb-0">Recommendations</h6>
+                                                    <button type="button" class="btn btn-sm btn-outline-primary ai-apply-btn" data-target="recommendations">Use in textbox</button>
+                                                </div>
+                                                <div class="small text-muted mb-2">3 paragraphs • 2-3 sentences each</div>
+                                                <div id="aiSuggestionRecommendations" class="ai-suggestion-content small"></div>
+                                            </div>
                                         </div>
                                     </div>
                                         <div class="col-md-6">
@@ -1017,6 +1078,27 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     generateAINarratives({ force: true, showAlerts: true });
                 });
             }
+
+            document.querySelectorAll('.ai-apply-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    applyAISuggestion(this.dataset.target);
+                });
+            });
+
+            document.addEventListener('click', function (e) {
+    const btn = e.target.closest('.ai-use-option-btn');
+    if (!btn) return;
+
+    const target = btn.getAttribute('data-target');
+    const text = decodeURIComponent(btn.getAttribute('data-text') || '');
+
+    let textarea = null;
+    if (target === 'strengths') textarea = document.getElementById('strengths');
+    else if (target === 'improvement_areas') textarea = document.getElementById('improvementAreas');
+    else if (target === 'recommendations') textarea = document.getElementById('recommendations');
+
+    if (textarea) textarea.value = text || textarea.value;
+});
         }
 
         function startEvaluation(teacherId) {
@@ -1336,6 +1418,77 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             if (panel) panel.style.display = show ? 'block' : 'none';
         }
 
+        function escapeAiSuggestionHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function renderAISuggestionParagraphs(text) {
+            const normalized = String(text || '').trim();
+            if (!normalized) {
+                return '<p class="text-muted mb-0">No suggestion generated yet.</p>';
+            }
+
+            return normalized
+                .split(/\n\s*\n/)
+                .map(part => part.trim())
+                .filter(Boolean)
+                .map((paragraph, index) => `<p class="mb-3"><strong class="text-muted">Paragraph ${index + 1}:</strong><br>${escapeAiSuggestionHtml(paragraph)}</p>`)
+                .join('');
+        }
+
+        function showAISuggestions(data = {}, dbg = {}) {
+            const panel = document.getElementById('aiSuggestionPanel');
+            const strengthsBox = document.getElementById('aiSuggestionStrengths');
+            const improvementsBox = document.getElementById('aiSuggestionImprovements');
+            const recommendationsBox = document.getElementById('aiSuggestionRecommendations');
+            const strengthsPanel = document.getElementById('aiStrengthsPanel');
+            const improvementsPanel = document.getElementById('aiImprovementsPanel');
+            const recommendationsPanel = document.getElementById('aiRecommendationsPanel');
+            const meta = document.getElementById('aiSuggestionMeta');
+
+            if (!panel || !strengthsBox || !improvementsBox || !recommendationsBox) {
+                return;
+            }
+
+            strengthsBox.innerHTML = renderOptionCards(data.strengths_options || [data.strengths || ''], 'strengths');
+            improvementsBox.innerHTML = renderOptionCards(data.improvement_areas_options || [data.improvement_areas || ''], 'improvement_areas');
+            recommendationsBox.innerHTML = renderOptionCards(data.recommendations_options || [data.recommendations || ''], 'recommendations');
+
+            if (meta) {
+                const sourceSummary = dbg.reference_sources && typeof dbg.reference_sources === 'object'
+                    ? Object.entries(dbg.reference_sources).map(([key, value]) => `${key}:${value}`).join(', ')
+                    : 'n/a';
+                meta.textContent = `Ready • refs ${dbg.reference_examples_used ?? 0} • ${dbg.fallback_used ? 'fallback' : 'model'} • ${sourceSummary}`;
+            }
+
+            panel.style.display = 'block';
+            if (strengthsPanel) strengthsPanel.style.display = 'block';
+            if (improvementsPanel) improvementsPanel.style.display = 'block';
+            if (recommendationsPanel) recommendationsPanel.style.display = 'block';
+        }
+
+        function applyAISuggestion(targetId) {
+            const textarea = document.getElementById(targetId);
+            const data = window.__lastAISuggestions || {};
+            if (!textarea) return;
+
+            if (targetId === 'strengths') {
+                textarea.value = data.strengths || textarea.value;
+            } else if (targetId === 'improvementAreas') {
+                textarea.value = data.improvement_areas || textarea.value;
+            } else if (targetId === 'recommendations') {
+                textarea.value = data.recommendations || textarea.value;
+            }
+
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            textarea.focus();
+        }
+
         function buildAIPayloadFromForm() {
             // Use existing getFormData() if available (keeps shapes consistent)
             if (typeof getFormData === 'function') {
@@ -1366,6 +1519,17 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             };
         }
 
+        function hasMeaningfulEvaluationInput() {
+            const checkedRatings = document.querySelectorAll(
+                'input[name^="communications"]:checked, input[name^="management"]:checked, input[name^="assessment"]:checked'
+            ).length;
+
+            const commentInputs = document.querySelectorAll('input[name^="communications_comment"], input[name^="management_comment"], input[name^="assessment_comment"]');
+            const filledComments = Array.from(commentInputs).some(input => (input.value || '').trim().length > 0);
+
+            return checkedRatings > 0 || filledComments;
+        }
+
         async function generateAINarratives(options = {}) {
             const { force = false, showAlerts = false } = options;
 
@@ -1375,7 +1539,14 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             const recEl = document.getElementById('recommendations');
 
             if (!strengthsEl || !improvementEl || !recEl) {
-                if (showAlerts) alert('AI fields not found on the page.');
+                if (showAlerts) alert('Evaluation fields not found on the page.');
+                return;
+            }
+
+            if (!hasMeaningfulEvaluationInput()) {
+                const msg = 'Please rate at least one indicator or enter evaluation comments first so the AI can base its suggestions on the actual evaluation form.';
+                setAIDebugStatus(msg, true);
+                if (showAlerts) alert(msg);
                 return;
             }
 
@@ -1389,21 +1560,10 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 delete btn.dataset.prevText;
             };
 
-            // If user already has text and not forcing, do nothing
-            if (!force && (
-                (strengthsEl.value || '').trim() ||
-                (improvementEl.value || '').trim() ||
-                (recEl.value || '').trim()
-            )) {
-                restoreButton();
-                return;
-            }
-
             const payload = buildAIPayloadFromForm();
 
             if (btn) {
                 btn.disabled = true;
-                // Only capture original text once; don't overwrite it with "Generating..."
                 if (!btn.dataset.prevText) btn.dataset.prevText = btn.innerHTML;
                 btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Generating...';
             }
@@ -1446,17 +1606,42 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 }
 
                 const out = data.data || {};
-                strengthsEl.value = out.strengths || strengthsEl.value;
-                improvementEl.value = out.improvement_areas || improvementEl.value;
-                recEl.value = out.recommendations || recEl.value;
-                setAIDebugStatus('Done', true);
+                window.__lastAISuggestions = {
+                    strengths: out.strengths || '',
+                    improvement_areas: out.improvement_areas || '',
+                    recommendations: out.recommendations || '',
+                    strengths_options: out.strengths_options || [],
+                    improvement_areas_options: out.improvement_areas_options || [],
+                    recommendations_options: out.recommendations_options || []
+                };
+                const dbg = out.debug || {};
+                const dbgParts = ['Done'];
+                if (typeof dbg.reference_examples_used !== 'undefined') {
+                    dbgParts.push(`refs=${dbg.reference_examples_used}`);
+                }
+                if (dbg.reference_sources && typeof dbg.reference_sources === 'object') {
+                    dbgParts.push(`sources=${JSON.stringify(dbg.reference_sources)}`);
+                }
+                if (typeof dbg.fallback_used !== 'undefined') {
+                    dbgParts.push(`fallback=${dbg.fallback_used ? 'yes' : 'no'}`);
+                }
+                showAISuggestions(window.__lastAISuggestions, dbg);
+                setAIDebugStatus(dbgParts.join(' | '), true);
+
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-magic me-2"></i>Generate AI Recommendation Again';
+                    btn.classList.remove('btn-secondary', 'btn-primary', 'btn-success');
+                }
             } catch (err) {
                 console.error(err);
                 const msg = 'AI generation error. Is the AI server running on 127.0.0.1:8008?';
                 setAIDebugStatus(msg, true);
                 if (showAlerts) alert(msg);
             } finally {
-                restoreButton();
+                if (btn && btn.innerHTML.includes('Generating...')) {
+                    restoreButton();
+                }
             }
         }
 
@@ -1746,6 +1931,26 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 btn.innerHTML = originalText;
                                 btn.disabled = false;
                         }
+                }
+
+                function renderOptionCards(options, targetField) {
+                    const list = Array.isArray(options) ? options : [];
+                    if (!list.length) return '<div class="text-muted small">No suggestions yet.</div>';
+
+                    return list.map((txt, idx) => `
+                        <div class="border rounded p-2 mb-2 bg-white">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <strong class="small">Choice ${idx + 1}</strong>
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-primary ai-use-option-btn"
+                                        data-target="${targetField}"
+                                        data-text="${encodeURIComponent(txt)}">
+                                    Use in textbox
+                                </button>
+                            </div>
+                            <div class="small">${escapeHtml(txt)}</div>
+                        </div>
+                    `).join('');
                 }
     </script>
 </body>

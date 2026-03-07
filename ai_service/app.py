@@ -1,38 +1,35 @@
-import os
-from functools import lru_cache
-from typing import Any, Dict, List, Optional, Union
-import random
-import traceback
-import pathlib
+import hashlib
 import json
+import os
+import pathlib
+import random
+import re
+import traceback
 from datetime import datetime
+from functools import lru_cache
 from threading import Lock
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import numpy as np
-
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from fastapi import HTTPException
 
-# NOTE:
-# This service is designed to run locally (same machine as XAMPP).
-# It provides a JSON API that your PHP app can call via HTTP.
+from feedback_retrieval_system import FeedbackRetrievalSystem, build_mysql_seed_system
 
-app = FastAPI(title="ADCES AI Service", version="1.0.0")
+
+app = FastAPI(title="ADCES AI Service", version="2.0.0")
 
 
 @app.get("/health")
 async def health():
-    """Basic health check used by the PHP proxy and smoke tests."""
     return {"ok": True}
 
 
 @app.exception_handler(RequestValidationError)
 async def _validation_exception_handler(request: Request, exc: RequestValidationError):
-    # Return a friendlier JSON payload for frontend/PHP troubleshooting
     try:
-        # Show in terminal to immediately see what's failing
         print("[422] Validation error on", request.url.path)
         for err in exc.errors():
             print("  ", err)
@@ -49,7 +46,6 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
 
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: Request, exc: Exception):
-    # Always return JSON so PHP/JS won't say "invalid JSON"
     print("[500] Unhandled error on", request.url.path)
     traceback.print_exc()
     return JSONResponse(
@@ -64,7 +60,6 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.post("/debug/echo")
 async def debug_echo(request: Request):
-    """Debug endpoint: echoes whatever JSON payload was received."""
     try:
         body = await request.json()
     except Exception:
@@ -72,45 +67,193 @@ async def debug_echo(request: Request):
     return {"ok": True, "received": body}
 
 
-# Simple feedback collection to gather human judgments / corrections for later fine-tuning.
-FEEDBACK_PATH = pathlib.Path(__file__).parent / "ai_feedback.jsonl"
+BASE_PATH = pathlib.Path(__file__).parent
+ROOT_PATH = BASE_PATH.resolve().parent.parent
+PHP_DB_CONFIG_PATH = ROOT_PATH / "config" / "database.php"
+FEEDBACK_PATH = BASE_PATH / "ai_feedback.jsonl"
+REFERENCE_EVALS_PATH = BASE_PATH / "reference_evaluations.jsonl"
+IMPORTED_REFERENCE_EVALS_PATH = BASE_PATH / "reference_evaluations.imported.jsonl"
+EMBEDDINGS_CACHE_PATH = BASE_PATH / "comment_embeddings_cache.npz"
 _feedback_lock = Lock()
+_embedding_lock = Lock()
+
+TOP_K_RETRIEVAL = 5
+OUTPUT_RECOMMENDATIONS = 3
+DEFAULT_SIMILARITY_THRESHOLD = 0.15
+
+DOMAIN_ALIASES = {
+    "communications": "Communication & instruction",
+    "communication": "Communication & instruction",
+    "instruction": "Communication & instruction",
+    "management": "Classroom management & learning environment",
+    "classroom_management": "Classroom management & learning environment",
+    "assessment": "Assessment & feedback practices",
+    "assessment_feedback": "Assessment & feedback practices",
+    "feedback": "Assessment & feedback practices",
+}
+
+DOMAIN_ACTIONS = {
+    "Communication & instruction": [
+        "use clear modeling before independent work",
+        "add short guided questioning routines",
+        "include quick understanding checks before moving on",
+        "give concise directions supported by examples",
+    ],
+    "Classroom management & learning environment": [
+        "tighten transition routines between activities",
+        "reinforce clear expectations throughout the lesson",
+        "use visible time cues to maintain lesson pace",
+        "strengthen classroom procedures for group and independent work",
+    ],
+    "Assessment & feedback practices": [
+        "embed brief formative checks during instruction",
+        "give immediate feedback linked to lesson targets",
+        "use short follow-up prompts to verify learner understanding",
+        "provide opportunities for learners to revise after feedback",
+    ],
+}
+
+OPENERS = [
+    "A practical next step is to",
+    "To strengthen the next lesson, consider",
+    "An effective follow-through action is to",
+    "Continued improvement may be supported by",
+    "To build on the current evidence, it would help to",
+]
+
+CLOSERS = [
+    "This can help improve consistency and learner response during class activities.",
+    "This may support stronger classroom evidence in the next observation cycle.",
+    "This should make the targeted improvement more visible during instruction.",
+    "This can strengthen lesson clarity and support better follow-through for learners.",
+]
+
+LEADING_PHRASE_SWAPS = {
+    "use": ["use", "apply", "incorporate"],
+    "add": ["add", "build in", "introduce"],
+    "include": ["include", "integrate", "build in"],
+    "give": ["give", "provide", "offer"],
+    "tighten": ["tighten", "strengthen", "refine"],
+    "reinforce": ["reinforce", "clarify", "highlight"],
+    "embed": ["embed", "integrate", "plan"],
+    "provide": ["provide", "offer", "deliver"],
+    "strengthen": ["strengthen", "improve", "refine"],
+}
+
+COMMENT_PHRASE_SWAPS = {
+    "clear": ["clear", "explicit", "well-defined"],
+    "timely": ["timely", "prompt", "immediate"],
+    "consistent": ["consistent", "steady", "reliable"],
+    "structured": ["structured", "well-organized", "purposeful"],
+    "brief": ["brief", "short", "focused"],
+    "targeted": ["targeted", "focused", "specific"],
+}
 
 
-def _append_feedback(entry: Dict[str, Any]):
-    """Append a JSON line to the feedback file in an atomic way."""
-    try:
-        _feedback_lock.acquire()
-        FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with FEEDBACK_PATH.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    finally:
-        try:
-            _feedback_lock.release()
-        except Exception:
-            pass
+def _normalize_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def _safe_lower_label(text: str) -> str:
+    return _normalize_whitespace(text).lower()
+
+
+def _normalize_sentence(text: str) -> str:
+    cleaned = _normalize_whitespace(text).strip(" .;,-")
+    if not cleaned:
+        return ""
+    cleaned = cleaned[0].upper() + cleaned[1:]
+    if cleaned[-1] not in ".!?":
+        cleaned += "."
+    return cleaned
+
+
+def _stable_seed(*parts: Any) -> int:
+    raw = "||".join(_normalize_whitespace(str(part)) for part in parts if part is not None)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return int(digest[:16], 16)
+
+
+def _score_band(x: float) -> str:
+    x = float(x or 0)
+    if x >= 4.6:
+        return "Excellent"
+    if x >= 3.6:
+        return "Very satisfactory"
+    if x >= 2.9:
+        return "Satisfactory"
+    if x >= 1.8:
+        return "Below satisfactory"
+    return "Needs improvement"
+
+
+class RatingItem(BaseModel):
+    rating: float = Field(..., ge=1, le=5)
+    comment: Optional[str] = ""
+
+
+class Averages(BaseModel):
+    communications: float = 0
+    management: float = 0
+    assessment: float = 0
+    overall: float = 0
+
+
+class GenerateRequest(BaseModel):
+    faculty_name: Optional[str] = ""
+    department: Optional[str] = ""
+    subject_observed: Optional[str] = ""
+    observation_type: Optional[str] = ""
+    ratings: Dict[str, Union[Dict[str, Any], List[Any]]] = Field(default_factory=dict)
+    averages: Averages = Field(default_factory=Averages)
+    strengths: Optional[str] = ""
+    improvement_areas: Optional[str] = ""
+    recommendations: Optional[str] = ""
+    style: Optional[str] = "standard"
 
 
 class FeedbackItem(BaseModel):
-    # Minimal structure: include the original request, the generated text, and a human label/correction
     request: GenerateRequest
     generated_strengths: Optional[str] = None
     generated_improvement_areas: Optional[str] = None
     generated_recommendations: Optional[str] = None
     accurate: Optional[bool] = None
-    # If the user corrected the output, include corrected text (any or all sections).
     corrected_strengths: Optional[str] = None
     corrected_improvement_areas: Optional[str] = None
     corrected_recommendations: Optional[str] = None
     comment: Optional[str] = None
 
 
+class GenerateResponse(BaseModel):
+    strengths: str
+    improvement_areas: str
+    recommendations: str
+    strengths_options: Optional[List[str]] = None
+    improvement_areas_options: Optional[List[str]] = None
+    recommendations_options: Optional[List[str]] = None
+    debug: Optional[Dict[str, Any]] = None
+
+
+class ReferenceEvaluationItem(BaseModel):
+    faculty_name: Optional[str] = ""
+    department: Optional[str] = ""
+    subject_observed: Optional[str] = ""
+    observation_type: Optional[str] = ""
+    averages: Averages = Field(default_factory=Averages)
+    ratings: Dict[str, Union[Dict[str, Any], List[Any]]] = Field(default_factory=dict)
+    strengths: str
+    improvement_areas: str
+    recommendations: str
+    source: Optional[str] = "manual"
+
+
+@lru_cache(maxsize=1)
+def _load_feedback_retrieval_system() -> FeedbackRetrievalSystem:
+    return build_mysql_seed_system(_parse_php_db_config())
+
+
 @app.post("/feedback")
 async def feedback(item: FeedbackItem):
-    """Collect human feedback / corrections for exports and fine-tuning.
-
-    Save a single JSON line with timestamp to `ai_feedback.jsonl`.
-    """
     entry = {
         "ts": datetime.utcnow().isoformat() + "Z",
         "request": item.request.dict(),
@@ -129,26 +272,22 @@ async def feedback(item: FeedbackItem):
     }
 
     try:
-        _append_feedback(entry)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _feedback_lock.acquire()
+        FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with FEEDBACK_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        try:
+            _feedback_lock.release()
+        except Exception:
+            pass
 
     return {"ok": True}
 
 
-class RatingItem(BaseModel):
-    rating: float = Field(..., ge=1, le=5)
-    comment: Optional[str] = ""
-
-
 def _coerce_rating_item(v: Any) -> Optional[RatingItem]:
-    """Accept multiple shapes from PHP/JS and normalize to RatingItem.
-
-    Allowed inputs:
-    - {"rating": 3, "comment": "..."}
-    - {"rating": "3", "comment": "..."}
-    - 3 / "3" (rating-only)
-    """
     if v is None:
         return None
     if isinstance(v, RatingItem):
@@ -158,364 +297,116 @@ def _coerce_rating_item(v: Any) -> Optional[RatingItem]:
             return RatingItem(rating=float(v), comment="")
         except Exception:
             return None
-    if isinstance(v, dict):
-        # common cases
-        if "rating" in v:
-            try:
-                return RatingItem(rating=float(v.get("rating")), comment=str(v.get("comment") or ""))
-            except Exception:
-                return None
+    if isinstance(v, dict) and "rating" in v:
+        try:
+            return RatingItem(rating=float(v.get("rating")), comment=str(v.get("comment") or ""))
+        except Exception:
+            return None
     return None
 
 
-class Averages(BaseModel):
-    communications: float = 0
-    management: float = 0
-    assessment: float = 0
-    overall: float = 0
-
-
-class GenerateRequest(BaseModel):
-    faculty_name: Optional[str] = ""
-    department: Optional[str] = ""
-    subject_observed: Optional[str] = ""
-    observation_type: Optional[str] = ""
-    # NOTE: The UI may send per-category values either as a dict (index->item)
-    # or as a JSON array (list of items). Accept both to avoid 422.
-    # We'll normalize it ourselves in _flatten_comments().
-    ratings: Dict[str, Union[Dict[str, Any], List[Any]]] = Field(default_factory=dict)
-    averages: Averages = Field(default_factory=Averages)
-    strengths: Optional[str] = ""
-    improvement_areas: Optional[str] = ""
-    recommendations: Optional[str] = ""
-    # Optional narrative style: short | standard | detailed
-    style: Optional[str] = "standard"
-
-
-class GenerateResponse(BaseModel):
-    strengths: str
-    improvement_areas: str
-    recommendations: str
-    debug: Optional[Dict[str, Any]] = None
-
-
-@lru_cache(maxsize=1)
-def _load_models():
-    """Lazy-load SBERT and Flan-T5 once."""
-    from sentence_transformers import SentenceTransformer
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
-    sbert_name = os.getenv("SBERT_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-    # Use flan-t5-base for better quality AI-generated feedback (250M params)
-    # Still runs locally but generates much better text than flan-t5-small
-    flan_name = os.getenv("FLAN_T5_MODEL", "google/flan-t5-base")
-
-    sbert = SentenceTransformer(sbert_name)
-    tok = AutoTokenizer.from_pretrained(flan_name)
-    model = AutoModelForSeq2SeqLM.from_pretrained(flan_name)
-
-    # Move model to GPU if available for better speed/quality when possible.
+def _parse_php_db_config() -> Dict[str, str]:
     try:
-        import torch
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.to(device)
+        text = PHP_DB_CONFIG_PATH.read_text(encoding="utf-8")
     except Exception:
-        # If torch isn't available or moving fails, continue on CPU.
-        pass
+        return {
+            "host": "localhost",
+            "database": "ai_classroom_eval",
+            "user": "root",
+            "password": "",
+        }
 
-    return sbert, tok, model
+    def grab(key: str, default: str = "") -> str:
+        marker = f'private ${key} = "'
+        start = text.find(marker)
+        if start == -1:
+            return default
+        start += len(marker)
+        end = text.find('"', start)
+        return text[start:end] if end != -1 else default
 
-
-def _build_prompt(payload: GenerateRequest, similar_texts: List[str]) -> str:
-    # Build a clear, structured prompt for the AI model
-    avg = payload.averages
-
-    # Build context from actual comments (up to 8 items)
-    context_lines = []
-    for i, text in enumerate((similar_texts or [])[:8], 1):
-        context_lines.append(f"{i}. {text}")
-    context = "\n".join(context_lines) if context_lines else "No specific comments provided."
-
-    # Create instruction-based prompt.
-    # IMPORTANT: Do not include bracketed placeholders like "[Write ...]" because smaller seq2seq models
-    # may copy them verbatim.
-    prompt = (
-        f"You are writing a PROFESSIONAL teacher evaluation narrative.\n"
-        f"Use the ratings and observations as evidence.\n\n"
-        f"Teacher: {payload.faculty_name or 'The teacher'}\n"
-        f"Subject: {payload.subject_observed or 'Not specified'}\n"
-        f"Type: {payload.observation_type or 'Classroom observation'}\n\n"
-        "OBSERVATIONS:\n"
-        f"{context}\n\n"
-        "TASK:\n"
-        "Write three short paragraphs. Each paragraph should be 2 to 4 sentences.\n\n"
-        "Output format (use these exact labels, one per line):\n"
-        "STRENGTHS: <your paragraph>\n"
-        "AREAS_FOR_IMPROVEMENT: <your paragraph>\n"
-        "RECOMMENDATIONS: <your paragraph>\n"
-    )
-
-    # Append a short, generic example to show desired tone and structure.
-    example = (
-        "\nEXAMPLE:\n"
-        "STRENGTHS: The teacher provided clear explanations and used targeted questioning to check for understanding, supporting student engagement. Lessons were well-paced and learning objectives were evident.\n"
-        "AREAS_FOR_IMPROVEMENT: Increasing active student participation and tightening transition routines could further enhance learning time and engagement.\n"
-        "RECOMMENDATIONS: Introduce brief formative checks and structured partner activities to increase participation and provide rapid feedback.\n"
-    )
-
-    return prompt + example
+    return {
+        "host": grab("host", "localhost"),
+        "database": grab("db_name", "ai_classroom_eval"),
+        "user": grab("username", "root"),
+        "password": grab("password", ""),
+    }
 
 
-def _build_ratings_only_prompt(payload: GenerateRequest) -> str:
-    """
-    Ratings-only prompt (no comments).
-    Goal: produce human-like, professional paragraphs WITHOUT echoing numeric scores.
-    """
-    avg = payload.averages
-    teacher = (payload.faculty_name or "").strip() or "The teacher"
-    subject = (payload.subject_observed or "").strip() or "the observed class"
-
-    def band(x: float) -> str:
-        x = float(x or 0)
-        if x >= 4.6:
-            return "Excellent"
-        if x >= 3.6:
-            return "Very satisfactory"
-        if x >= 2.9:
-            return "Satisfactory"
-        if x >= 1.8:
-            return "Below satisfactory"
-        return "Needs improvement"
-
-    # Map domains -> scores
-    domains = {
+def _domain_scores(req: GenerateRequest) -> Dict[str, float]:
+    avg = req.averages
+    return {
         "Communication & instruction": float(avg.communications or 0),
         "Classroom management & learning environment": float(avg.management or 0),
         "Assessment & feedback practices": float(avg.assessment or 0),
     }
-    weakest = min(domains, key=domains.get)
-    strongest = max(domains, key=domains.get)
-    overall_level = band(avg.overall)
 
-    # Anchors: used as "safe, non-invented" evidence phrases
-    anchors = {
-        "Communication & instruction": {
-            "strength": [
-                "clear communication of lesson expectations",
-                "effective questioning and checking for understanding",
-                "appropriate pacing and explanation of key concepts",
-            ],
-            "improve": [
-                "increasing student talk time and active participation",
-                "strengthening clarity of directions and transitions",
-                "using more varied engagement strategies during instruction",
-            ],
-            "reco": [
-                "use structured questioning routines (wait time, probing, follow-up questions)",
-                "add quick checks for understanding (exit prompts, mini-whiteboards, short quizzes)",
-                "plan engagement checkpoints (think-pair-share, cold-calling with support, guided practice)",
-            ],
-        },
-        "Classroom management & learning environment": {
-            "strength": [
-                "maintaining a respectful learning environment",
-                "supporting lesson flow through routines and classroom organization",
-                "promoting a focused classroom atmosphere",
-            ],
-            "improve": [
-                "strengthening routines for transitions and task completion",
-                "using proactive behavior supports and consistent expectations",
-                "maximizing instructional time through clearer procedures",
-            ],
-            "reco": [
-                "establish and rehearse clear routines for entry, transitions, and group tasks",
-                "use monitoring and positive reinforcement aligned with expectations",
-                "tighten lesson structure with time cues and clear task directions",
-            ],
-        },
-        "Assessment & feedback practices": {
-            "strength": [
-                "monitoring learner progress through appropriate assessment practices",
-                "aligning tasks with intended learning goals",
-                "providing opportunities to demonstrate understanding",
-            ],
-            "improve": [
-                "making assessment evidence more frequent and instructional (formative)",
-                "strengthening the clarity and usefulness of feedback for next steps",
-                "using success criteria so learners understand quality expectations",
-            ],
-            "reco": [
-                "embed short formative checks aligned to objectives throughout the lesson",
-                "use rubrics/success criteria and give specific feedback tied to those criteria",
-                "include opportunities for corrections or revision after feedback",
-            ],
-        },
+
+def _evaluation_signature(req: GenerateRequest) -> Dict[str, Any]:
+    domains = _domain_scores(req)
+    weakest = min(domains, key=domains.get) if domains else "Instructional practice"
+    strongest = max(domains, key=domains.get) if domains else "Professional practice"
+    return {
+        "teacher": _normalize_whitespace(req.faculty_name or "") or "The teacher",
+        "subject": _normalize_whitespace(req.subject_observed or "") or "the observed class",
+        "observation_type": _normalize_whitespace(req.observation_type or "") or "Classroom observation",
+        "department": _normalize_whitespace(req.department or ""),
+        "overall_level": _score_band(req.averages.overall),
+        "weakest": weakest,
+        "strongest": strongest,
+        "domains": domains,
     }
 
-    s_phrases = anchors[strongest]["strength"]
-    w_improve_phrases = anchors[weakest]["improve"]
-    w_reco_phrases = anchors[weakest]["reco"]
 
-    base = (
-        "You are an academic evaluator writing a professional teacher evaluation narrative based ONLY on domain ratings.\n"
-        "Hard rules: Do NOT include numeric scores; avoid specific numeric references.\n\n"
-        "Output format (use these exact labels, one per line):\n"
-        "STRENGTHS: <paragraph>\n"
-        "AREAS_FOR_IMPROVEMENT: <paragraph>\n"
-        "RECOMMENDATIONS: <paragraph>\n"
-    )
-
-    example = (
-        "\nEXAMPLE:\n"
-        "STRENGTHS: The teacher demonstrated effective classroom routines and clear explanations, supporting student engagement.\n"
-        "AREAS_FOR_IMPROVEMENT: Consider increasing brief formative checks and clarifying transition procedures to maximize instructional time.\n"
-        "RECOMMENDATIONS: Use quick exit tickets and short peer discussions to surface misunderstandings and inform next steps.\n"
-    )
-
-    return (base + example).strip()
-
-
-def _build_retry_prompt(payload: GenerateRequest, similar_texts: List[str]) -> str:
-    """
-    Even stricter retry prompt.
-    Avoid putting numbers near the model to reduce numeric echo.
-    """
-    avg = payload.averages
-
-    def band(x: float) -> str:
-        x = float(x or 0)
-        if x >= 4.6:
-            return "Excellent"
-        if x >= 3.6:
-            return "Very satisfactory"
-        if x >= 2.9:
-            return "Satisfactory"
-        if x >= 1.8:
-            return "Below satisfactory"
-        return "Needs improvement"
-
-    # Determine lowest/highest domain without showing numbers
-    domains = {
-        "Communication & instruction": float(avg.communications or 0),
-        "Classroom management & learning environment": float(avg.management or 0),
-        "Assessment & feedback practices": float(avg.assessment or 0),
-    }
-    weakest = min(domains, key=domains.get)
-    strongest = max(domains, key=domains.get)
-
-    teacher = (payload.faculty_name or "").strip() or "The teacher"
-
-    return f"""
-Write a professional, human-like teacher evaluation narrative based ONLY on rating levels.
-
-Rules:
-- NO numbers, NO "=" signs, NO "/5", NO score recap.
-- Do not invent details; keep statements general but specific to domains.
-- Use complete sentences.
-
-Information you may use:
-- Overall level: {band(payload.averages.overall)}
-- Strongest domain: {strongest} ({band(domains[strongest])})
-- Priority domain: {weakest} ({band(domains[weakest])})
-- Teacher: {teacher}
-
-Return EXACTLY three labeled paragraphs:
-STRENGTHS: 2–6 sentences depending on the requested style.
-AREAS_FOR_IMPROVEMENT: 2–6 sentences.
-RECOMMENDATIONS: 2–6 sentences.
-""".strip()
-
-
-def _generate_text(tok, model, prompt: str, style: str = "standard") -> str:
-    """
-    Generation tuned for 'human' paragraphs.
-    Use a little sampling for natural phrasing, but keep repetition controls.
-    """
-    style = (style or "standard").strip().lower()
-    if style not in {"short", "standard", "detailed"}:
-        style = "standard"
-
-    max_new = 180 if style == "short" else (260 if style == "standard" else 360)
-
-    inputs = tok(prompt, return_tensors="pt", truncation=True, max_length=1024)
-
-    out = model.generate(
-        **inputs,
-        max_new_tokens=max_new,
-        # Use a small beam search for more consistent, higher-quality outputs;
-        # lower temperature and slightly constrained top_p to reduce risky sampling.
-        do_sample=True,
-        temperature=0.6,
-        top_p=0.85,
-        num_beams=4,
-        num_return_sequences=1,
-        repetition_penalty=1.12,
-        no_repeat_ngram_size=4,
-        early_stopping=True,
-    )
-    return tok.decode(out[0], skip_special_tokens=True)
-
-
-def _looks_like_bad_generation(text: str) -> bool:
-    """Heuristics: detect outputs that are clearly not the requested 3-paragraph content."""
-    if not text:
-        return True
-
-    t = text.strip()
-    if len(t) < 120:
-        return True
-
-    lower = t.lower()
-
-    # If it contains lots of numeric/score patterns, it's not acceptable.
-    # (We now forbid numbers entirely in ratings-only mode.)
-    bad_markers = [
-        "communication =",
-        "management =",
-        "assessment =",
-        "overall =",
-        "communication=",
-        "management=",
-        "assessment=",
-        "overall=",
-        "/5",
-        "out of 5",
-        "rating:",
-        "score:",
-        "scores:",
-    ]
-    if any(m in lower for m in bad_markers):
-        return True
-
-    # Contains digits -> likely score echo
-    if any(ch.isdigit() for ch in t):
-        return True
-
-    has_labels = ("STRENGTHS:" in t) and ("AREAS_FOR_IMPROVEMENT:" in t) and ("RECOMMENDATIONS:" in t)
-    if not has_labels:
-        return True
-
-    return False
-
-
-def _flatten_comments(req: GenerateRequest) -> List[str]:
-    """Normalize `req.ratings` into a flat list of evidence strings.
-
-    The PHP app may send each category as:
-    - dict of index -> {rating, comment}
-    - list of {rating, comment}
-    - list of scalars (rating-only)
-
-    We only treat non-empty comments as "real comments".
-    """
-    texts: List[str] = []
-    ratings = req.ratings or {}
-
-    for category, items in ratings.items():
-        if items is None:
+def _dedupe_preserve_order(items: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in items:
+        norm = _safe_lower_label(item)
+        if not norm or norm in seen:
             continue
+        seen.add(norm)
+        out.append(_normalize_whitespace(item))
+    return out
 
-        # Normalize to iterable of values
+
+def _comment_fingerprint(text: str) -> str:
+
+    normalized = re.sub(r"[^a-z0-9\s]", "", _safe_lower_label(text))
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _extract_action_focus(text: str) -> str:
+    lowered = _safe_lower_label(text)
+    tokens = [
+        "assessment",
+        "feedback",
+        "questioning",
+        "participation",
+        "engagement",
+        "transitions",
+        "routines",
+        "clarity",
+        "directions",
+        "checks for understanding",
+        "classroom management",
+    ]
+    for token in tokens:
+        if token in lowered:
+            return token
+    words = [w for w in re.findall(r"[a-zA-Z]+", lowered) if len(w) > 4]
+    return words[0] if words else lowered[:40]
+
+
+def _normalize_domain_name(key: str) -> str:
+    return DOMAIN_ALIASES.get(_safe_lower_label(key), _normalize_whitespace(key) or "General")
+
+
+def _flatten_comments(req: GenerateRequest) -> List[Dict[str, Any]]:
+    comment_rows: List[Dict[str, Any]] = []
+    ratings = req.ratings or {}
+    for category, items in ratings.items():
+        domain = _normalize_domain_name(category)
         if isinstance(items, dict):
             iterable = list(items.values())
         elif isinstance(items, list):
@@ -524,232 +415,627 @@ def _flatten_comments(req: GenerateRequest) -> List[str]:
             iterable = [items]
 
         for idx, raw in enumerate(iterable, 1):
-            ri = _coerce_rating_item(raw)
-            if not ri:
+            item = _coerce_rating_item(raw)
+            if not item:
                 continue
+            comment = _normalize_whitespace(item.comment or "")
+            comment_rows.append(
+                {
+                    "domain": domain,
+                    "rating": float(item.rating),
+                    "comment": comment,
+                    "index": idx,
+                }
+            )
+    return comment_rows
 
-            comment = (ri.comment or "").strip()
-            rating = ri.rating
 
-            if comment:
-                # include rating as context; prompt logic decides whether to use it
-                texts.append(f"{category} item {idx}: rating={rating}; comment={comment}")
-            else:
-                texts.append(f"{category} item {idx}: rating={rating}")
+def _compose_query_text(req: GenerateRequest, comments: List[Dict[str, Any]]) -> str:
+    sig = _evaluation_signature(req)
+    fragments = [
+        sig["subject"],
+        sig["observation_type"],
+        f"priority area {sig['weakest']}",
+        f"strong area {sig['strongest']}",
+        f"overall {sig['overall_level']}",
+    ]
+    for item in comments:
+        if item["comment"]:
+            fragments.append(f"{item['domain']}: {item['comment']}")
+    if not any(item["comment"] for item in comments):
+        for domain, score in sig["domains"].items():
+            fragments.append(f"{domain} rating {score:.1f}")
+    return _normalize_whitespace(". ".join(fragments))
 
-    return texts
+
+@lru_cache(maxsize=1)
+def _load_sbert():
+    from sentence_transformers import SentenceTransformer
+
+    model_name = os.getenv("SBERT_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    return SentenceTransformer(model_name)
 
 
-def _retrieve_top_k(sbert, texts: List[str], k: int = 10) -> List[str]:
-    """Return top-k 'most relevant' texts.
+def _build_dataset_entries() -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
 
-    In the absence of a query, the simplest robust behavior is to just
-    prioritize comment-bearing evidence and keep order stable.
+    def add_entry(text: str, category: str, source: str, meta: Optional[Dict[str, Any]] = None) -> None:
+        normalized = _normalize_sentence(text)
+        if not normalized:
+            return
+        item = {
+            "text": normalized,
+            "category": _normalize_whitespace(category) or "General",
+            "source": source,
+        }
+        if meta:
+            item.update(meta)
+        entries.append(item)
 
-    NOTE: This intentionally doesn't rely on SBERT similarity to avoid runtime
-    issues when no comments exist or when models aren't available.
-    """
-    if not texts:
-        return []
+    def ingest_reference_payload(payload: Dict[str, Any], source: str) -> None:
+        ratings = payload.get("ratings") or {}
+        for raw_category, items in ratings.items():
+            category = _normalize_domain_name(raw_category)
+            iterable = list(items.values()) if isinstance(items, dict) else items if isinstance(items, list) else [items]
+            for raw in iterable:
+                coerced = _coerce_rating_item(raw)
+                if coerced and _normalize_whitespace(coerced.comment or ""):
+                    add_entry(
+                        coerced.comment or "",
+                        category,
+                        source,
+                        {
+                            "kind": "rating_comment",
+                            "subject": _normalize_whitespace(payload.get("subject_observed") or ""),
+                            "observation_type": _normalize_whitespace(payload.get("observation_type") or ""),
+                        },
+                    )
 
-    # Prefer an SBERT-based ranking that selects representative / central comments.
-    # This helps pick evidence that's most 'typical' when many comments exist.
-    use_retrieval = os.getenv("USE_SBERT_RETRIEVAL", "1") not in ("0", "false", "False")
-    if use_retrieval:
+        signature_source = GenerateRequest(
+            faculty_name=payload.get("faculty_name") or "",
+            department=payload.get("department") or "",
+            subject_observed=payload.get("subject_observed") or "",
+            observation_type=payload.get("observation_type") or "",
+            ratings=ratings,
+            averages=Averages(**(payload.get("averages") or {})),
+        )
+        signature = _evaluation_signature(signature_source)
+        add_entry(
+            payload.get("recommendations") or "",
+            signature["weakest"],
+            source,
+            {
+                "kind": "recommendation",
+                "subject": signature["subject"],
+                "observation_type": signature["observation_type"],
+                "overall_level": signature["overall_level"],
+            },
+        )
+
+    retrieval_system = _load_feedback_retrieval_system()
+    field_map = {
+        "strengths": "Communication & instruction",
+        "areas_for_improvement": "Classroom management & learning environment",
+        "recommendations": "Assessment & feedback practices",
+    }
+    for field_name, category in field_map.items():
         try:
-            # Encode all texts; if SBERT fails, fall back to simple heuristic below.
-            emb = sbert.encode(texts, convert_to_numpy=True)
-            if emb is not None and len(emb) == len(texts):
-                # Compute centroid and rank by cosine similarity to centroid (most representative first).
-                centroid = np.mean(emb, axis=0)
-                # normalize to avoid zero-division
-                def _cos(a, b):
-                    na = a / (np.linalg.norm(a) + 1e-12)
-                    nb = b / (np.linalg.norm(b) + 1e-12)
-                    return float(np.dot(na, nb))
-
-                scores = [ _cos(v, centroid) for v in emb ]
-                idxs = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-                ranked = [texts[i] for i in idxs]
-                # Keep comment-bearing texts earlier by stable sort if many ties
-                with_comments = [t for t in ranked if ("comment=" in t or "comment:" in t)]
-                without_comments = [t for t in ranked if t not in with_comments]
-                ranked = with_comments + without_comments
-                return ranked[: max(0, int(k or 0))] if k else ranked
+            templates = retrieval_system.fetch_templates(field_name)
         except Exception:
-            # Fall through to conservative heuristic below on any error.
+            templates = []
+        for row in templates:
+            add_entry(
+                row.get("evaluation_comment") or "",
+                category,
+                row.get("source") or f"mysql:{field_name}",
+                {
+                    "kind": f"mysql_template:{field_name}",
+                    "feedback_text": _normalize_sentence(row.get("feedback_text") or ""),
+                    "template_field": field_name,
+                },
+            )
+
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for item in entries:
+        key = (_comment_fingerprint(item["text"]), _safe_lower_label(item["category"]))
+        if not key[0] or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _dataset_signature(entries: List[Dict[str, Any]]) -> str:
+    serial = [
+        {
+            "text": item["text"],
+            "category": item["category"],
+            "source": item.get("source", ""),
+        }
+        for item in entries
+    ]
+    raw = json.dumps(serial, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _write_embedding_cache(entries: List[Dict[str, Any]], embeddings: np.ndarray) -> None:
+    payload = {
+        "signature": np.array([_dataset_signature(entries)], dtype=object),
+        "texts": np.array([item["text"] for item in entries], dtype=object),
+        "categories": np.array([item["category"] for item in entries], dtype=object),
+        "sources": np.array([item.get("source", "") for item in entries], dtype=object),
+        "embeddings": embeddings.astype(np.float32),
+    }
+    np.savez_compressed(EMBEDDINGS_CACHE_PATH, **payload)
+
+
+def _load_embedding_cache(entries: List[Dict[str, Any]]) -> Optional[Tuple[List[Dict[str, Any]], np.ndarray]]:
+    if not EMBEDDINGS_CACHE_PATH.exists():
+        return None
+    try:
+        cached = np.load(EMBEDDINGS_CACHE_PATH, allow_pickle=True)
+        signature = str(cached["signature"][0])
+        if signature != _dataset_signature(entries):
+            return None
+        embeddings = np.array(cached["embeddings"], dtype=np.float32)
+        if len(embeddings) != len(entries):
+            return None
+        return entries, embeddings
+    except Exception:
+        return None
+
+
+def _ensure_dataset_embeddings() -> Tuple[List[Dict[str, Any]], np.ndarray]:
+    entries = _build_dataset_entries()
+    if not entries:
+        return [], np.zeros((0, 384), dtype=np.float32)
+
+    cached = _load_embedding_cache(entries)
+    if cached is not None:
+        return cached
+
+    try:
+        _embedding_lock.acquire()
+        cached = _load_embedding_cache(entries)
+        if cached is not None:
+            return cached
+        model = _load_sbert()
+        embeddings = model.encode(
+            [item["text"] for item in entries],
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )
+        embeddings = np.array(embeddings, dtype=np.float32)
+        _write_embedding_cache(entries, embeddings)
+        return entries, embeddings
+    finally:
+        try:
+            _embedding_lock.release()
+        except Exception:
             pass
 
-    # Conservative fallback: prefer items that explicitly contain comments, keep original order.
-    with_comments = [t for t in texts if ("comment=" in t or "comment:" in t)]
-    without_comments = [t for t in texts if t not in with_comments]
-    ranked = with_comments + without_comments
-    return ranked[: max(0, int(k or 0))] if k else ranked
 
-
-def _parse_sections(text: str) -> Dict[str, str]:
-    """Parse model output into the three expected sections.
-
-    Accepts small deviations but prefers the required labels.
-    """
-    out = {"strengths": "", "improvement_areas": "", "recommendations": ""}
-    if not text:
-        return out
-
-    # Normalize newlines and strip
-    t = text.replace("\r\n", "\n").strip()
-
-    # Find labeled lines (can contain extra spaces)
-    lines = [ln.strip() for ln in t.split("\n") if ln.strip()]
-
-    current_key: Optional[str] = None
-    buffer: List[str] = []
-
-    def flush():
-        nonlocal buffer, current_key
-        if current_key and buffer:
-            out[current_key] = " ".join(buffer).strip()
-        buffer = []
-
-    label_map = {
-        "STRENGTHS:": "strengths",
-        "AREAS_FOR_IMPROVEMENT:": "improvement_areas",
-        "AREAS FOR IMPROVEMENT:": "improvement_areas",
-        "RECOMMENDATIONS:": "recommendations",
-    }
-
-    for ln in lines:
-        upper = ln.upper()
-        matched = None
-        for lab, key in label_map.items():
-            if upper.startswith(lab):
-                matched = (lab, key)
-                break
-
-        if matched:
-            flush()
-            _, key = matched
-            current_key = key
-            content = ln.split(":", 1)[1].strip() if ":" in ln else ""
-            if content:
-                buffer.append(content)
-        else:
-            # continuation of current section
-            if current_key:
-                buffer.append(ln)
-
-    flush()
-
-    # If labels weren't found at all, fall back to treating the whole as strengths.
-    if not any(out.values()):
-        out["strengths"] = t
-
+def _reference_source_summary(items: List[Dict[str, Any]]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for item in items:
+        source = _normalize_whitespace(item.get("source") or "unknown") or "unknown"
+        out[source] = out.get(source, 0) + 1
     return out
 
 
-def _parsed_missing_or_too_short(parsed: Dict[str, str]) -> bool:
-    """Ensure each section has reasonable length."""
-    for k in ("strengths", "improvement_areas", "recommendations"):
-        v = (parsed.get(k) or "").strip()
-        if len(v) < 40:
-            return True
-    return False
+def _cosine_search(query_embedding: np.ndarray, embeddings: np.ndarray) -> np.ndarray:
+    if embeddings.size == 0:
+        return np.array([], dtype=np.float32)
+    query_vec = np.array(query_embedding, dtype=np.float32)
+    if query_vec.ndim > 1:
+        query_vec = query_vec[0]
+    query_vec = query_vec / (np.linalg.norm(query_vec) + 1e-12)
+    return np.matmul(embeddings, query_vec)
 
 
-def _generate_template_based_feedback(req: GenerateRequest, texts: List[str]) -> Dict[str, str]:
-    """Deterministic fallback so the PHP app always gets usable text."""
-    avg = req.averages
+def _retrieve_top_comments(req: GenerateRequest, comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    dataset, embeddings = _ensure_dataset_embeddings()
+    if not dataset:
+        return []
+    query_text = _compose_query_text(req, comments)
+    model = _load_sbert()
+    query_embedding = model.encode([query_text], convert_to_numpy=True, normalize_embeddings=True)
+    scores = _cosine_search(query_embedding, embeddings)
 
-    def band(x: float) -> str:
-        x = float(x or 0)
-        if x >= 4.6:
-            return "Excellent"
-        if x >= 3.6:
-            return "Very satisfactory"
-        if x >= 2.9:
-            return "Satisfactory"
-        if x >= 1.8:
-            return "Below satisfactory"
-        return "Needs improvement"
+    weakest = _evaluation_signature(req)["weakest"]
+    ranked_indices = np.argsort(scores)[::-1]
+    selected: List[Dict[str, Any]] = []
+    seen = set()
 
-    domains = {
-        "Communication & instruction": float(avg.communications or 0),
-        "Classroom management & learning environment": float(avg.management or 0),
-        "Assessment & feedback practices": float(avg.assessment or 0),
-    }
-    weakest = min(domains, key=domains.get) if domains else "Instructional practice"
-    strongest = max(domains, key=domains.get) if domains else "Professional practice"
-    overall_level = band(avg.overall)
-
-    teacher = (req.faculty_name or "").strip() or "The teacher"
-    subject = (req.subject_observed or "").strip() or "the observed class"
-
-    # Pick up to 2 brief comment snippets if available
-    comment_snips: List[str] = []
-    for t in texts or []:
-        if "comment=" in t:
-            comment_snips.append(t.split("comment=", 1)[1].strip())
-        if len(comment_snips) >= 2:
+    for idx in ranked_indices.tolist():
+        item = dict(dataset[idx])
+        similarity = float(scores[idx])
+        if item.get("category") == weakest:
+            similarity += 0.05
+        fingerprint = _comment_fingerprint(item["text"])
+        if not fingerprint or fingerprint in seen:
+            continue
+        if similarity < DEFAULT_SIMILARITY_THRESHOLD and selected:
+            continue
+        seen.add(fingerprint)
+        item["similarity"] = round(float(similarity), 4)
+        selected.append(item)
+        if len(selected) >= TOP_K_RETRIEVAL:
             break
 
-    evidence = " "
-    if comment_snips:
-        evidence = " Observations noted: " + "; ".join(comment_snips) + "."
+    if len(selected) < TOP_K_RETRIEVAL:
+        for idx in ranked_indices.tolist():
+            item = dict(dataset[idx])
+            fingerprint = _comment_fingerprint(item["text"])
+            if not fingerprint or fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            item["similarity"] = round(float(scores[idx]), 4)
+            selected.append(item)
+            if len(selected) >= TOP_K_RETRIEVAL:
+                break
+    return selected[:TOP_K_RETRIEVAL]
 
-    strengths = (
-        f"{teacher} demonstrated {overall_level.lower()} performance in {subject}. "
-        f"Strengths were most evident in {strongest.lower()}, supporting effective lesson delivery and learner engagement." 
-        f"The overall classroom experience reflected purposeful planning and an appropriate focus on learning outcomes.{evidence}"
-    ).strip()
 
-    improvement_areas = (
-        f"To further strengthen practice, priority should be given to {weakest.lower()}. "
-        "Refining strategies in this area can help increase consistency, deepen learner participation, and improve clarity of expectations. "
-        "Maintaining the current positive approaches while targeting these adjustments will support continued growth."
-    ).strip()
+def _choose_variant(word: str, rng: random.Random, bank: Dict[str, List[str]]) -> str:
+    lower = word.lower()
+    choices = bank.get(lower)
+    if not choices:
+        return word
+    replacement = rng.choice(choices)
+    if word[0].isupper():
+        replacement = replacement.capitalize()
+    return replacement
 
-    recommendations = (
-        f"It is recommended that {teacher.lower()} adopts one or two focused routines aligned to {weakest.lower()} and monitors their impact over time. "
-        "Using brief formative checks during the lesson and providing timely, specific feedback can strengthen instruction and student understanding. "
-        "A short cycle of goal-setting, observation, and reflection (with coaching or peer support if available) is suggested to sustain improvement."
-    ).strip()
 
-    return {
-        "strengths": strengths,
-        "improvement_areas": improvement_areas,
-        "recommendations": recommendations,
+def _soft_rephrase_comment(text: str, rng: random.Random) -> str:
+    sentence = _normalize_sentence(text)
+    for src, variants in COMMENT_PHRASE_SWAPS.items():
+        pattern = re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE)
+        if pattern.search(sentence) and rng.random() < 0.75:
+            sentence = pattern.sub(rng.choice(variants), sentence, count=1)
+
+    sentence = re.sub(r"\bthe teacher\b", rng.choice(["the teacher", "instruction", "classroom practice"]), sentence, count=1, flags=re.IGNORECASE)
+    sentence = re.sub(r"\bshould be\b", rng.choice(["can be", "may be", "should be"]), sentence, count=1, flags=re.IGNORECASE)
+    sentence = re.sub(r"\bcan be\b", rng.choice(["can be", "may be"]), sentence, count=1, flags=re.IGNORECASE)
+    return _normalize_sentence(sentence)
+
+
+def _build_context_clause(req: GenerateRequest, category: str, rng: random.Random) -> str:
+    sig = _evaluation_signature(req)
+    clauses = [
+        f"for {sig['subject']}",
+        f"within {category.lower()}",
+        f"as part of follow-through in {sig['weakest'].lower()}",
+        "during the next observation cycle",
+    ]
+    return rng.choice(clauses)
+
+
+def _combine_comments(base: str, support: str, req: GenerateRequest, category: str, rng: random.Random) -> str:
+    base_clean = _soft_rephrase_comment(base, rng).rstrip(".")
+    support_clean = _soft_rephrase_comment(support, rng)
+    support_clean = support_clean[0].lower() + support_clean[1:] if len(support_clean) > 1 else support_clean.lower()
+    opener = rng.choice(OPENERS)
+    connector = rng.choice([
+        "while also",
+        "and at the same time",
+        "together with efforts to",
+        "alongside routines to",
+    ])
+    context_clause = _build_context_clause(req, category, rng)
+    return _normalize_sentence(f"{opener} {base_clean.lower()} {context_clause}, {connector} {support_clean}")
+
+
+def _build_action_sentence(category: str, req: GenerateRequest, used_focuses: set[str], rng: random.Random) -> str:
+    actions = list(DOMAIN_ACTIONS.get(category, []))
+    if not actions:
+        actions = list(DOMAIN_ACTIONS[_evaluation_signature(req)["weakest"]])
+    rng.shuffle(actions)
+    selected = None
+    for action in actions:
+        focus = _extract_action_focus(action)
+        if focus not in used_focuses:
+            selected = action
+            used_focuses.add(focus)
+            break
+    if not selected:
+        selected = actions[0]
+
+    verb = selected.split(" ", 1)[0]
+    remainder = selected.split(" ", 1)[1] if " " in selected else ""
+    varied = f"{_choose_variant(verb, rng, LEADING_PHRASE_SWAPS)} {remainder}".strip()
+    opener = rng.choice(OPENERS)
+    closer = rng.choice(CLOSERS)
+    return _normalize_sentence(f"{opener} {varied}.")[:-1] + f" {closer}"
+
+
+def _fallback_recommendations(req: GenerateRequest, rng: random.Random) -> List[str]:
+    weakest = _evaluation_signature(req)["weakest"]
+    used_focuses: set[str] = set()
+    return [_build_action_sentence(weakest, req, used_focuses, rng) for _ in range(OUTPUT_RECOMMENDATIONS)]
+
+
+def _generate_recommendation_variations(req: GenerateRequest, retrieved: List[Dict[str, Any]]) -> List[str]:
+    sig = _evaluation_signature(req)
+    rng = random.Random()
+    rng.seed(_stable_seed(sig["teacher"], sig["subject"], datetime.utcnow().isoformat(timespec="seconds"), random.random()))
+
+    if not retrieved:
+        return _fallback_recommendations(req, rng)
+
+    weakest = sig["weakest"]
+    used_focuses: set[str] = set()
+    outputs: List[str] = []
+    raw_texts = [item["text"] for item in retrieved]
+    category_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for item in retrieved:
+        category_groups.setdefault(item["category"], []).append(item)
+
+    preferred = category_groups.get(weakest, []) or retrieved
+
+    first = preferred[0]
+    used_focuses.add(_extract_action_focus(first["text"]))
+    paraphrased = _soft_rephrase_comment(first["text"], rng)
+    paraphrased = _normalize_sentence(f"{rng.choice(OPENERS)} {paraphrased[0].lower() + paraphrased[1:] if len(paraphrased) > 1 else paraphrased.lower()}")
+    if _comment_fingerprint(paraphrased) not in {_comment_fingerprint(t) for t in raw_texts}:
+        outputs.append(paraphrased)
+    else:
+        outputs.append(_build_action_sentence(first["category"], req, used_focuses, rng))
+
+    combo_candidates = preferred if len(preferred) >= 2 else retrieved
+    if len(combo_candidates) >= 2:
+        outputs.append(_combine_comments(combo_candidates[0]["text"], combo_candidates[1]["text"], req, combo_candidates[0]["category"], rng))
+        used_focuses.add(_extract_action_focus(combo_candidates[1]["text"]))
+
+    outputs.append(_build_action_sentence(weakest, req, used_focuses, rng))
+
+    deduped: List[str] = []
+    seen_dataset = {_comment_fingerprint(text) for text in raw_texts}
+    seen_output = set()
+    for item in outputs:
+        normalized = _normalize_sentence(item)
+        fingerprint = _comment_fingerprint(normalized)
+        if not fingerprint or fingerprint in seen_output or fingerprint in seen_dataset:
+            continue
+        seen_output.add(fingerprint)
+        deduped.append(normalized)
+
+    while len(deduped) < OUTPUT_RECOMMENDATIONS:
+        candidate = _build_action_sentence(weakest, req, used_focuses, rng)
+        fingerprint = _comment_fingerprint(candidate)
+        if fingerprint in seen_output or fingerprint in seen_dataset:
+            continue
+        seen_output.add(fingerprint)
+        deduped.append(candidate)
+
+    return deduped[:OUTPUT_RECOMMENDATIONS]
+
+
+def _build_strengths(req: GenerateRequest, comments: List[Dict[str, Any]]) -> str:
+    sig = _evaluation_signature(req)
+    strongest = sig["strongest"]
+    matching = [item["comment"] for item in comments if item["comment"] and item["domain"] == strongest]
+    evidence = _dedupe_preserve_order(matching)[:2]
+    if not evidence:
+        evidence = [
+            f"Classroom practice was strongest in {strongest.lower()} during the observed lesson",
+            f"The overall profile reflects {sig['overall_level'].lower()} performance in {sig['subject']}",
+        ]
+    pieces = [
+        f"The observation reflects {sig['overall_level'].lower()} performance, with the strongest indicators appearing in {strongest.lower()}.",
+        _normalize_sentence(evidence[0]),
+    ]
+    if len(evidence) > 1:
+        pieces.append(_normalize_sentence(evidence[1]))
+    return " ".join(_dedupe_preserve_order(pieces))
+
+
+def _build_improvement_areas(req: GenerateRequest, comments: List[Dict[str, Any]]) -> str:
+    sig = _evaluation_signature(req)
+    weakest = sig["weakest"]
+    matching = [item["comment"] for item in comments if item["comment"] and item["domain"] == weakest]
+    evidence = _dedupe_preserve_order(matching)[:2]
+    pieces = [
+        f"The clearest opportunity for refinement is {weakest.lower()}, where further consistency would strengthen the overall lesson experience.",
+    ]
+    if evidence:
+        pieces.append(_normalize_sentence(evidence[0]))
+    else:
+        pieces.append(_normalize_sentence(f"Additional attention to {weakest.lower()} would help balance current strengths with more consistent follow-through during instruction"))
+    if len(evidence) > 1:
+        pieces.append(_normalize_sentence(evidence[1]))
+    return " ".join(_dedupe_preserve_order(pieces))
+
+
+def _summarize_comments_for_field(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> str:
+    sig = _evaluation_signature(req)
+    field_domain_map = {
+        "strengths": sig["strongest"],
+        "areas_for_improvement": sig["weakest"],
+        "recommendations": sig["weakest"],
     }
+    target_domain = field_domain_map[field_name]
+    domain_comments = [item["comment"] for item in comments if item["comment"] and item["domain"] == target_domain]
+    general_comments = [item["comment"] for item in comments if item["comment"]]
+
+    if field_name == "strengths":
+        chosen = _dedupe_preserve_order(domain_comments or general_comments)[:2]
+        if not chosen:
+            return f"The teacher showed the strongest evidence in {target_domain.lower()} during the observation."
+        return " ".join(chosen)
+
+    if field_name == "areas_for_improvement":
+        chosen = _dedupe_preserve_order(domain_comments or general_comments)[:2]
+        if not chosen:
+            return f"The clearest area for improvement is {target_domain.lower()} based on the evaluation profile."
+        return " ".join(chosen)
+
+    if field_name == "recommendations":
+        chosen = _dedupe_preserve_order(domain_comments or general_comments)[:2]
+        if not chosen:
+            return f"Provide support in {target_domain.lower()} so improvement becomes more visible in future lessons."
+        return " ".join(chosen)
+
+    raise ValueError(f"Unsupported AI-assisted field: {field_name}")
+
+
+def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]) -> Dict[str, str]:
+    retrieval_system = _load_feedback_retrieval_system()
+    queries = {
+        "strengths": _normalize_whitespace(req.strengths or "") or _summarize_comments_for_field(req, comments, "strengths"),
+        "areas_for_improvement": _normalize_whitespace(req.improvement_areas or "") or _summarize_comments_for_field(req, comments, "areas_for_improvement"),
+        "recommendations": _normalize_whitespace(req.recommendations or "") or _summarize_comments_for_field(req, comments, "recommendations"),
+    }
+
+    matched = retrieval_system.retrieve_feedback_for_form(queries)
+    return {
+        field_name: (matched[field_name].feedback_text if matched[field_name] else queries[field_name])
+        for field_name in queries
+    }
+
+
+def _split_sentences(text: str) -> List[str]:
+    parts = re.split(r'(?<=[.!?])\s+', _normalize_whitespace(text))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _ensure_2_3_sentences(text: str, fallback: str = "") -> str:
+    sents = _split_sentences(text)
+    if len(sents) >= 2:
+        return " ".join(sents[:3])
+    if len(sents) == 1 and fallback:
+        fb = _split_sentences(fallback)
+        if fb:
+            return f"{sents[0]} {fb[0]}"
+    if len(sents) == 1:
+        return f"{sents[0]} This should help make the improvement more visible in the next observation."
+    return _normalize_sentence(fallback or "This area should be strengthened through consistent, focused classroom practices.")
+
+
+def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, retrieved: List[Dict[str, Any]]) -> List[str]:
+    sig = _evaluation_signature(req)
+    rng = random.Random(_stable_seed(field_name, sig["teacher"], sig["subject"], datetime.utcnow().isoformat(timespec="seconds")))
+    weak = sig["weakest"]
+    strong = sig["strongest"]
+
+    base = _ensure_2_3_sentences(base_text, fallback=f"In {sig['subject']}, this area should be improved through consistent follow-through.")
+    opt1 = base
+
+    if field_name == "strengths":
+        alt = (
+            f"The observed lesson showed strong evidence in {strong.lower()}, especially in classroom clarity and structure. "
+            f"Instruction was delivered in a way that supported learner understanding and lesson flow. "
+            f"These practices can be sustained in succeeding observations."
+        )
+    elif field_name == "areas_for_improvement":
+        alt = (
+            f"The most visible area for improvement is {weak.lower()}, where consistency can still be strengthened. "
+            f"Learner participation and follow-through can improve with more inclusive classroom routines. "
+            f"This can create stronger evidence of progress in future evaluations."
+        )
+    else:
+        actions = DOMAIN_ACTIONS.get(weak, DOMAIN_ACTIONS["Assessment & feedback practices"])
+        rng.shuffle(actions)
+        act1 = actions[0]
+        act2 = actions[1] if len(actions) > 1 else actions[0]
+        alt = (
+            f"A practical next step is to {act1}. "
+            f"You may also {act2} to reinforce the target area during class activities. "
+            f"These actions can improve learner response and instructional consistency."
+        )
+
+    opt2 = _ensure_2_3_sentences(alt, fallback=base)
+
+    retrieved_text = ""
+    for item in retrieved:
+        t = _normalize_sentence(item.get("text", ""))
+        if t:
+            retrieved_text = t
+            break
+
+    if not retrieved_text:
+        retrieved_text = "Current classroom evidence suggests that focused follow-through is needed in this area."
+
+    if field_name == "recommendations":
+        opt3_raw = (
+            f"Based on the observed evidence, prioritize one focused strategy per lesson segment. "
+            f"{retrieved_text} "
+            f"Monitor the effect weekly and adjust the strategy based on learner response."
+        )
+    elif field_name == "strengths":
+        opt3_raw = (
+            f"Classroom evidence confirms positive performance in this domain. "
+            f"{retrieved_text} "
+            f"This strength can be maintained through consistent instructional routines."
+        )
+    else:
+        opt3_raw = (
+            f"Observed evidence indicates this area still needs targeted improvement. "
+            f"{retrieved_text} "
+            f"A consistent intervention plan can make progress more measurable."
+        )
+
+    opt3 = _ensure_2_3_sentences(opt3_raw, fallback=base)
+
+    out: List[str] = []
+    seen = set()
+    for o in [opt1, opt2, opt3]:
+        key = _comment_fingerprint(o)
+        if key and key not in seen:
+            seen.add(key)
+            out.append(o)
+    while len(out) < 3:
+        out.append(base)
+    return out[:3]
 
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest):
-    sbert, tok, model = _load_models()
+    comments = _flatten_comments(req)
+    retrieved = _retrieve_top_comments(req, comments)
+    field_feedback = _retrieve_form_feedback(req, comments)
+    strengths = field_feedback["strengths"] or _build_strengths(req, comments)
+    improvement_areas = field_feedback["areas_for_improvement"] or _build_improvement_areas(req, comments)
+    recommendations = field_feedback["recommendations"]
 
-    texts = _flatten_comments(req)
-    top = _retrieve_top_k(sbert, texts, k=10)
-
-    has_real_comments = any(("comment=" in t or "comment:" in t) for t in texts)
-
-    if not has_real_comments:
-        prompt = _build_ratings_only_prompt(req)
-    else:
-        prompt = _build_prompt(req, top)
-
-    raw = _generate_text(tok, model, prompt, style=req.style or "standard")
-
-    if _looks_like_bad_generation(raw):
-        retry_prompt = _build_retry_prompt(req, top)
-        raw = _generate_text(tok, model, retry_prompt, style=req.style or "standard")
-
-    parsed = _parse_sections(raw)
-
-    combined = "\n".join([parsed.get("strengths", ""), parsed.get("improvement_areas", ""), parsed.get("recommendations", "")])
-    if _looks_like_bad_generation(combined) or not any(parsed.values()) or _parsed_missing_or_too_short(parsed):
-        parsed = _generate_template_based_feedback(req, texts)
+    strengths_options = _make_three_options(strengths, req, "strengths", retrieved)
+    improvement_options = _make_three_options(improvement_areas, req, "areas_for_improvement", retrieved)
+    recommendation_options = _make_three_options(recommendations, req, "recommendations", retrieved)
 
     return GenerateResponse(
-        strengths=parsed["strengths"],
-        improvement_areas=parsed["improvement_areas"],
-        recommendations=parsed["recommendations"],
-        debug=None,
+        strengths=strengths,
+        improvement_areas=improvement_areas,
+        recommendations=recommendations,
+        strengths_options=strengths_options,
+        improvement_areas_options=improvement_options,
+        recommendations_options=recommendation_options,
+        debug={
+            "top_comments": retrieved,
+            "reference_sources": _reference_source_summary(retrieved),
+            "embedding_cache_path": str(EMBEDDINGS_CACHE_PATH),
+            "dataset_size": len(_build_dataset_entries()),
+            "model": os.getenv("SBERT_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
+            "generator": "retrieval-only",
+            "feedback_queries": {
+                "strengths": _normalize_whitespace(req.strengths or "") or _summarize_comments_for_field(req, comments, "strengths"),
+                "areas_for_improvement": _normalize_whitespace(req.improvement_areas or "") or _summarize_comments_for_field(req, comments, "areas_for_improvement"),
+                "recommendations": _normalize_whitespace(req.recommendations or "") or _summarize_comments_for_field(req, comments, "recommendations"),
+            },
+        },
     )
+
+
+@app.post("/reference-evaluations")
+async def add_reference_evaluation(item: ReferenceEvaluationItem):
+    entry = item.model_dump()
+    entry["created_at"] = datetime.utcnow().isoformat() + "Z"
+    with REFERENCE_EVALS_PATH.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    try:
+        if EMBEDDINGS_CACHE_PATH.exists():
+            EMBEDDINGS_CACHE_PATH.unlink()
+    except Exception:
+        pass
+    return {"ok": True}

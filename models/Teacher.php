@@ -2,6 +2,7 @@
 class Teacher {
     private $conn;
     private $table_name = "teachers";
+    private $hasTeacherDepartmentsTable = null;
 
     public $id;
     public $name;
@@ -13,13 +14,35 @@ class Teacher {
         $this->conn = $db;
     }
 
+    private function hasTeacherDepartmentsTable() {
+        if ($this->hasTeacherDepartmentsTable !== null) {
+            return $this->hasTeacherDepartmentsTable;
+        }
+
+        try {
+            $stmt = $this->conn->query("SHOW TABLES LIKE 'teacher_departments'");
+            $this->hasTeacherDepartmentsTable = ($stmt && $stmt->fetch(PDO::FETCH_NUM)) ? true : false;
+        } catch (PDOException $e) {
+            $this->hasTeacherDepartmentsTable = false;
+            error_log('teacher_departments availability check failed: ' . $e->getMessage());
+        }
+
+        return $this->hasTeacherDepartmentsTable;
+    }
+
     // Get teacher by ID
     public function getById($id) {
-        $query = "SELECT t.*, GROUP_CONCAT(td.department ORDER BY td.department SEPARATOR ',') AS secondary_departments
-                  FROM " . $this->table_name . " t
-                  LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-                  WHERE t.id = :id
-                  GROUP BY t.id";
+        if ($this->hasTeacherDepartmentsTable()) {
+            $query = "SELECT t.*, GROUP_CONCAT(td.department ORDER BY td.department SEPARATOR ',') AS secondary_departments
+                      FROM " . $this->table_name . " t
+                      LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                      WHERE t.id = :id
+                      GROUP BY t.id";
+        } else {
+            $query = "SELECT t.*, NULL AS secondary_departments
+                      FROM " . $this->table_name . " t
+                      WHERE t.id = :id";
+        }
         $stmt = $this->conn->prepare($query);
         $stmt->bindParam(':id', $id);
         $stmt->execute();
@@ -52,11 +75,18 @@ class Teacher {
 
     // Get teachers by department
     public function getByDepartment($department) {
-        $query = "SELECT DISTINCT t.*
-                  FROM " . $this->table_name . " t
-                  LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-                  WHERE t.department = :department OR td.department = :department
-                  ORDER BY t.name ASC";
+        if ($this->hasTeacherDepartmentsTable()) {
+            $query = "SELECT DISTINCT t.*
+                      FROM " . $this->table_name . " t
+                      LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                      WHERE t.department = :department OR td.department = :department
+                      ORDER BY t.name ASC";
+        } else {
+            $query = "SELECT DISTINCT t.*
+                      FROM " . $this->table_name . " t
+                      WHERE t.department = :department
+                      ORDER BY t.name ASC";
+        }
         $stmt = $this->conn->prepare($query);
         $stmt->bindParam(':department', $department);
         $stmt->execute();
@@ -66,13 +96,22 @@ class Teacher {
     // Get active teachers by department
     public function getActiveByDepartment($department) {
                 // Exclude teachers who are linked to user accounts with roles 'chairperson' or 'principal'
-                $query = "SELECT DISTINCT t.* FROM " . $this->table_name . " t 
-                                    LEFT JOIN users u ON t.user_id = u.id 
-                                    LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-                                    WHERE (t.department = :department OR td.department = :department)
-                                        AND t.status = 'active' 
-                                        AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
-                                    ORDER BY t.name ASC";
+                if ($this->hasTeacherDepartmentsTable()) {
+                    $query = "SELECT DISTINCT t.* FROM " . $this->table_name . " t 
+                                        LEFT JOIN users u ON t.user_id = u.id 
+                                        LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                                        WHERE (t.department = :department OR td.department = :department)
+                                            AND t.status = 'active' 
+                                            AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
+                                        ORDER BY t.name ASC";
+                } else {
+                    $query = "SELECT DISTINCT t.* FROM " . $this->table_name . " t 
+                                        LEFT JOIN users u ON t.user_id = u.id 
+                                        WHERE t.department = :department
+                                            AND t.status = 'active' 
+                                            AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
+                                        ORDER BY t.name ASC";
+                }
                 $stmt = $this->conn->prepare($query);
                 $stmt->bindParam(':department', $department);
                 $stmt->execute();
@@ -97,26 +136,40 @@ class Teacher {
         }
 
         $placeholders = implode(',', array_fill(0, count($departments), '?'));
-        $query = "SELECT DISTINCT t.* FROM " . $this->table_name . " t 
-                  LEFT JOIN users u ON t.user_id = u.id 
-                  LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-                  WHERE (t.department IN ($placeholders) OR td.department IN ($placeholders))
-                    AND t.status = 'active'
-                    AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
-                  ORDER BY t.name ASC";
+        if ($this->hasTeacherDepartmentsTable()) {
+            $query = "SELECT DISTINCT t.* FROM " . $this->table_name . " t 
+                      LEFT JOIN users u ON t.user_id = u.id 
+                      LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                      WHERE (t.department IN ($placeholders) OR td.department IN ($placeholders))
+                        AND t.status = 'active'
+                        AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
+                      ORDER BY t.name ASC";
+        } else {
+            $query = "SELECT DISTINCT t.* FROM " . $this->table_name . " t 
+                      LEFT JOIN users u ON t.user_id = u.id 
+                      WHERE t.department IN ($placeholders)
+                        AND t.status = 'active'
+                        AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
+                      ORDER BY t.name ASC";
+        }
         $stmt = $this->conn->prepare($query);
         $position = 1;
         foreach ($departments as $dept) {
             $stmt->bindValue($position++, $dept);
         }
-        foreach ($departments as $dept) {
-            $stmt->bindValue($position++, $dept);
+        if ($this->hasTeacherDepartmentsTable()) {
+            foreach ($departments as $dept) {
+                $stmt->bindValue($position++, $dept);
+            }
         }
         $stmt->execute();
         return $stmt;
     }
 
     public function getSecondaryDepartments($teacherId) {
+        if (!$this->hasTeacherDepartmentsTable()) {
+            return [];
+        }
         $query = "SELECT department FROM teacher_departments WHERE teacher_id = :teacher_id ORDER BY department ASC";
         $stmt = $this->conn->prepare($query);
         $stmt->bindParam(':teacher_id', $teacherId);
@@ -125,6 +178,9 @@ class Teacher {
     }
 
     public function syncSecondaryDepartments($teacherId, array $departments) {
+        if (!$this->hasTeacherDepartmentsTable()) {
+            return true;
+        }
         $departments = array_values(array_unique(array_filter(array_map('trim', $departments), function ($department) {
             return $department !== '';
         })));

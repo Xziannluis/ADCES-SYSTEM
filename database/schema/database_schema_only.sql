@@ -196,6 +196,38 @@ CREATE TABLE `ai_recommendations` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ========================================
+-- AI_REFERENCE_EVALUATIONS TABLE
+-- Stores the structured AI reference corpus sourced from completed evaluations.
+-- ========================================
+CREATE TABLE `ai_reference_evaluations` (
+  `id` INT PRIMARY KEY AUTO_INCREMENT,
+  `evaluation_id` INT NULL,
+  `faculty_name` VARCHAR(255) DEFAULT '',
+  `department` VARCHAR(100) DEFAULT '',
+  `subject_observed` VARCHAR(255) DEFAULT '',
+  `observation_type` VARCHAR(100) DEFAULT '',
+  `communications_avg` DECIMAL(4,2) DEFAULT 0.00,
+  `management_avg` DECIMAL(4,2) DEFAULT 0.00,
+  `assessment_avg` DECIMAL(4,2) DEFAULT 0.00,
+  `overall_avg` DECIMAL(4,2) DEFAULT 0.00,
+  `ratings_json` LONGTEXT NOT NULL,
+  `strengths` TEXT NOT NULL,
+  `improvement_areas` TEXT NOT NULL,
+  `recommendations` TEXT NOT NULL,
+  `source` VARCHAR(50) DEFAULT 'live-submit',
+  `source_evaluation_id` INT DEFAULT NULL,
+  `reference_created_at` DATETIME DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uniq_ai_reference_evaluation` (`evaluation_id`),
+  KEY `department_idx` (`department`),
+  KEY `source_idx` (`source`),
+  KEY `reference_created_idx` (`reference_created_at`),
+  CONSTRAINT `fk_ai_reference_evaluations_evaluation`
+    FOREIGN KEY (`evaluation_id`) REFERENCES `evaluations`(`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ========================================
 -- AUDIT_LOGS TABLE
 -- ========================================
 CREATE TABLE `audit_logs` (
@@ -217,5 +249,6 @@ CREATE TABLE `audit_logs` (
 CREATE INDEX idx_evaluations_teacher_date ON evaluations(teacher_id, created_at DESC);
 CREATE INDEX idx_evaluations_evaluator ON evaluations(evaluator_id);
 CREATE INDEX idx_evaluation_details_eval ON evaluation_details(evaluation_id);
+CREATE INDEX idx_ai_reference_evaluations_eval ON ai_reference_evaluations(evaluation_id);
 CREATE INDEX idx_teachers_user ON teachers(user_id);
 CREATE INDEX idx_users_role_dept ON users(role, department);

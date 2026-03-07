@@ -80,6 +80,10 @@ class User {
     public function login() {
     // Add debug logging
     error_log("Attempting login with username: " . $this->username . ", role: " . $this->role);
+        if (!$this->conn instanceof PDO) {
+            error_log('Login aborted: database connection is not available.');
+            return false;
+        }
         // Prepare query
         $query = "SELECT id, username, password, name, role, department, status 
                   FROM " . $this->table_name . " 

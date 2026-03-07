@@ -179,6 +179,13 @@ class EvaluationController {
             // Commit transaction
             $this->db->commit();
 
+            // 6. Export completed evaluation to the AI reference corpus (best effort only)
+            try {
+                $this->syncEvaluationToAIReferences((int)$evaluationId);
+            } catch (Throwable $syncErr) {
+                error_log("AI reference sync failed for evaluation {$evaluationId}: " . $syncErr->getMessage());
+            }
+
             return [
                 'success' => true,
                 'evaluation_id' => $evaluationId,
@@ -200,6 +207,8 @@ class EvaluationController {
     private function createEvaluationRecord($data, $evaluatorId) {
         // Ensure optional fields have sensible defaults to avoid SQL errors
         $teacher_id = $data['teacher_id'] ?? null;
+        $faculty_name = $data['faculty_name'] ?? null;
+        $department = $data['department'] ?? null;
         $academic_year = $data['academic_year'] ?? null;
         $semester = $data['semester'] ?? null;
         $subject_observed = $data['subject_observed'] ?? null;
@@ -211,21 +220,23 @@ class EvaluationController {
         $others_requirements = isset($data['others_requirements']) ? $data['others_requirements'] : 0;
         $others_specify = $data['others_specify'] ?? '';
 
-    // IMPORTANT: Use a consistent status that dashboards can filter on.
-    // We'll use 'submitted' for final submissions.
+    // IMPORTANT: Finalized submissions should be marked completed so they appear in reports
+    // and can be imported into the AI reference corpus.
     $query = "INSERT INTO evaluations 
-                  (teacher_id, evaluator_id, academic_year, semester, 
+          (teacher_id, faculty_name, department, evaluator_id, academic_year, semester, 
                    subject_observed, observation_time, observation_date, 
                    observation_type, seat_plan, course_syllabi, 
                    others_requirements, others_specify, status) 
-                  VALUES (:teacher_id, :evaluator_id, :academic_year, :semester, 
+          VALUES (:teacher_id, :faculty_name, :department, :evaluator_id, :academic_year, :semester, 
                           :subject_observed, :observation_time, :observation_date, 
                           :observation_type, :seat_plan, :course_syllabi, 
-              :others_requirements, :others_specify, 'submitted')";
+              :others_requirements, :others_specify, 'completed')";
 
         $stmt = $this->db->prepare($query);
 
         $stmt->bindValue(':teacher_id', $teacher_id);
+    $stmt->bindValue(':faculty_name', $faculty_name);
+    $stmt->bindValue(':department', $department);
         $stmt->bindValue(':evaluator_id', $evaluatorId);
         $stmt->bindValue(':academic_year', $academic_year);
         $stmt->bindValue(':semester', $semester);
@@ -343,6 +354,8 @@ class EvaluationController {
             // Create evaluation with status 'draft'
                 // Prepare default values for optional draft fields
                 $teacher_id = $postData['teacher_id'] ?? null;
+                $faculty_name = $postData['faculty_name'] ?? null;
+                $department = $postData['department'] ?? null;
                 $academic_year = $postData['academic_year'] ?? null;
                 $semester = $postData['semester'] ?? null;
                 $subject_observed = $postData['subject_observed'] ?? null;
@@ -355,17 +368,19 @@ class EvaluationController {
                 $others_specify = $postData['others_specify'] ?? '';
 
                 $query = "INSERT INTO evaluations 
-                      (teacher_id, evaluator_id, academic_year, semester, 
+                      (teacher_id, faculty_name, department, evaluator_id, academic_year, semester, 
                        subject_observed, observation_time, observation_date, 
                        observation_type, seat_plan, course_syllabi, 
                        others_requirements, others_specify, status, created_at) 
-                      VALUES (:teacher_id, :evaluator_id, :academic_year, :semester, 
+                      VALUES (:teacher_id, :faculty_name, :department, :evaluator_id, :academic_year, :semester, 
                               :subject_observed, :observation_time, :observation_date, 
                               :observation_type, :seat_plan, :course_syllabi, 
                               :others_requirements, :others_specify, 'draft', NOW())";
 
             $stmt = $this->db->prepare($query);
             $stmt->bindValue(':teacher_id', $teacher_id);
+            $stmt->bindValue(':faculty_name', $faculty_name);
+            $stmt->bindValue(':department', $department);
             $stmt->bindValue(':evaluator_id', $evaluatorId);
             $stmt->bindValue(':academic_year', $academic_year);
             $stmt->bindValue(':semester', $semester);
@@ -440,6 +455,167 @@ class EvaluationController {
         $stmt->bindParam(':evaluation_id', $evaluationId);
 
         return $stmt->execute();
+    }
+
+    private function syncEvaluationToAIReferences(int $evaluationId): void {
+        $query = "
+            SELECT
+                e.id,
+                e.subject_observed,
+                e.observation_type,
+                e.communications_avg,
+                e.management_avg,
+                e.assessment_avg,
+                e.overall_avg,
+                e.strengths,
+                e.improvement_areas,
+                e.recommendations,
+                e.created_at,
+                COALESCE(t.name, e.faculty_printed_name, '') AS faculty_name,
+                COALESCE(t.department, u.department, '') AS department
+            FROM evaluations e
+            LEFT JOIN teachers t ON e.teacher_id = t.id
+            LEFT JOIN users u ON t.user_id = u.id
+            WHERE e.id = :evaluation_id
+              AND e.status = 'completed'
+            LIMIT 1
+        ";
+
+        $stmt = $this->db->prepare($query);
+        $stmt->bindValue(':evaluation_id', $evaluationId, PDO::PARAM_INT);
+        $stmt->execute();
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            return;
+        }
+
+        $detailStmt = $this->db->prepare(
+            "SELECT category, criterion_index, rating, comments
+             FROM evaluation_details
+             WHERE evaluation_id = :evaluation_id
+             ORDER BY category, criterion_index"
+        );
+        $detailStmt->bindValue(':evaluation_id', $evaluationId, PDO::PARAM_INT);
+        $detailStmt->execute();
+        $details = $detailStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $ratings = [];
+        foreach ($details as $detail) {
+            $category = $detail['category'] ?? 'other';
+            if (!isset($ratings[$category])) {
+                $ratings[$category] = [];
+            }
+            $ratings[$category][] = [
+                'rating' => (float)($detail['rating'] ?? 0),
+                'comment' => trim((string)($detail['comments'] ?? '')),
+            ];
+        }
+
+        $entry = [
+            'faculty_name' => trim((string)($row['faculty_name'] ?? '')),
+            'department' => trim((string)($row['department'] ?? '')),
+            'subject_observed' => trim((string)($row['subject_observed'] ?? '')),
+            'observation_type' => trim((string)($row['observation_type'] ?? '')),
+            'averages' => [
+                'communications' => (float)($row['communications_avg'] ?? 0),
+                'management' => (float)($row['management_avg'] ?? 0),
+                'assessment' => (float)($row['assessment_avg'] ?? 0),
+                'overall' => (float)($row['overall_avg'] ?? 0),
+            ],
+            'ratings' => $ratings,
+            'strengths' => trim((string)($row['strengths'] ?? '')),
+            'improvement_areas' => trim((string)($row['improvement_areas'] ?? '')),
+            'recommendations' => trim((string)($row['recommendations'] ?? '')),
+            'source' => 'live-submit',
+            'source_evaluation_id' => $evaluationId,
+            'created_at' => isset($row['created_at']) ? (string)$row['created_at'] : date('c'),
+        ];
+
+        if ($entry['strengths'] === '' || $entry['improvement_areas'] === '' || $entry['recommendations'] === '') {
+            return;
+        }
+
+        $ratingsJson = json_encode($entry['ratings'], JSON_UNESCAPED_UNICODE);
+        if ($ratingsJson === false) {
+            $ratingsJson = '{}';
+        }
+
+        $dbSync = $this->db->prepare(
+            "INSERT INTO ai_reference_evaluations (
+                evaluation_id,
+                faculty_name,
+                department,
+                subject_observed,
+                observation_type,
+                communications_avg,
+                management_avg,
+                assessment_avg,
+                overall_avg,
+                ratings_json,
+                strengths,
+                improvement_areas,
+                recommendations,
+                source,
+                source_evaluation_id,
+                reference_created_at
+            ) VALUES (
+                :evaluation_id,
+                :faculty_name,
+                :department,
+                :subject_observed,
+                :observation_type,
+                :communications_avg,
+                :management_avg,
+                :assessment_avg,
+                :overall_avg,
+                :ratings_json,
+                :strengths,
+                :improvement_areas,
+                :recommendations,
+                :source,
+                :source_evaluation_id,
+                :reference_created_at
+            )
+            ON DUPLICATE KEY UPDATE
+                faculty_name = VALUES(faculty_name),
+                department = VALUES(department),
+                subject_observed = VALUES(subject_observed),
+                observation_type = VALUES(observation_type),
+                communications_avg = VALUES(communications_avg),
+                management_avg = VALUES(management_avg),
+                assessment_avg = VALUES(assessment_avg),
+                overall_avg = VALUES(overall_avg),
+                ratings_json = VALUES(ratings_json),
+                strengths = VALUES(strengths),
+                improvement_areas = VALUES(improvement_areas),
+                recommendations = VALUES(recommendations),
+                source = VALUES(source),
+                source_evaluation_id = VALUES(source_evaluation_id),
+                reference_created_at = VALUES(reference_created_at)"
+        );
+
+        $dbSync->execute([
+            ':evaluation_id' => (int)$evaluationId,
+            ':faculty_name' => $entry['faculty_name'],
+            ':department' => $entry['department'],
+            ':subject_observed' => $entry['subject_observed'],
+            ':observation_type' => $entry['observation_type'],
+            ':communications_avg' => (float)$entry['averages']['communications'],
+            ':management_avg' => (float)$entry['averages']['management'],
+            ':assessment_avg' => (float)$entry['averages']['assessment'],
+            ':overall_avg' => (float)$entry['averages']['overall'],
+            ':ratings_json' => $ratingsJson,
+            ':strengths' => $entry['strengths'],
+            ':improvement_areas' => $entry['improvement_areas'],
+            ':recommendations' => $entry['recommendations'],
+            ':source' => $entry['source'],
+            ':source_evaluation_id' => (int)$entry['source_evaluation_id'],
+            ':reference_created_at' => $entry['created_at'],
+        ]);
+
+        $outPath = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'ai_service' . DIRECTORY_SEPARATOR . 'reference_evaluations.imported.jsonl';
+        file_put_contents($outPath, json_encode($entry, JSON_UNESCAPED_UNICODE) . PHP_EOL, FILE_APPEND | LOCK_EX);
     }
 }
 ?>
