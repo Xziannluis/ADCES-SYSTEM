@@ -175,19 +175,25 @@ $recent_evaluations = $evaluation->getByTeacher($teacher_id, 5);
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="badge bg-<?php echo $eval['overall_avg'] >= 4.6 ? 'success' : 
-                                                             ($eval['overall_avg'] >= 3.6 ? 'primary' : 
-                                                             ($eval['overall_avg'] >= 2.9 ? 'info' : 'warning')); ?>">
+                                        <span class="badge bg-<?php 
+                                            $r = (int) floor($eval['overall_avg']);
+                                            if($r === 5) echo 'success';
+                                            elseif($r === 4) echo 'primary';
+                                            elseif($r === 3) echo 'info';
+                                            else echo 'warning'; ?>">
                                             <?php echo number_format($eval['overall_avg'], 1); ?>
                                         </span>
                                     </td>
                                     <td>
                                         <?php
-                                        $rating = 'Needs Improvement';
-                                        if($eval['overall_avg'] >= 4.6) $rating = 'Excellent';
-                                        elseif($eval['overall_avg'] >= 3.6) $rating = 'Very Satisfactory';
-                                        elseif($eval['overall_avg'] >= 2.9) $rating = 'Satisfactory';
-                                        elseif($eval['overall_avg'] >= 1.8) $rating = 'Below Satisfactory';
+                                        $score = (int) floor($eval['overall_avg']);
+                                        switch($score) {
+                                            case 5: $rating = 'Excellent'; break;
+                                            case 4: $rating = 'Very Satisfactory'; break;
+                                            case 3: $rating = 'Satisfactory'; break;
+                                            case 2: $rating = 'Below Satisfactory'; break;
+                                            default: $rating = 'Needs Improvement'; break;
+                                        }
                                         echo $rating;
                                         ?>
                                     </td>

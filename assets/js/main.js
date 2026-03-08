@@ -206,24 +206,32 @@ function calculateAverages() {
     let interpretation = '';
     let interpretationClass = '';
     
-    if (overallAvg >= 4.6) {
-        interpretation = 'Excellent';
-        interpretationClass = 'text-success';
-    } else if (overallAvg >= 3.6) {
-        interpretation = 'Very Satisfactory';
-        interpretationClass = 'text-primary';
-    } else if (overallAvg >= 2.9) {
-        interpretation = 'Satisfactory';
-        interpretationClass = 'text-info';
-    } else if (overallAvg >= 1.8) {
-        interpretation = 'Below Satisfactory';
-        interpretationClass = 'text-warning';
-    } else if (overallAvg >= 1.0) {
-        interpretation = 'Needs Improvement';
-        interpretationClass = 'text-danger';
-    } else {
-        interpretation = 'Not Rated';
-        interpretationClass = 'text-muted';
+    const numericAvg = parseFloat(overallAvg);
+    const rounded = Math.floor(numericAvg);
+    switch (rounded) {
+        case 5:
+            interpretation = 'Excellent';
+            interpretationClass = 'text-success';
+            break;
+        case 4:
+            interpretation = 'Very Satisfactory';
+            interpretationClass = 'text-primary';
+            break;
+        case 3:
+            interpretation = 'Satisfactory';
+            interpretationClass = 'text-info';
+            break;
+        case 2:
+            interpretation = 'Below Satisfactory';
+            interpretationClass = 'text-warning';
+            break;
+        case 1:
+            interpretation = 'Needs Improvement';
+            interpretationClass = 'text-danger';
+            break;
+        default:
+            interpretation = 'Not Rated';
+            interpretationClass = 'text-muted';
     }
     
     const ratingInterpretationElement = document.getElementById('ratingInterpretation');

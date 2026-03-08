@@ -14,6 +14,13 @@ $db = $database->getConnection();
 
 $teacher = new Teacher($db);
 
+// automatically remove outdated schedules
+try {
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 1 DAY");
+} catch (Exception $e) {
+    error_log('Error clearing expired schedules on assets evaluation page: ' . $e->getMessage());
+}
+
 // Handle teacher actions
 $action = $_GET['action'] ?? '';
 $success_message = '';
@@ -693,23 +700,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                         <i class="fas fa-calendar"></i> Schedule
                                     </button>
 
-                                    <?php if(!empty($teacher_row['evaluation_schedule']) || !empty($teacher_row['evaluation_room'])): ?>
-                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Mark evaluation as done and clear schedule?');">
-                                            <input type="hidden" name="action" value="mark_done">
-                                            <input type="hidden" name="teacher_id" value="<?php echo $teacher_row['id']; ?>">
-                                            <button type="submit" class="btn btn-sm btn-outline-success">
-                                                <i class="fas fa-check"></i> Done
-                                            </button>
-                                        </form>
-
-                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this schedule?');">
-                                            <input type="hidden" name="action" value="cancel_schedule">
-                                            <input type="hidden" name="teacher_id" value="<?php echo $teacher_row['id']; ?>">
-                                            <button type="submit" class="btn btn-sm btn-outline-danger">
-                                                <i class="fas fa-times"></i> Cancel
-                                            </button>
-                                        </form>
-                                    <?php endif; ?>
+                                    <!-- manual Done/Cancel buttons removed; schedule handled automatically -->
 
                                     <a href="?action=toggle_status&teacher_id=<?php echo $teacher_row['id']; ?>" class="btn btn-sm btn-outline-<?php echo $teacher_row['status'] == 'active' ? 'warning' : 'success'; ?>" onclick="return confirm('Are you sure?');">
                                         <i class="fas fa-<?php echo $teacher_row['status'] == 'active' ? 'ban' : 'check'; ?>"></i> <?php echo $teacher_row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?>

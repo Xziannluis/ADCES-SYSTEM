@@ -403,21 +403,29 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                                 <?php while($eval = $evaluations->fetch(PDO::FETCH_ASSOC)): ?>
                                 <?php
                                 // Get rating text and class
-                                $rating_text = 'Needs Improvement';
-                                $rating_class = 'rating-needs-improvement';
-                                
-                                if($eval['overall_avg'] >= 4.6) {
-                                    $rating_text = 'Excellent';
-                                    $rating_class = 'rating-excellent';
-                                } elseif($eval['overall_avg'] >= 3.6) {
-                                    $rating_text = 'Very Satisfactory';
-                                    $rating_class = 'rating-very-satisfactory';
-                                } elseif($eval['overall_avg'] >= 2.9) {
-                                    $rating_text = 'Satisfactory';
-                                    $rating_class = 'rating-satisfactory';
-                                } elseif($eval['overall_avg'] >= 1.8) {
-                                    $rating_text = 'Below Satisfactory';
-                                    $rating_class = 'rating-below-satisfactory';
+                                // Use rounding to align with the 1‑5 scale legend.
+                                $rounded = (int) floor($eval['overall_avg']);
+                                switch ($rounded) {
+                                    case 5:
+                                        $rating_text = 'Excellent';
+                                        $rating_class = 'rating-excellent';
+                                        break;
+                                    case 4:
+                                        $rating_text = 'Very Satisfactory';
+                                        $rating_class = 'rating-very-satisfactory';
+                                        break;
+                                    case 3:
+                                        $rating_text = 'Satisfactory';
+                                        $rating_class = 'rating-satisfactory';
+                                        break;
+                                    case 2:
+                                        $rating_text = 'Below Satisfactory';
+                                        $rating_class = 'rating-below-satisfactory';
+                                        break;
+                                    default:
+                                        $rating_text = 'Needs Improvement';
+                                        $rating_class = 'rating-needs-improvement';
+                                        break;
                                 }
                                 
                                 // Get evaluation details for observations

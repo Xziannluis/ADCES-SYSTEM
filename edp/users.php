@@ -1430,9 +1430,9 @@ function getAssignedCoordinators($db, $supervisor_id) {
             const gradeLevelsList = document.getElementById('gradeLevelsList');
 
             const basicEdDepartments = [
-                { value: 'ELEMENTARY DEPARTMENT', label: 'Elementary Department' },
-                { value: 'HIGH SCHOOL DEPARTMENT', label: 'High School Department' },
-                { value: 'JUNIOR HIGH SCHOOL DEPARTMENT', label: 'Junior High School Department' }
+                { value: 'ELEM', label: 'Elementary' },
+                { value: 'JHS', label: 'Junior High School' },
+                { value: 'SHS', label: 'Senior High School' }
             ];
 
             const collegeDepartments = [
@@ -1456,9 +1456,9 @@ function getAssignedCoordinators($db, $supervisor_id) {
             ];
 
             const teacherBasicEdDepartments = [
-                { value: 'ELEMENTARY DEPARTMENT', label: 'Elementary Department' },
-                { value: 'HIGH SCHOOL DEPARTMENT', label: 'High School Department' },
-                { value: 'JUNIOR HIGH SCHOOL DEPARTMENT', label: 'Junior High School Department' }
+                { value: 'ELEM', label: 'Elementary' },
+                { value: 'JHS', label: 'Junior High School' },
+                { value: 'SHS', label: 'Senior High School' }
             ];
 
             const teacherCollegeDepartments = [
@@ -1547,8 +1547,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                     roleSelect.value = '';
                     departmentSelect.value = '';
                     departmentSelect.innerHTML = '<option value="">Select Department</option>';
-                } else {
-                    populateDepartmentsByProgram(programSelect.value);
                 }
                 
                 // Hide all containers first
@@ -1617,6 +1615,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
             departmentSelect.addEventListener('change', toggleSpecializations);
             
             // Initialize on page load
+            // we populate departments when program changes; just set initial visibility
             toggleSpecializations();
         });
         // Enhance mobile experience

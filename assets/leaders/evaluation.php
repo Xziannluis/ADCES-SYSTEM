@@ -450,23 +450,23 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             <h6>Overall Rating Interpretation</h6>
                                             <div class="rating-scale">
                                                 <div class="rating-scale-item">
-                                                    <span>4.6-5.0</span>
+                                                    <span>5</span>
                                                     <span>Excellent</span>
                                                 </div>
                                                 <div class="rating-scale-item">
-                                                    <span>3.6-4.5</span>
+                                                    <span>4</span>
                                                     <span>Very Satisfactory</span>
                                                 </div>
                                                 <div class="rating-scale-item">
-                                                    <span>2.9-3.5</span>
+                                                    <span>3</span>
                                                     <span>Satisfactory</span>
                                                 </div>
                                                 <div class="rating-scale-item">
-                                                    <span>1.8-2.5</span>
+                                                    <span>2</span>
                                                     <span>Below Satisfactory</span>
                                                 </div>
                                                 <div class="rating-scale-item">
-                                                    <span>1.0-1.5</span>
+                                                    <span>1</span>
                                                     <span>Needs Improvement</span>
                                                 </div>
                                             </div>
@@ -927,24 +927,30 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             let interpretationClass = '';
             const numericAvg = parseFloat(overallAvg);
             
-            if (numericAvg >= 4.6) {
-                interpretation = 'Excellent';
-                interpretationClass = 'text-success';
-            } else if (numericAvg >= 3.6) {
-                interpretation = 'Very Satisfactory';
-                interpretationClass = 'text-primary';
-            } else if (numericAvg >= 2.9) {
-                interpretation = 'Satisfactory';
-                interpretationClass = 'text-info';
-            } else if (numericAvg >= 1.8) {
-                interpretation = 'Below Satisfactory';
-                interpretationClass = 'text-warning';
-            } else if (numericAvg >= 1.0) {
-                interpretation = 'Needs Improvement';
-                interpretationClass = 'text-danger';
-            } else {
-                interpretation = 'Not Rated';
-                interpretationClass = 'text-muted';
+            const rounded = Math.floor(numericAvg);
+            switch (rounded) {
+                case 5:
+                    interpretation = 'Excellent';
+                    interpretationClass = 'text-success';
+                    break;
+                case 4:
+                    interpretation = 'Very Satisfactory';
+                    interpretationClass = 'text-primary';
+                    break;
+                case 3:
+                    interpretation = 'Satisfactory';
+                    interpretationClass = 'text-info';
+                    break;
+                case 2:
+                    interpretation = 'Below Satisfactory';
+                    interpretationClass = 'text-warning';
+                    break;
+                case 1:
+                    interpretation = 'Needs Improvement';
+                    interpretationClass = 'text-danger';
+                    break;
+                default:
+                    interpretation = 'Not Rated';
             }
             
             const ratingElement = document.getElementById('ratingInterpretation');

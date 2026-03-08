@@ -203,11 +203,16 @@ if($_POST && isset($_POST['update_teacher'])) {
                                     <td><?php echo htmlspecialchars($eval['subject_observed']); ?></td>
                                     <td><?php echo htmlspecialchars($eval['observation_type']); ?></td>
                                     <td>
-                                        <span class="badge bg-<?php echo $eval['overall_avg'] >= 4.6 ? 'success' : 
-                                                             ($eval['overall_avg'] >= 3.6 ? 'primary' : 
-                                                             ($eval['overall_avg'] >= 2.9 ? 'info' : 'warning')); ?>">
-                                            <?php echo number_format($eval['overall_avg'], 1); ?>
-                                        </span>
+                                        <?php
+                                            $r = (int) floor($eval['overall_avg']);
+                                            $color = 'warning';
+                                            if($r === 5) $color = 'success';
+                                            elseif($r === 4) $color = 'primary';
+                                            elseif($r === 3) $color = 'info';
+                                        ?>
+                                        <span class="badge bg-<?php echo $color; ?>">
+                                         <?php echo number_format($eval['overall_avg'], 1); ?>
+                                         </span>
                                     </td>
                                     <td><?php echo htmlspecialchars($eval['evaluator_name']); ?></td>
                                     <td>

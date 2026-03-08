@@ -428,11 +428,11 @@ function exportEvaluationForm($evaluation_id, $academic_year, $semester) {
             <div class="mb-6">
                 <h3 class="font-bold mb-2">Interpretation of Overall Rating</h3>
                 <div class="text-xs space-y-1">
-                    <div><strong>4.6-5.0 – Excellent</strong></div>
-                    <div><strong>3.6-4.5 – Very Satisfactory</strong></div>
-                    <div><strong>2.6-3.5 – Satisfactory</strong></div>
-                    <div><strong>1.6-2.5 – Below Satisfactory</strong></div>
-                    <div><strong>1.0-1.5 – Needs Improvement</strong></div>
+                    <div><strong>5 – Excellent</strong></div>
+                    <div><strong>4 – Very Satisfactory</strong></div>
+                    <div><strong>3 – Satisfactory</strong></div>
+                    <div><strong>2 – Below Satisfactory</strong></div>
+                    <div><strong>1 – Needs Improvement</strong></div>
                 </div>
             </div>
 
@@ -739,10 +739,14 @@ function exportReportCSV($academic_year, $semester, $teacher_id) {
     if($evaluations->rowCount() > 0) {
         while($eval = $evaluations->fetch(PDO::FETCH_ASSOC)) {
             $rating = 'Needs Improvement';
-            if($eval['overall_avg'] >= 4.6) $rating = 'Excellent';
-            elseif($eval['overall_avg'] >= 3.6) $rating = 'Very Satisfactory';
-            elseif($eval['overall_avg'] >= 2.9) $rating = 'Satisfactory';
-            elseif($eval['overall_avg'] >= 1.8) $rating = 'Below Satisfactory';
+            $score = (int) floor($eval['overall_avg']);
+            switch ($score) {
+                case 5: $rating = 'Excellent'; break;
+                case 4: $rating = 'Very Satisfactory'; break;
+                case 3: $rating = 'Satisfactory'; break;
+                case 2: $rating = 'Below Satisfactory'; break;
+                default: $rating = 'Needs Improvement'; break;
+            }
             
             fputcsv($output, [
                 $eval['teacher_name'],

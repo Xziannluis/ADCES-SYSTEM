@@ -102,10 +102,11 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
                                                 <div class="d-flex align-items-center gap-2">
                                                     <span class="badge bg-<?php 
                                                         $rating = $eval['overall_avg'];
-                                                        if($rating >= 4.6) echo 'success';
-                                                        elseif($rating >= 3.6) echo 'primary';
-                                                        elseif($rating >= 2.9) echo 'info';
-                                                        elseif($rating >= 1.8) echo 'warning';
+                                                        $r = (int) floor($rating);
+                                                        if($r === 5) echo 'success';
+                                                        elseif($r === 4) echo 'primary';
+                                                        elseif($r === 3) echo 'info';
+                                                        elseif($r === 2) echo 'warning';
                                                         else echo 'danger';
                                                     ?>"><?php echo number_format($rating,1); ?></span>
                                                     <a href="view_evaluation.php?id=<?php echo $eval['id']; ?>" class="btn btn-sm btn-outline-primary">View</a>

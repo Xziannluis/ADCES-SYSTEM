@@ -11,7 +11,16 @@ require_once '../config/database.php';
 require_once '../models/Teacher.php';
 require_once '../models/Evaluation.php';
 
-$db = (new Database())->getConnection();
+$database = new Database();
+$db = $database->getConnection();
+
+// remove any past schedules so teacher doesn't see outdated entries
+try {
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 1 DAY");
+} catch (Exception $e) {
+    error_log('Failed to clear expired schedule in teacher dashboard: ' . $e->getMessage());
+}
+
 $teacher = new Teacher($db);
 $evaluation = new Evaluation($db);
 

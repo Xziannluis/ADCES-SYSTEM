@@ -375,29 +375,32 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
                             <div class="col-md-6">
                                 <h6>Overall Rating Interpretation</h6>
                                 <div class="rating-scale">
-                                    <div class="rating-scale-item"><span>4.6-5.0</span><span>Excellent</span></div>
-                                    <div class="rating-scale-item"><span>3.6-4.5</span><span>Very Satisfactory</span></div>
-                                    <div class="rating-scale-item"><span>2.9-3.5</span><span>Satisfactory</span></div>
-                                    <div class="rating-scale-item"><span>1.8-2.5</span><span>Below Satisfactory</span></div>
-                                    <div class="rating-scale-item"><span>1.0-1.5</span><span>Needs Improvement</span></div>
-                                </div>
-                            </div>
-                            <div class="col-md-6">
-                                <div class="text-center p-4">
-                                    <h4>Total Average</h4>
-                                    <div class="display-4 text-primary"><?php echo number_format($overallAvg, 1); ?></div>
-                                    <h5>
-                                        <?php
-                                        if ($overallAvg >= 4.6) echo 'Excellent';
-                                        elseif ($overallAvg >= 3.6) echo 'Very Satisfactory';
-                                        elseif ($overallAvg >= 2.9) echo 'Satisfactory';
-                                        elseif ($overallAvg >= 1.8) echo 'Below Satisfactory';
-                                        elseif ($overallAvg > 0) echo 'Needs Improvement';
-                                        else echo 'Not Rated';
-                                        ?>
-                                    </h5>
-                                </div>
-                            </div>
+                                    <div class="rating-scale-item"><span>5</span><span>Excellent</span></div>
+                                    <div class="rating-scale-item"><span>4</span><span>Very Satisfactory</span></div>
+                                    <div class="rating-scale-item"><span>3</span><span>Satisfactory</span></div>
+                                    <div class="rating-scale-item"><span>2</span><span>Below Satisfactory</span></div>
+                                    <div class="rating-scale-item"><span>1</span><span>Needs Improvement</span></div>
+                                 </div>
+                             </div>
+                             <div class="col-md-6">
+                                 <div class="text-center p-4">
+                                     <h4>Total Average</h4>
+                                     <div class="display-4 text-primary"><?php echo number_format($overallAvg, 1); ?></div>
+                                     <h5>
+                                         <?php
+                                        $r = (int) round($overallAvg);
+                                        switch ($r) {
+                                            case 5: echo 'Excellent'; break;
+                                            case 4: echo 'Very Satisfactory'; break;
+                                            case 3: echo 'Satisfactory'; break;
+                                            case 2: echo 'Below Satisfactory'; break;
+                                            case 1: echo 'Needs Improvement'; break;
+                                            default: echo 'Not Rated'; break;
+                                        }
+                                         ?>
+                                     </h5>
+                                 </div>
+                             </div>
                         </div>
                     </div>
 

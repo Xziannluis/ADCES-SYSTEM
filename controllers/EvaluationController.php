@@ -250,6 +250,12 @@ class EvaluationController {
         $stmt->bindValue(':others_specify', $others_specify);
 
         if ($stmt->execute()) {
+            // clear any existing schedule for this teacher since evaluation has been completed
+            if (!empty($teacher_id)) {
+                $clearStmt = $this->db->prepare("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, updated_at = NOW() WHERE id = :id");
+                $clearStmt->bindValue(':id', $teacher_id);
+                $clearStmt->execute();
+            }
             return $this->db->lastInsertId();
         }
         $err = $stmt->errorInfo();

@@ -312,7 +312,6 @@ class Evaluation {
         }
         return false;
     }
-
     // Save evaluation details (ratings and comments)
     public function saveEvaluationDetails($evaluation_id, $category, $criterion_index, $rating, $comment, $criterion_text) {
         $query = "INSERT INTO evaluation_details 
