@@ -329,7 +329,7 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php else: ?>
                     <div class="alert alert-warning alert-dismissible fade show">
                         <i class="fas fa-info-circle me-2"></i>
-                        <strong>No evaluation schedule assigned yet.</strong> Please contact your department evaluator.
+                        <strong>No evaluation schedule assigned yet.</strong> 
                     </div>
                     <?php endif; ?>
                 </div>
@@ -371,7 +371,7 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                 <div class="col-md-4 text-md-end">
                                     <?php if($eval['status'] === 'completed'): ?>
                                     <a href="view-evaluation.php?eval_id=<?php echo $eval['id']; ?>" class="btn-view">
-                                        <i class="fas fa-eye me-2"></i>View Evaluation
+                                        <i class="fas fa-eye me-2"></i>View 
                                     </a>
                                     <?php else: ?>
                                     <span class="text-muted">

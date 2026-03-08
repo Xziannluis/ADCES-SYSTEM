@@ -179,6 +179,9 @@ foreach($eval_details as $detail) {
             color: var(--secondary);
             text-decoration: none;
             transition: all 0.3s;
+            border: 1px solid var(--secondary);
+            padding: 6px 12px;
+            border-radius: 4px;
         }
 
         .back-button:hover {
@@ -579,6 +582,9 @@ foreach($eval_details as $detail) {
             color: var(--secondary);
             text-decoration: none;
             transition: all 0.3s;
+            border: 1px solid var(--secondary);
+            padding: 6px 12px;
+            border-radius: 4px;
         }
 
         .back-button:hover {
