@@ -28,6 +28,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['user_id'], $_POST['ac
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Deactivated Evaluators</title>
     <?php include '../includes/header.php'; ?>
+    <style>
+        .table-responsive .table {
+            min-width: 700px;
+        }
+
+        @media (max-width: 767.98px) {
+            .table td .btn {
+                width: 100%;
+            }
+        }
+    </style>
 </head>
 <body>
     <?php include '../includes/sidebar.php'; ?>

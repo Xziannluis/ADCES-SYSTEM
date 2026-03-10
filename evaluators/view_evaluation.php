@@ -105,11 +105,32 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
     <?php include '../includes/header.php'; ?>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
     <style>
-        .readonly-banner {
-            background: #eef6ff;
-            border: 1px solid #cde3ff;
-            padding: 10px 12px;
-            border-radius: 8px;
+        .evaluation-table {
+            table-layout: fixed;
+            width: 100%;
+        }
+
+        .evaluation-table th:first-child,
+        .evaluation-table td:first-child {
+            width: 57%;
+            word-break: break-word;
+        }
+
+        .evaluation-table th:nth-child(n+2):nth-child(-n+6),
+        .evaluation-table td:nth-child(n+2):nth-child(-n+6) {
+            width: 4%;
+            text-align: center;
+            padding: 0.45rem 0.1rem;
+        }
+
+        .evaluation-table th:last-child,
+        .evaluation-table td:last-child {
+            width: 23%;
+            min-width: 220px;
+        }
+
+        .evaluation-table td:last-child .form-control {
+            width: 100%;
         }
 
         /* Show original form layout but prevent changes */
@@ -122,6 +143,23 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
         /* Keep Back button clickable */
         .btn, a.btn {
             pointer-events: auto;
+        }
+
+        @media (max-width: 991.98px) {
+            .card-header {
+                gap: 0.75rem;
+                flex-wrap: wrap;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .evaluation-section {
+                overflow-x: auto;
+            }
+
+            .evaluation-table {
+                min-width: 920px;
+            }
         }
     </style>
 </head>

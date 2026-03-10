@@ -199,14 +199,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
 
-        .profile-card {
-            background: white;
-            border-radius: 12px;
-            padding: 30px;
-            margin-top: 30px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-
         .avatar {
             width: 90px;
             height: 90px;
@@ -226,6 +218,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         .info-item:last-child {
             border-bottom: none;
+        }
+
+        @media (max-width: 767.98px) {
+            .d-flex.align-items-center.gap-3.mb-4 {
+                flex-direction: column;
+                align-items: flex-start !important;
+            }
+
+            .info-item .d-flex.gap-2,
+            .mt-4.d-flex.gap-2 {
+                flex-direction: column;
+            }
+
+            .info-item .btn,
+            .mt-4.d-flex.gap-2 .btn,
+            .mt-4.d-flex.gap-2 a {
+                width: 100%;
+            }
         }
     </style>
 </head>

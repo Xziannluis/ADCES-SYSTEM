@@ -105,6 +105,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             letter-spacing: 0.06em;
             margin-top: 4px;
         }
+
+        @media (max-width: 767.98px) {
+            #editEvaluatorForm .btn {
+                width: 100%;
+                margin-bottom: 0.5rem;
+            }
+
+            #editDesignationInput {
+                max-width: 100% !important;
+            }
+        }
     </style>
 </head>
 <body>

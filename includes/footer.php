@@ -48,13 +48,6 @@ function confirmAction(message) {
 
     mainContent.insertBefore(header, mainContent.firstChild);
 
-    const closeButton = document.createElement('button');
-    closeButton.type = 'button';
-    closeButton.className = 'mobile-sidebar-close';
-    closeButton.setAttribute('aria-label', 'Close navigation');
-    closeButton.innerHTML = '<i class="fas fa-times"></i>';
-    sidebar.insertBefore(closeButton, sidebar.firstChild);
-
     const backdrop = document.createElement('div');
     backdrop.className = 'sidebar-backdrop';
     document.body.appendChild(backdrop);
@@ -63,7 +56,6 @@ function confirmAction(message) {
     const closeSidebar = () => document.body.classList.remove('sidebar-open');
 
     openButton.addEventListener('click', openSidebar);
-    closeButton.addEventListener('click', closeSidebar);
     backdrop.addEventListener('click', closeSidebar);
 
     sidebar.querySelectorAll('a').forEach(link => {

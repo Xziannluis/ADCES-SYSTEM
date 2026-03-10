@@ -24,6 +24,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['teacher_id'], $_POST[
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Deactivated Teachers</title>
     <?php include '../includes/header.php'; ?>
+    <style>
+        .table-responsive .table {
+            min-width: 620px;
+        }
+
+        @media (max-width: 767.98px) {
+            .table td .btn {
+                width: 100%;
+            }
+        }
+    </style>
 </head>
 <body>
     <?php include '../includes/sidebar.php'; ?>

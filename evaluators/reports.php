@@ -97,7 +97,17 @@ foreach ($available_teachers as $teacher_option) {
 }
 
 // Get evaluations for reporting
-$evaluations = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id);
+$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id);
+$evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+$deanPrintEvaluation = null;
+foreach ($evaluations as $evaluationRow) {
+    $role = strtolower(trim((string)($evaluationRow['evaluator_role'] ?? '')));
+    if ($role === 'dean') {
+        $deanPrintEvaluation = $evaluationRow;
+        break;
+    }
+}
 
 // Calculate statistics
 $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year, $semester);
@@ -158,6 +168,13 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             border: 1px solid #ddd;
             vertical-align: top;
         }
+        .report-table td ul {
+            margin: 0;
+            padding-left: 18px;
+        }
+        .report-table td li {
+            margin-bottom: 4px;
+        }
         .report-table tr:nth-child(even) {
             background: #f8f9fa;
         }
@@ -216,6 +233,10 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
         }
         
         @media print {
+            @page {
+                size: portrait;
+                margin: 10mm;
+            }
             .no-print {
                 display: none !important;
             }
@@ -225,9 +246,31 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             .print-hide {
                 display: none !important;
             }
+            body {
+                margin: 0 !important;
+                background: #fff !important;
+                color: #000 !important;
+            }
+            .sidebar,
+            .sidebar-backdrop,
+            .mobile-sidebar-toggle,
+            .mobile-sidebar-header,
+            .d-flex.justify-content-between.align-items-center.mb-4,
+            .content-header,
+            .page-header {
+                display: none !important;
+            }
+            .main-content,
+            .container-fluid {
+                margin: 0 !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                padding: 0 !important;
+            }
             .classroom-report {
                 border: none;
                 box-shadow: none;
+                margin: 0 !important;
             }
             .report-header {
                 background: #2c3e50 !important;
@@ -242,15 +285,23 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             }
             .report-table {
                 min-width: auto;
+                table-layout: fixed;
+                width: 100%;
             }
+            .report-table col.col-date { width: 10%; }
+            .report-table col.col-teacher { width: 12%; }
+            .report-table col.col-subject { width: 14%; }
+            .report-table col.col-strength { width: 20%; }
+            .report-table col.col-improvement { width: 16%; }
+            .report-table col.col-recommendation { width: 14%; }
+            .report-table col.col-agreement { width: 7%; }
+            .report-table col.col-rating { width: 7%; }
 
             /* More "paper" look */
-            body {
-                background: #fff !important;
-                color: #000 !important;
-            }
             .report-info {
                 background: #fff !important;
+                padding: 8px 0 6px;
+                font-size: 11px;
             }
             .report-table th,
             .report-table td {
@@ -260,10 +311,75 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                 background: #fff !important;
                 color: #000 !important;
                 font-weight: 700;
-                font-size: 12px;
+                font-size: 9px;
+                line-height: 1.15;
+                padding: 4px 3px;
             }
             .report-table td {
-                font-size: 12px;
+                font-size: 8.1px;
+                line-height: 1.15;
+                word-break: break-word;
+                overflow-wrap: anywhere;
+                padding: 3px 3px;
+                hyphens: auto;
+            }
+            .report-table th:first-child,
+            .report-table td:first-child {
+                white-space: nowrap;
+                word-break: normal;
+                overflow-wrap: normal;
+            }
+            .observation-notes {
+                font-size: 8.1px;
+                line-height: 1.15;
+            }
+            .observation-notes ul {
+                margin: 0;
+                padding-left: 10px;
+            }
+            .observation-notes li {
+                margin-bottom: 1px;
+            }
+            .report-table td small {
+                font-size: 7.4px !important;
+                line-height: 1.05;
+            }
+            .classroom-report {
+                padding-bottom: 8px;
+            }
+            .print-signature-block {
+                display: flex !important;
+                justify-content: flex-start;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            .print-signature-card {
+                width: 260px;
+                text-align: center;
+            }
+            .print-signature-image-wrap {
+                height: 46px;
+                display: flex;
+                align-items: flex-end;
+                justify-content: center;
+                margin-bottom: 2px;
+                overflow: hidden;
+            }
+            .print-signature-image {
+                max-width: 100%;
+                max-height: 42px;
+                object-fit: contain;
+            }
+            .print-signature-line {
+                border-top: 1px solid #000;
+                padding-top: 3px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            .print-signature-role {
+                font-size: 10px;
+                font-weight: 600;
+                margin-top: 1px;
             }
         }
         
@@ -316,6 +432,38 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             }
             .ratings-cell {
                 justify-content: flex-start;
+            }
+        }
+
+        @media (max-width: 991.98px) {
+            .filters-card form .col-md-3,
+            .filters-card form .col-md-4,
+            .filters-card form .col-md-2 {
+                width: 50%;
+            }
+
+            .d-flex.justify-content-between.align-items-center.mb-4 {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .report-header,
+            .report-info,
+            .filters-card {
+                padding: 1rem;
+            }
+
+            .filters-card form .col-md-3,
+            .filters-card form .col-md-4,
+            .filters-card form .col-md-2 {
+                width: 100%;
+            }
+
+            .report-table {
+                min-width: 960px;
             }
         }
     </style>
@@ -441,8 +589,8 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if($evaluations->rowCount() > 0): ?>
-                                <?php while($eval = $evaluations->fetch(PDO::FETCH_ASSOC)): ?>
+                            <?php if(!empty($evaluations)): ?>
+                                <?php foreach($evaluations as $eval): ?>
                                 <?php
                                 // Get rating text and class
                                 // Round the average to nearest whole number and map directly to the
@@ -588,7 +736,7 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                                         </div>
                                     </td>
                                 </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
                                     <td colspan="8" class="text-center py-4">
@@ -605,18 +753,33 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                 
 
                 <!-- Print Signature (Prepared by) -->
-                <div class="print-only avoid-page-break" style="margin-top: 24px;">
-                    <div style="max-width: 260px;">
-                        <div style="font-size: 12px;">Prepared by:</div>
-                        <div style="height: 40px;"></div>
-                        <div style="border-top: 1px solid #000; font-size: 12px; text-align:center; padding-top: 4px;">
-                            <?php echo htmlspecialchars($_SESSION['name'] ?? ''); ?>
-                            <?php if (!empty($_SESSION['role'])): ?>
-                                <div style="font-size: 11px; font-weight: 600; margin-top: 2px;">(<?php echo htmlspecialchars($_SESSION['role']); ?>)</div>
-                            <?php endif; ?>
+                <?php
+                    $deanPrintedName = '';
+                    $deanSignature = '';
+                    if (is_array($deanPrintEvaluation)) {
+                        $deanPrintedName = trim((string)($deanPrintEvaluation['rater_printed_name'] ?? ''));
+                        if ($deanPrintedName === '') {
+                            $deanPrintedName = trim((string)($deanPrintEvaluation['evaluator_name'] ?? ''));
+                        }
+                        $deanSignature = trim((string)($deanPrintEvaluation['rater_signature'] ?? ''));
+                    }
+                ?>
+                <?php if ($deanPrintEvaluation !== null): ?>
+                    <div class="print-only avoid-page-break print-signature-block">
+                        <div class="print-signature-card">
+                            <div style="font-size: 12px; text-align: left; margin-bottom: 4px;">Prepared by:</div>
+                            <div class="print-signature-image-wrap">
+                                <?php if ($deanSignature !== '' && strpos($deanSignature, 'data:image/') === 0): ?>
+                                    <img src="<?php echo htmlspecialchars($deanSignature); ?>" alt="Dean observer signature" class="print-signature-image" />
+                                <?php endif; ?>
+                            </div>
+                            <div class="print-signature-line">
+                                <?php echo htmlspecialchars($deanPrintedName !== '' ? $deanPrintedName : ''); ?>
+                            </div>
+                            <div class="print-signature-role">Dean</div>
                         </div>
                     </div>
-                </div>
+                <?php endif; ?>
             </div>
         </div>
     </div>

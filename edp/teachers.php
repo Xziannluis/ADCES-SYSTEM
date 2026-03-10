@@ -217,6 +217,48 @@ $teachers = $selected_department ? $teacher->getActiveByDepartment($selected_dep
             content: " *";
             color: #dc3545;
         }
+
+        @media (max-width: 991.98px) {
+            .d-flex.justify-content-between.align-items-center.mb-4 {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+
+            .teacher-actions {
+                flex-wrap: wrap;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .teacher-cards-container {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+
+            .teacher-photo-section {
+                height: 170px;
+            }
+
+            .teacher-info {
+                padding: 16px;
+            }
+
+            .teacher-actions .btn {
+                flex: 1 1 100%;
+            }
+
+            form.mb-3.d-flex.align-items-center {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+
+            form.mb-3.d-flex.align-items-center .form-select {
+                width: 100% !important;
+                margin-right: 0 !important;
+            }
+        }
     </style>
 </head>
 <body>

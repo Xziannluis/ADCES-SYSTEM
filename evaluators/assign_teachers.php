@@ -261,6 +261,32 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
             border-radius: 8px;
             margin-bottom: 20px;
         }
+
+        @media (max-width: 991.98px) {
+            .d-flex.justify-content-between.align-items-center.mb-4 {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .form-container,
+            .assignment-header,
+            .assignment-body {
+                padding: 1rem;
+            }
+
+            .teacher-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.35rem;
+            }
+
+            .form-container .row > div {
+                margin-bottom: 0.75rem;
+            }
+        }
     </style>
 </head>
 <body>

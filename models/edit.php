@@ -24,13 +24,30 @@ if(!$teacher_data) {
 
 // Handle form submission
 if($_POST && isset($_POST['update_teacher'])) {
-    $validation_errors = $teacher->validate($_POST);
+    $validation_errors = [];
+
+    $name = trim($_POST['name'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $phone = trim($_POST['phone'] ?? '');
+
+    if ($name === '') {
+        $validation_errors[] = 'Full Name is required.';
+    }
+
+    if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $validation_errors[] = 'Email Address must be a valid email.';
+    }
+
+    if ($phone !== '' && !preg_match('/^[0-9+\-()\s]{7,20}$/', $phone)) {
+        $validation_errors[] = 'Phone Number contains invalid characters.';
+    }
     
     if (empty($validation_errors)) {
         $result = $teacher->update($teacher_id, [
-            'name' => $_POST['name'],
-            'email' => $_POST['email'],
-            'phone' => $_POST['phone']
+            'name' => $name,
+            'department' => $teacher_data['department'],
+            'email' => $email,
+            'phone' => $phone
         ]);
         
         if($result) {
@@ -55,6 +72,27 @@ if($_POST && isset($_POST['update_teacher'])) {
 </head>
 <body>
     <?php include '../includes/sidebar.php'; ?>
+    <style>
+        @media (max-width: 991.98px) {
+            .d-flex.justify-content-between.align-items-center.mb-4 {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .mt-4 .btn,
+            .mt-4 a,
+            .mt-4 form {
+                width: 100%;
+            }
+
+            .mt-4 .btn {
+                margin-bottom: 0.5rem;
+            }
+        }
+    </style>
     
     <div class="main-content">
         <div class="container-fluid">
@@ -184,7 +222,7 @@ if($_POST && isset($_POST['update_teacher'])) {
                     ?>
                     
                     <?php if($teacher_evaluations->rowCount() > 0): ?>
-                    <div class="table-responsive">
+                    <div class="table-responsive table-min-760">
                         <table class="table table-striped">
                             <thead>
                                 <tr>

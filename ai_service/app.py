@@ -135,6 +135,15 @@ def _score_band(x: float) -> str:
 class RatingItem(BaseModel):
     rating: float = Field(..., ge=1, le=5)
     comment: Optional[str] = ""
+    criterion_text: Optional[str] = ""
+
+
+class IndicatorCommentItem(BaseModel):
+    category: Optional[str] = ""
+    criterion_index: Optional[int] = None
+    criterion_text: Optional[str] = ""
+    rating: Optional[float] = None
+    comment: Optional[str] = ""
 
 
 class Averages(BaseModel):
@@ -150,6 +159,8 @@ class GenerateRequest(BaseModel):
     subject_observed: Optional[str] = ""
     observation_type: Optional[str] = ""
     ratings: Dict[str, Union[Dict[str, Any], List[Any]]] = Field(default_factory=dict)
+    indicator_comments: List[IndicatorCommentItem] = Field(default_factory=list)
+    comments_summary: Dict[str, List[str]] = Field(default_factory=dict)
     averages: Averages = Field(default_factory=Averages)
     strengths: Optional[str] = ""
     improvement_areas: Optional[str] = ""
@@ -233,7 +244,11 @@ def _coerce_rating_item(v: Any) -> Optional[RatingItem]:
             return None
     if isinstance(v, dict) and "rating" in v:
         try:
-            return RatingItem(rating=float(v.get("rating")), comment=str(v.get("comment") or ""))
+            return RatingItem(
+                rating=float(v.get("rating")),
+                comment=str(v.get("comment") or ""),
+                criterion_text=str(v.get("criterion_text") or ""),
+            )
         except Exception:
             return None
     return None
@@ -344,6 +359,33 @@ def _normalize_domain_name(key: str) -> str:
 
 def _flatten_comments(req: GenerateRequest) -> List[Dict[str, Any]]:
     comment_rows: List[Dict[str, Any]] = []
+    seen_explicit = set()
+
+    for idx, item in enumerate(req.indicator_comments or [], 1):
+        comment = _normalize_whitespace(item.comment or "")
+        if not comment:
+            continue
+        category_key = item.category or "General"
+        domain = _normalize_domain_name(category_key)
+        criterion_text = _normalize_whitespace(item.criterion_text or "")
+        row = {
+            "domain": domain,
+            "rating": float(item.rating or 0),
+            "comment": comment,
+            "index": int(item.criterion_index or idx),
+            "criterion_text": criterion_text,
+            "category": _normalize_whitespace(category_key) or "General",
+            "source": "indicator_comments",
+        }
+        key = (
+            _safe_lower_label(row["category"]),
+            int(row["index"]),
+            _comment_fingerprint(comment),
+            _comment_fingerprint(criterion_text),
+        )
+        seen_explicit.add(key)
+        comment_rows.append(row)
+
     ratings = req.ratings or {}
     for category, items in ratings.items():
         domain = _normalize_domain_name(category)
@@ -359,29 +401,284 @@ def _flatten_comments(req: GenerateRequest) -> List[Dict[str, Any]]:
             if not item:
                 continue
             comment = _normalize_whitespace(item.comment or "")
+            criterion_text = _normalize_whitespace(item.criterion_text or "")
+            key = (
+                _safe_lower_label(category),
+                idx,
+                _comment_fingerprint(comment),
+                _comment_fingerprint(criterion_text),
+            )
+            if comment and key in seen_explicit:
+                continue
             comment_rows.append(
                 {
                     "domain": domain,
                     "rating": float(item.rating),
                     "comment": comment,
                     "index": idx,
+                    "criterion_text": criterion_text,
+                    "category": _normalize_whitespace(category) or "General",
+                    "source": "ratings",
                 }
             )
     return comment_rows
 
 
+def _subject_department_context(req: GenerateRequest) -> Dict[str, str]:
+    subject = _normalize_whitespace(req.subject_observed or "")
+    department = _normalize_whitespace(req.department or "")
+    observation_type = _normalize_whitespace(req.observation_type or "")
+    lesson_context = subject
+    return {
+        "subject": subject,
+        "lesson_context": lesson_context,
+        "department": department,
+        "observation_type": observation_type,
+        "subject_line": f"Subject/Time of Observation: {lesson_context}." if lesson_context else "",
+        "department_line": f"Department/program: {department}." if department else "",
+        "context_line": _normalize_whitespace(" ".join([
+            f"Subject/Time of Observation: {lesson_context}." if lesson_context else "",
+            f"Department/program: {department}." if department else "",
+            f"Observation type: {observation_type}." if observation_type else "",
+        ])),
+    }
+
+
+def _natural_criterion_reference(text: str) -> str:
+    cleaned = _normalize_whitespace(text)
+    if not cleaned:
+        return ""
+
+    cleaned = re.sub(r"^[Tt]he teacher\s+", "", cleaned)
+    cleaned = re.sub(r"^[Uu]ses\s+", "using ", cleaned)
+    cleaned = re.sub(r"^[Dd]emonstrates\s+", "demonstrating ", cleaned)
+    cleaned = re.sub(r"^[Ee]xplains\s+", "explaining ", cleaned)
+    cleaned = re.sub(r"^[Aa]dapts\s+", "adapting ", cleaned)
+    cleaned = re.sub(r"^[Ee]ncourages\s+", "encouraging ", cleaned)
+    cleaned = re.sub(r"^[Dd]esigns\s+", "designing ", cleaned)
+    cleaned = re.sub(r"^[Ii]ntegrate\s+", "integrating ", cleaned)
+    cleaned = re.sub(r"^[Ii]ntegrates\s+", "integrating ", cleaned)
+    cleaned = re.sub(r"^[Ff]ocuses\s+", "focusing on ", cleaned)
+    cleaned = re.sub(r"^[Rr]ecall and connects\s+", "connecting ", cleaned)
+    cleaned = re.sub(r"^[Tt]he\s+", "", cleaned)
+    cleaned = cleaned.strip(" .;,:-")
+    return _normalize_clause_fragment(cleaned)
+
+
+def _criterion_phrase(item: Dict[str, Any]) -> str:
+    criterion_text = _normalize_whitespace(item.get("criterion_text") or "")
+    if not criterion_text:
+        return ""
+    phrase = _natural_criterion_reference(criterion_text)
+    if not phrase:
+        return ""
+    return phrase
+
+
+def _criterion_phrases_for_field(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> List[str]:
+    sig = _evaluation_signature(req)
+    prioritized = _prioritize_comments(req, comments)
+    target_domain = sig["strongest"] if field_name == "strengths" else sig["weakest"]
+
+    candidates = [item for item in prioritized if item.get("comment") and item.get("domain") == target_domain]
+    if not candidates:
+        candidates = [item for item in prioritized if item.get("comment")]
+
+    phrases: List[str] = []
+    seen = set()
+    for item in candidates:
+        phrase = _criterion_phrase(item)
+        key = _comment_fingerprint(phrase)
+        if not phrase or not key or key in seen:
+            continue
+        seen.add(key)
+        phrases.append(phrase)
+        if len(phrases) >= 2:
+            break
+    return phrases
+
+
+def _merge_comment_with_criterion(comment: str, criterion_phrase: str, field_name: str) -> str:
+    comment = _normalize_whitespace(comment)
+    criterion_phrase = _normalize_whitespace(criterion_phrase)
+    if not comment:
+        return ""
+    summarized_comment = _summarize_support_comment(comment, field_name)
+    if not criterion_phrase:
+        return summarized_comment
+
+    lower_comment = summarized_comment.lower()
+    lower_phrase = criterion_phrase.lower()
+    if lower_phrase in lower_comment:
+        return summarized_comment
+
+    if field_name == "strengths":
+        return _normalize_whitespace(f"{summarized_comment}, especially in {criterion_phrase}")
+    if field_name == "areas_for_improvement":
+        return _normalize_whitespace(f"{summarized_comment}, particularly in {criterion_phrase}")
+    return _normalize_whitespace(f"{summarized_comment}, with follow-through on {criterion_phrase}")
+
+
+def _summarize_support_comment(comment: str, field_name: str) -> str:
+    normalized = _normalize_whitespace(comment)
+    if not normalized:
+        return ""
+
+    lowered = normalized.lower()
+    replacements = [
+        (r"\bthe evaluator noted that\b", ""),
+        (r"\bneeded more\b", "would benefit from more"),
+        (r"\bnot always connected to\b", "could be aligned more closely with"),
+        (r"\bwere clear, but\b", "were clear, while"),
+        (r"\bmore subject-specific\b", "clearer subject-specific"),
+        (r"\bbefore moving to the next activity\b", "during transitions to the next activity"),
+    ]
+
+    updated = normalized
+    for pattern, replacement in replacements:
+        updated = re.sub(pattern, replacement, updated, flags=re.IGNORECASE)
+
+    clause = _normalize_clause_fragment(updated)
+    if not clause:
+        return normalized
+
+    if field_name == "strengths":
+        if re.search(r"\b(clear|effective|well|strong|audible|engaging|appropriate)\b", lowered):
+            return _normalize_sentence(f"classroom evidence reflects that {clause}")
+        return _normalize_sentence(f"classroom evidence indicates a positive practice in which {clause}")
+
+    if field_name == "areas_for_improvement":
+        return _normalize_sentence(f"classroom evidence suggests that {clause}")
+
+    return _normalize_sentence(f"a focused next step is to address how {clause}")
+
+
+def _comment_priority_value(item: Dict[str, Any], subject: str, department: str) -> float:
+    score = 0.0
+    rating = float(item.get("rating") or 0)
+    domain = _safe_lower_label(item.get("domain") or "")
+    category = _safe_lower_label(item.get("category") or "")
+    comment = _safe_lower_label(item.get("comment") or "")
+    criterion_text = _safe_lower_label(item.get("criterion_text") or "")
+    combined = f"{comment} {criterion_text}".strip()
+
+    if item.get("source") == "indicator_comments":
+        score += 4.0
+    if comment:
+        score += min(len(comment.split()) * 0.08, 1.2)
+    if criterion_text:
+        score += min(len(criterion_text.split()) * 0.04, 0.5)
+
+    if rating > 0:
+        if rating <= 2:
+            score += 2.2
+        elif rating < 3.5:
+            score += 1.3
+        elif rating >= 4:
+            score += 0.7
+
+    subject_tokens = [token for token in re.findall(r"[a-zA-Z0-9]+", subject.lower()) if len(token) > 2]
+    department_tokens = [token for token in re.findall(r"[a-zA-Z0-9]+", department.lower()) if len(token) > 2]
+    if subject_tokens and any(token in combined for token in subject_tokens):
+        score += 2.4
+    if department_tokens and any(token in combined for token in department_tokens):
+        score += 1.2
+
+    focus_tokens = [
+        "example", "examples", "activity", "activities", "question", "questions", "discussion",
+        "engagement", "participation", "feedback", "assessment", "strategy", "strategies",
+        "objective", "objectives", "real-life", "real life", "local"
+    ]
+    score += sum(0.18 for token in focus_tokens if token in combined)
+
+    if "assessment" in domain or "assessment" in category:
+        score += 0.25
+    return score
+
+
+def _prioritize_comments(req: GenerateRequest, comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not comments:
+        return []
+    context = _subject_department_context(req)
+    subject = context["subject"]
+    department = context["department"]
+    ranked = []
+    for item in comments:
+        enriched = dict(item)
+        enriched["priority"] = round(_comment_priority_value(enriched, subject, department), 4)
+        ranked.append(enriched)
+    ranked.sort(key=lambda item: (-float(item.get("priority") or 0), float(item.get("rating") or 0), int(item.get("index") or 0)))
+    return ranked
+
+
+def _most_problematic_comment(req: GenerateRequest, comments: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    prioritized = _prioritize_comments(req, comments)
+    if not prioritized:
+        return None
+
+    for item in prioritized:
+        if item.get("comment") and float(item.get("rating") or 0) > 0:
+            return item
+    return prioritized[0] if prioritized else None
+
+
+def _build_top_issue_recommendation_sentence(req: GenerateRequest, comments: List[Dict[str, Any]]) -> str:
+    top_item = _most_problematic_comment(req, comments)
+    if not top_item:
+        return ""
+
+    context = _subject_department_context(req)
+    lesson_context = context["lesson_context"] or "the next observed lesson"
+    criterion_phrase = _criterion_phrase(top_item)
+    comment = _normalize_whitespace(top_item.get("comment") or "")
+    domain = _normalize_whitespace(top_item.get("domain") or "this area")
+    rating = float(top_item.get("rating") or 0)
+
+    if criterion_phrase and comment:
+        support_summary = _summarize_support_comment(comment, "recommendations")
+        return _normalize_sentence(
+            f"For the next {lesson_context} lesson, prioritize {criterion_phrase} first. {support_summary}"
+        )
+
+    if comment:
+        support_summary = _summarize_support_comment(comment, "recommendations")
+        return _normalize_sentence(
+            f"For the next {lesson_context} lesson, address the lowest-rated point in {domain.lower()} first. {support_summary}"
+        )
+
+    if criterion_phrase:
+        return _normalize_sentence(
+            f"For the next {lesson_context} lesson, prioritize {criterion_phrase} first because it received one of the lowest ratings"
+        )
+
+    if rating > 0:
+        return _normalize_sentence(
+            f"For the next {lesson_context} lesson, address the most problematic observed criterion first because it received a rating of {rating:.0f}"
+        )
+
+    return _normalize_sentence(f"For the next {lesson_context} lesson, address the most problematic observed criterion first")
+
+
 def _compose_query_text(req: GenerateRequest, comments: List[Dict[str, Any]]) -> str:
     sig = _evaluation_signature(req)
+    context = _subject_department_context(req)
+    prioritized = _prioritize_comments(req, comments)
     fragments = [
+        context["subject_line"],
+        context["department_line"],
         sig["subject"],
         sig["observation_type"],
         f"priority area {sig['weakest']}",
         f"strong area {sig['strongest']}",
         f"overall {sig['overall_level']}",
     ]
-    for item in comments:
+    for item in prioritized[:6]:
         if item["comment"]:
-            fragments.append(f"{item['domain']}: {item['comment']}")
+            criterion = _normalize_whitespace(item.get("criterion_text") or "")
+            if criterion:
+                fragments.append(f"{item['domain']} | {criterion}: {item['comment']}")
+            else:
+                fragments.append(f"{item['domain']}: {item['comment']}")
     if not any(item["comment"] for item in comments):
         for domain, score in sig["domains"].items():
             fragments.append(f"{domain} rating {score:.1f}")
@@ -580,20 +877,22 @@ def _retrieve_top_comments(req: GenerateRequest, comments: List[Dict[str, Any]])
 def _relevant_comments_for_field(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> List[str]:
     sig = _evaluation_signature(req)
     target_domain = sig["strongest"] if field_name == "strengths" else sig["weakest"]
-    field_comments = [item for item in comments if item["comment"] and item["domain"] == target_domain]
+    prioritized = _prioritize_comments(req, comments)
+    field_comments = [item for item in prioritized if item["comment"] and item["domain"] == target_domain]
     if not field_comments:
-        field_comments = [item for item in comments if item["comment"]]
+        field_comments = [item for item in prioritized if item["comment"]]
 
     if field_name == "strengths":
-        field_comments.sort(key=lambda item: (-float(item["rating"]), item["index"]))
+        field_comments.sort(key=lambda item: (-float(item.get("priority") or 0), -float(item["rating"]), item["index"]))
     else:
-        field_comments.sort(key=lambda item: (float(item["rating"]), item["index"]))
+        field_comments.sort(key=lambda item: (-float(item.get("priority") or 0), float(item["rating"]), item["index"]))
 
     return _dedupe_preserve_order([item["comment"] for item in field_comments])[:3]
 
 
 def _compose_field_query(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> str:
     sig = _evaluation_signature(req)
+    context = _subject_department_context(req)
     relevant = _relevant_comments_for_field(req, comments, field_name)
     overall_band = sig["overall_level"].lower()
     strongest = sig["strongest"]
@@ -610,22 +909,28 @@ def _compose_field_query(req: GenerateRequest, comments: List[Dict[str, Any]], f
     if field_name == "strengths":
         prompt = (
             f"strengths feedback for {subject} during {observation_type}. "
+            f"Department or program context is {context['department'] or 'the current department'}. "
             f"Overall performance is {overall_band}. "
             f"Strongest domain is {strongest} with score {strongest_score:.2f}. "
+            f"Prioritize explicit indicator comments and make the feedback relevant to the observed subject and lesson context. "
             f"Use affirmative evaluator language that highlights effective practice in {strongest.lower()}."
         )
     elif field_name == "areas_for_improvement":
         prompt = (
             f"areas for improvement feedback for {subject} during {observation_type}. "
+            f"Department or program context is {context['department'] or 'the current department'}. "
             f"Overall performance is {overall_band}. "
             f"Weakest domain is {weakest} with score {weakest_score:.2f}. "
+            f"Prioritize explicit indicator comments and explain the issue in a way that fits the observed subject and classroom context. "
             f"Use diagnostic evaluator language focused on improving {weakest.lower()}."
         )
     else:
         prompt = (
             f"recommendations feedback for {subject} during {observation_type}. "
+            f"Department or program context is {context['department'] or 'the current department'}. "
             f"Overall performance is {overall_band}. "
             f"Target domain is {weakest} with score {weakest_score:.2f}. "
+            f"Prioritize explicit indicator comments and make the actions subject-aware, department-aware, and usable in the next lesson. "
             f"Use actionable evaluator recommendations for improving {weakest.lower()} in the next observation."
         )
 
@@ -1153,7 +1458,25 @@ def _compose_reconstructed_feedback(req: GenerateRequest, field_name: str, claus
     if len(sentences) < 3:
         sentences.append(rng.choice(closers))
 
-    return " ".join(sentences[:3])
+    if field_name == "recommendations":
+        top_issue_sentence = _build_top_issue_recommendation_sentence(req, _flatten_comments(req))
+        if top_issue_sentence:
+            remaining = [sentence for sentence in sentences if _comment_fingerprint(sentence) != _comment_fingerprint(top_issue_sentence)]
+            sentences = [top_issue_sentence] + remaining
+
+    result = " ".join(sentences[:3])
+    criterion_phrases = _criterion_phrases_for_field(req, _flatten_comments(req), field_name)
+    if criterion_phrases:
+        phrase = criterion_phrases[0]
+        if phrase.lower() not in result.lower():
+            if field_name == "strengths":
+                result = _normalize_whitespace(f"{result} This was especially evident in {phrase}.")
+            elif field_name == "areas_for_improvement":
+                result = _normalize_whitespace(f"{result} This is most visible in {phrase}.")
+            else:
+                result = _normalize_whitespace(f"{result} Focus the follow-through on {phrase}.")
+
+    return result
 
 
 def _paraphrase_dataset_feedback(req: GenerateRequest, field_name: str, retrieved: List[Dict[str, Any]], fallback_query: str) -> str:
@@ -1195,32 +1518,68 @@ def _build_clean_option_candidate(req: GenerateRequest, field_name: str, item: D
 
 def _summarize_comments_for_field(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> str:
     sig = _evaluation_signature(req)
+    context = _subject_department_context(req)
+    prioritized = _prioritize_comments(req, comments)
     field_domain_map = {
         "strengths": sig["strongest"],
         "areas_for_improvement": sig["weakest"],
         "recommendations": sig["weakest"],
     }
     target_domain = field_domain_map[field_name]
-    domain_comments = [item["comment"] for item in comments if item["comment"] and item["domain"] == target_domain]
-    general_comments = [item["comment"] for item in comments if item["comment"]]
+    domain_items = [item for item in prioritized if item["comment"] and item["domain"] == target_domain]
+    general_items = [item for item in prioritized if item["comment"]]
+    domain_comments = [item["comment"] for item in domain_items]
+    general_comments = [item["comment"] for item in general_items]
+    subject_phrase = context["subject"] or "the observed lesson"
+    lesson_context = context["lesson_context"] or subject_phrase
+    department_phrase = context["department"] or "the department"
+    criterion_phrases = _criterion_phrases_for_field(req, comments, field_name)
 
     if field_name == "strengths":
-        chosen = _dedupe_preserve_order(domain_comments or general_comments)[:2]
+        chosen_source = domain_items or general_items
+        chosen = [
+            _merge_comment_with_criterion(item["comment"], _criterion_phrase(item), field_name)
+            for item in chosen_source[:2]
+        ]
+        chosen = _dedupe_preserve_order([item for item in chosen if item])[:2]
         if not chosen:
-            return f"The teacher showed the strongest evidence in {target_domain.lower()} during the observation."
-        return " ".join(chosen)
+            if criterion_phrases:
+                return f"The teacher showed the strongest evidence in {target_domain.lower()} during {subject_phrase}, especially in {criterion_phrases[0]}."
+            return f"The teacher showed the strongest evidence in {target_domain.lower()} during {subject_phrase}."
+        return _normalize_whitespace(f"During {subject_phrase}, {chosen[0]} {' '.join(chosen[1:])}")
 
     if field_name == "areas_for_improvement":
-        chosen = _dedupe_preserve_order(domain_comments or general_comments)[:2]
+        chosen_source = domain_items or general_items
+        chosen = [
+            _merge_comment_with_criterion(item["comment"], _criterion_phrase(item), field_name)
+            for item in chosen_source[:2]
+        ]
+        chosen = _dedupe_preserve_order([item for item in chosen if item])[:2]
         if not chosen:
-            return f"The clearest area for improvement is {target_domain.lower()} based on the evaluation profile."
-        return " ".join(chosen)
+            if criterion_phrases:
+                return f"The clearest area for improvement in {subject_phrase} is {criterion_phrases[0]} within {target_domain.lower()}, based on the evaluation comments."
+            return f"The clearest area for improvement in {subject_phrase} is {target_domain.lower()} based on the evaluation comments."
+        return _normalize_whitespace(f"For {subject_phrase} in {department_phrase}, {' '.join(chosen)}")
 
     if field_name == "recommendations":
-        chosen = _dedupe_preserve_order(domain_comments or general_comments)[:2]
+        chosen_source = domain_items or general_items
+        chosen = [
+            _merge_comment_with_criterion(item["comment"], _criterion_phrase(item), field_name)
+            for item in chosen_source[:2]
+        ]
+        chosen = _dedupe_preserve_order([item for item in chosen if item])[:2]
+        top_issue_sentence = _build_top_issue_recommendation_sentence(req, comments)
         if not chosen:
-            return f"Provide support in {target_domain.lower()} so improvement becomes more visible in future lessons."
-        return " ".join(chosen)
+            if criterion_phrases:
+                fallback = f"Provide support in {criterion_phrases[0]} so improvement becomes more visible in future {lesson_context} lessons."
+            else:
+                fallback = f"Provide support in {target_domain.lower()} so improvement becomes more visible in future {lesson_context} lessons."
+            return _normalize_whitespace(f"{top_issue_sentence} {fallback}".strip())
+
+        tail = _normalize_whitespace(
+            f"Recommended follow-through for {department_phrase}: {' '.join(chosen)}"
+        )
+        return _normalize_whitespace(f"{top_issue_sentence} {tail}".strip())
 
     raise ValueError(f"Unsupported AI-assisted field: {field_name}")
 
@@ -1294,6 +1653,33 @@ def _ensure_2_3_sentences(text: Optional[str], fallback: str = "") -> str:
     return _normalize_sentence(backup or "This area should be strengthened through consistent, focused classroom practices.")
 
 
+def _inject_subject_context(text: str, req: GenerateRequest, field_name: str) -> str:
+    normalized = _ensure_2_3_sentences(text, fallback=text)
+    context = _subject_department_context(req)
+    subject = context["lesson_context"]
+    department = _normalize_whitespace(req.department or "")
+    if not subject and not department:
+        return normalized
+
+    subject_lower = subject.lower()
+    department_lower = department.lower()
+    current_lower = normalized.lower()
+
+    if field_name == "recommendations":
+        if subject and subject_lower not in current_lower:
+            normalized = _normalize_sentence(f"For the next {subject} lesson, {normalized[0].lower() + normalized[1:]}")
+        if department and department_lower not in normalized.lower():
+            normalized = f"{normalized} {_normalize_sentence(f'This recommendation aligns with the {department} context.') }"
+    elif field_name == "areas_for_improvement":
+        if subject and subject_lower not in current_lower:
+            normalized = _normalize_sentence(f"In {subject}, {normalized[0].lower() + normalized[1:]}")
+    elif field_name == "strengths":
+        if subject and subject_lower not in current_lower:
+            normalized = _normalize_sentence(f"During {subject}, {normalized[0].lower() + normalized[1:]}")
+
+    return _ensure_2_3_sentences(normalized, fallback=normalized)
+
+
 def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, retrieved: List[Dict[str, Any]]) -> List[str]:
     base = _ensure_2_3_sentences(base_text, fallback=base_text)
     rng = random.Random(
@@ -1348,15 +1734,28 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
 @app.post("/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest):
     comments = _flatten_comments(req)
+    prioritized_comments = _prioritize_comments(req, comments)
     retrieved = _retrieve_top_comments(req, comments)
     field_feedback, field_retrieved = _retrieve_form_feedback(req, comments)
     strengths_fallback = _summarize_comments_for_field(req, comments, "strengths")
     improvement_fallback = _summarize_comments_for_field(req, comments, "areas_for_improvement")
     recommendations_fallback = _summarize_comments_for_field(req, comments, "recommendations")
 
-    strengths = _ensure_2_3_sentences(field_feedback.get("strengths"), fallback=strengths_fallback)
-    improvement_areas = _ensure_2_3_sentences(field_feedback.get("areas_for_improvement"), fallback=improvement_fallback)
-    recommendations = _ensure_2_3_sentences(field_feedback.get("recommendations"), fallback=recommendations_fallback)
+    strengths = _inject_subject_context(
+        _ensure_2_3_sentences(field_feedback.get("strengths"), fallback=strengths_fallback),
+        req,
+        "strengths",
+    )
+    improvement_areas = _inject_subject_context(
+        _ensure_2_3_sentences(field_feedback.get("areas_for_improvement"), fallback=improvement_fallback),
+        req,
+        "areas_for_improvement",
+    )
+    recommendations = _inject_subject_context(
+        _ensure_2_3_sentences(field_feedback.get("recommendations"), fallback=recommendations_fallback),
+        req,
+        "recommendations",
+    )
     sig = _evaluation_signature(req)
 
     strengths_options = _make_three_options(strengths, req, "strengths", field_retrieved.get("strengths", []))
@@ -1372,6 +1771,7 @@ def generate(req: GenerateRequest):
         recommendations_options=recommendation_options,
         debug={
             "top_comments": retrieved,
+            "prioritized_indicator_comments": prioritized_comments[:5],
             "mysql_sources": _mysql_source_summary(retrieved),
             "field_mysql_sources": {
                 field_name: _mysql_source_summary(items)

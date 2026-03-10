@@ -104,6 +104,28 @@ $assigned_coordinators = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
             font-size: 0.85em;
             margin-left: 5px;
         }
+
+        @media (max-width: 991.98px) {
+            .d-flex.justify-content-between.align-items-center.mb-4 {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .coordinator-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.35rem;
+            }
+
+            .assignment-header,
+            .assignment-body,
+            .form-container {
+                padding: 1rem;
+            }
+        }
     </style>
 </head>
 <body>

@@ -59,6 +59,18 @@ if ($role === 'president') {
             font-weight: 600;
             margin-top: 20px;
         }
+
+        @media (max-width: 767.98px) {
+            .card-header {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+
+            .card-header .form-control {
+                width: 100% !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -76,7 +88,7 @@ if ($role === 'president') {
                     <input type="text" id="teacherSearch" class="form-control w-auto" placeholder="Search teachers...">
                 </div>
                 <div class="card-body">
-                    <div class="table-responsive">
+                    <div class="table-responsive table-min-720">
                         <?php if ($role === 'president'): ?>
                             <?php foreach ($teachers_by_department as $dept => $deptTeachers): ?>
                                 <div class="mb-4">

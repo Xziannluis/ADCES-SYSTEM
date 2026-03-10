@@ -240,6 +240,46 @@ foreach($eval_details as $detail) {
             color: var(--primary);
         }
 
+        @media (max-width: 991.98px) {
+            .content-area {
+                margin: 16px 0;
+                padding: 22px;
+            }
+
+            .eval-header {
+                padding: 20px;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .container-fluid {
+                padding-left: 12px;
+                padding-right: 12px;
+            }
+
+            .col-md-10.offset-md-1 {
+                width: 100%;
+                margin-left: 0;
+            }
+
+            .content-area,
+            .eval-header {
+                margin: 16px 0;
+                padding: 16px;
+                border-radius: 10px;
+            }
+
+            .report-table {
+                min-width: 920px;
+            }
+
+            .back-button,
+            .print-button {
+                width: 100%;
+                text-align: center;
+            }
+        }
+
        
         
     </style>

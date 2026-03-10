@@ -195,6 +195,35 @@ while($row = $all_teachers->fetch(PDO::FETCH_ASSOC)) {
         .tab-content.active {
             display: block;
         }
+
+        @media (max-width: 991.98px) {
+            .teacher-info {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.75rem;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .nav.nav-tabs {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                overflow-y: hidden;
+            }
+
+            .nav.nav-tabs .nav-link {
+                white-space: nowrap;
+            }
+
+            .teacher-card {
+                padding: 16px;
+            }
+
+            .teacher-card form,
+            .teacher-card form .btn {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>

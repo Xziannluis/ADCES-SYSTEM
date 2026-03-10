@@ -231,6 +231,14 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
             color: #155724;
         }
 
+        .navbar .dropdown-menu {
+            max-width: min(92vw, 320px);
+        }
+
+        .evaluation-card .row {
+            align-items: center;
+        }
+
         @media (max-width: 991.98px) {
             .content-area {
                 margin: 16px 0;
@@ -243,6 +251,11 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             .evaluation-card .row {
                 row-gap: 15px;
+            }
+
+            .evaluation-card .col-md-8,
+            .evaluation-card .col-md-4 {
+                width: 100%;
             }
         }
 
@@ -298,6 +311,13 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 max-width: 70vw;
                 overflow: hidden;
                 text-overflow: ellipsis;
+            }
+
+            .evaluation-card .d-flex.justify-content-between.align-items-start,
+            .evaluation-card .d-flex.justify-content-between.align-items-center {
+                flex-direction: column;
+                align-items: flex-start !important;
+                gap: 0.75rem;
             }
         }
 

@@ -108,12 +108,29 @@ def main() -> None:
 
     payload = {
         "faculty_name": "Test Teacher",
+        "department": "College of Education",
         "subject_observed": "Math",
         "observation_type": "Classroom observation",
+        "indicator_comments": [
+            {
+                "category": "management",
+                "criterion_index": 2,
+                "criterion_text": "Uses current issues, real life & local examples to enrich class discussion.",
+                "rating": 2,
+                "comment": "Math examples were clear, but they were not always connected to real-life problem solving tasks for the class."
+            },
+            {
+                "category": "assessment",
+                "criterion_index": 1,
+                "criterion_text": "Uses checks for understanding.",
+                "rating": 2,
+                "comment": "The Math lesson needed more subject-specific follow-up questions before moving to the next activity."
+            }
+        ],
         "ratings": {
             "assessment": [
-                {"rating": 4, "comment": "Explains concepts clearly."},
-                {"rating": 4, "comment": "Uses checks for understanding."},
+                {"rating": 4, "comment": "Explains Math concepts clearly.", "criterion_text": "Explains concepts clearly."},
+                {"rating": 2, "comment": "Needs more checks for understanding during Math problem solving.", "criterion_text": "Uses checks for understanding."},
             ]
         },
         "averages": {"communications": 4.0, "management": 4.2, "assessment": 3.8, "overall": 4.0},
@@ -130,6 +147,9 @@ def main() -> None:
 
     debug = data.get("debug") or {}
     assert isinstance(debug.get("top_comments"), list) and len(debug["top_comments"]) >= 1, debug
+    prioritized = debug.get("prioritized_indicator_comments") or []
+    assert prioritized and prioritized[0].get("source") == "indicator_comments", debug
+    assert any("math" in (item.get("comment") or "").lower() for item in prioritized), prioritized
     assert debug.get("generator") == "mysql-only-retrieval", debug
     assert all(str(source).startswith("mysql:") for source in (debug.get("mysql_sources") or {}).keys()), debug
     options = [
@@ -139,6 +159,27 @@ def main() -> None:
     ]
     assert any("formative" in option.lower() or "checkpoint" in option.lower() or "feedback" in option.lower() for option in options), data
     assert data["recommendations"] != data["improvement_areas"], data
+    assert "math" in data["recommendations"].lower() or "math" in " ".join(options).lower(), data
+    assert "next math lesson" in data["recommendations"].lower() or "math lesson" in data["recommendations"].lower(), data
+    criterion_signal = "checks for understanding"
+    assert (
+        criterion_signal in data["recommendations"].lower()
+        or criterion_signal in data["improvement_areas"].lower()
+        or any(criterion_signal in option.lower() for option in options)
+    ), data
+    first_sentence = data["recommendations"].split(".")[0].lower()
+    assert "prioritize" in first_sentence or "address" in first_sentence, data["recommendations"]
+    top_prioritized = prioritized[0]
+    expected_comment = (top_prioritized.get("comment") or "").lower()
+    expected_criterion = (top_prioritized.get("criterion_text") or "").lower()
+    assert any(fragment and fragment in first_sentence for fragment in ["real-life problem", "follow-up questions", "checks for understanding", "real life", "local examples"]), data["recommendations"]
+    assert (
+        any(token in first_sentence for token in expected_comment.replace(",", " ").split() if len(token) > 4)
+        or any(token in first_sentence for token in expected_criterion.replace(",", " ").split() if len(token) > 4)
+    ), data["recommendations"]
+    lowered_recommendations = data["recommendations"].lower()
+    assert "the evaluator noted" not in lowered_recommendations, data["recommendations"]
+    assert "use the evaluator comments as the basis" not in lowered_recommendations, data["recommendations"]
 
     print("OK: /generate returned 200 with required fields")
     tmp.cleanup()

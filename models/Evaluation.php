@@ -19,7 +19,7 @@ class Evaluation {
     // Get evaluations for reporting
     public function getEvaluationsForReport($evaluator_id = null, $academic_year = '', $semester = '', $teacher_id = '') {
         // Build base query
-        $query = "SELECT e.*, t.name as teacher_name, u.name as evaluator_name,
+    $query = "SELECT e.*, t.name as teacher_name, u.name as evaluator_name, u.role as evaluator_role,
                          COUNT(ai.id) as ai_count
                   FROM " . $this->table_name . " e
                   JOIN teachers t ON e.teacher_id = t.id

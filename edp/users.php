@@ -381,69 +381,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
     <title>Manage Deans - AI Classroom Evaluation</title>
     <?php include '../includes/header.php'; ?>
     <style>
-        .page-header {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px 20px;
-            margin-bottom: 18px;
-        }
-
-        .page-title {
-            font-weight: 700;
-            margin-bottom: 4px;
-        }
-
-        .page-subtitle {
-            color: #6c757d;
-            font-size: 0.9rem;
-            margin-bottom: 0;
-        }
-
-        .page-actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-
-        .page-actions .btn {
-            border-radius: 999px;
-            padding: 0.45rem 1rem;
-            font-weight: 600;
-            box-shadow: 0 6px 16px rgba(15, 60, 120, 0.12);
-        }
-
-        .page-actions .btn-action-dark {
-            background-color: #2b3a4a;
-            border-color: #2b3a4a;
-            color: #ffffff;
-        }
-
-        .page-actions .btn-action-dark:hover,
-        .page-actions .btn-action-dark:focus {
-            background-color: #24303d;
-            border-color: #24303d;
-            color: #ffffff;
-        }
-
-        .filter-toolbar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px 12px;
-            align-items: center;
-            background: #f8fafc;
-            border: 1px solid #e6edf5;
-            border-radius: 12px;
-            padding: 10px 14px;
-            margin-bottom: 18px;
-        }
-
-        .filter-label {
-            font-weight: 600;
-            color: #2b3a4a;
-        }
-
         .filter-toolbar .form-select.all-selected {
             background-color: #2b3a4a;
             color: #ffffff;
@@ -452,25 +389,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
 
         .filter-toolbar .form-select.all-selected:focus {
             box-shadow: 0 0 0 0.2rem rgba(43, 58, 74, 0.25);
-        }
-
-        .section-card {
-            border-radius: 14px;
-            border: 1px solid #e5edf7;
-            box-shadow: 0 10px 24px rgba(15, 60, 120, 0.08);
-            overflow: hidden;
-        }
-
-        .section-card .card-header {
-            border-bottom: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-weight: 600;
-        }
-
-        .section-card .card-body {
-            padding: 18px;
         }
 
         .subjects-container, .grade-levels-container, .supervisor-container {
@@ -513,56 +431,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
         }
         .supervisor-badge {
 
-        .department-picker-menu {
-            width: 100%;
-            max-height: 240px;
-            overflow-y: auto;
-            padding: 0.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 0.15rem;
-        }
-
-        .department-picker-item {
-            display: block;
-            width: 100%;
-            margin: 0;
-            padding: 0.2rem 0;
-        }
-
-        .department-picker-item .form-check {
-            display: flex;
-            align-items: flex-start;
-            gap: 0.5rem;
-            margin: 0;
-            min-height: auto;
-        }
-
-        .department-picker-item .form-check-input {
-            flex: 0 0 auto;
-            margin: 0.2rem 0 0 0;
-            float: none;
-        }
-
-        .department-picker-item .form-check-label {
-            display: block;
-            flex: 1 1 auto;
-            width: 100%;
-            line-height: 1.4;
-            margin: 0;
-            white-space: normal;
-            overflow-wrap: anywhere;
-        }
-
-        .department-picker-item:hover {
-            background: rgba(44, 62, 80, 0.06);
-        }
-
-        .department-picker-summary {
-            min-height: 38px;
-            text-align: left;
-            white-space: normal;
-        }
             background-color: #6c757d;
             color: white;
             padding: 4px 8px;
@@ -570,7 +438,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
             font-size: 0.85em;
             margin-left: 5px;
         }
-        /* Responsive table enhancements */
+
         .table-responsive {
             border-radius: 8px;
             overflow: hidden;
@@ -598,25 +466,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
         .btn-group-sm > .btn {
             padding: 0.25rem 0.5rem;
             font-size: 0.75rem;
-        }
-
-        .btn-group-vertical {
-            flex-direction: row;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .btn-group-vertical .btn-group {
-            display: flex;
-            flex-direction: row;
-            gap: 6px;
-        }
-
-        .btn-group-vertical .btn {
-            width: 130px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
         }
 
         .table .btn-outline-primary,
@@ -689,7 +538,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 padding: 0.2rem 0.3rem;
                 font-size: 0.7rem;
             }
-            
+
             /* Hide text in buttons on extra small screens */
             .btn span.d-none {
                 display: none !important;

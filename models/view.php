@@ -291,6 +291,12 @@ $recent_evaluations = $evaluation->getByTeacher($teacher_id, 5);
         .detail-item:last-child {
             border-bottom: none;
         }
+
+        @media (max-width: 767.98px) {
+            .teacher-details {
+                padding-top: 16px;
+            }
+        }
     </style>
 </body>
 </html>

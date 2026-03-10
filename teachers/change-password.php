@@ -104,6 +104,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-radius: 12px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
+
+        @media (max-width: 767.98px) {
+            .card {
+                border-radius: 10px;
+            }
+
+            .card-body {
+                padding: 1rem !important;
+            }
+
+            .d-flex.gap-2 {
+                flex-direction: column;
+            }
+
+            .d-flex.gap-2 .btn,
+            .d-flex.gap-2 a {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>

@@ -89,6 +89,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background-color: #f8f9fa;
             border-left: 4px solid #007bff;
         }
+
+        @media (max-width: 991.98px) {
+            .d-flex.justify-content-between.align-items-center.mb-4 {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .btn-container > * {
+                width: 100%;
+            }
+
+            .btn-container .btn,
+            .btn-container a {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>

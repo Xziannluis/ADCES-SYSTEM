@@ -40,10 +40,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['user_id'], $_POST['ac
     <?php include '../includes/sidebar.php'; ?>
     <div class="main-content">
         <div class="container-fluid">
-            <h3>Manage Evaluators (Edit/Deactivate)</h3>
+            <div class="page-header">
+                <h3 class="mb-0">Manage Evaluators (Edit/Deactivate)</h3>
+            </div>
             <div class="card">
                 <div class="card-body">
-                    <div class="table-responsive">
+                    <div class="table-responsive table-min-760">
                         <table class="table table-striped">
                             <thead>
                                 <tr>

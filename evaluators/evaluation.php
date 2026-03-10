@@ -367,13 +367,13 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     <table class="table table-bordered evaluation-table">
                                         <thead>
                                             <tr>
-                                                <th width="70%">Indicator</th>
-                                                <th width="6%">5</th>
-                                                <th width="6%">4</th>
-                                                <th width="6%">3</th>
-                                                <th width="6%">2</th>
-                                                <th width="6%">1</th>
-                                                <th width="10%">Comments</th>
+                                                <th width="57%">Indicator</th>
+                                                <th width="4%">5</th>
+                                                <th width="4%">4</th>
+                                                <th width="4%">3</th>
+                                                <th width="4%">2</th>
+                                                <th width="4%">1</th>
+                                                <th width="23%">Comments</th>
                                             </tr>
                                         </thead>
                                         <tbody id="communicationsCompetence">
@@ -435,13 +435,13 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     <table class="table table-bordered evaluation-table">
                                         <thead>
                                             <tr>
-                                                <th width="70%">Indicator</th>
-                                                <th width="6%">5</th>
-                                                <th width="6%">4</th>
-                                                <th width="6%">3</th>
-                                                <th width="6%">2</th>
-                                                <th width="6%">1</th>
-                                                <th width="10%">Comments</th>
+                                                <th width="57%">Indicator</th>
+                                                <th width="4%">5</th>
+                                                <th width="4%">4</th>
+                                                <th width="4%">3</th>
+                                                <th width="4%">2</th>
+                                                <th width="4%">1</th>
+                                                <th width="23%">Comments</th>
                                             </tr>
                                         </thead>
                                         <tbody id="managementPresentation">
@@ -566,13 +566,13 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     <table class="table table-bordered evaluation-table">
                                         <thead>
                                             <tr>
-                                                <th width="70%">Indicator</th>
-                                                <th width="6%">5</th>
-                                                <th width="6%">4</th>
-                                                <th width="6%">3</th>
-                                                <th width="6%">2</th>
-                                                <th width="6%">1</th>
-                                                <th width="10%">Comments</th>
+                                                <th width="57%">Indicator</th>
+                                                <th width="4%">5</th>
+                                                <th width="4%">4</th>
+                                                <th width="4%">3</th>
+                                                <th width="4%">2</th>
+                                                <th width="4%">1</th>
+                                                <th width="23%">Comments</th>
                                             </tr>
                                         </thead>
                                         <tbody id="assessmentLearning">
@@ -1471,6 +1471,30 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 .join('');
         }
 
+        function renderAIPrimarySuggestion(text, targetField) {
+            const normalized = String(text || '').trim();
+            if (!normalized) {
+                return '<div class="text-muted small">No generated narrative yet.</div>';
+            }
+
+            return `
+                <div class="ai-generated-preview card border-0 shadow-sm mb-3">
+                    <div class="card-body p-3">
+                        <div class="small text-muted fw-semibold mb-2">Generated narrative</div>
+                        <div class="ai-generated-paragraphs">${renderAISuggestionParagraphs(normalized)}</div>
+                        <div class="d-flex justify-content-end mt-2">
+                            <button type="button"
+                                    class="btn btn-sm btn-primary ai-use-option-btn"
+                                    data-target="${targetField}"
+                                    data-text="${encodeURIComponent(normalized)}">
+                                Use this generated text
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
         function showAISuggestions(data = {}, dbg = {}) {
             const panel = document.getElementById('aiSuggestionPanel');
             const strengthsBox = document.getElementById('aiSuggestionStrengths');
@@ -1485,9 +1509,12 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 return;
             }
 
-            strengthsBox.innerHTML = renderOptionCards(data.strengths_options || [data.strengths || ''], 'strengths');
-            improvementsBox.innerHTML = renderOptionCards(data.improvement_areas_options || [data.improvement_areas || ''], 'improvement_areas');
-            recommendationsBox.innerHTML = renderOptionCards(data.recommendations_options || [data.recommendations || ''], 'recommendations');
+            strengthsBox.innerHTML = renderAIPrimarySuggestion(data.strengths || '', 'strengths')
+                + renderOptionCards(data.strengths_options || [], 'strengths', data.strengths || '');
+            improvementsBox.innerHTML = renderAIPrimarySuggestion(data.improvement_areas || '', 'improvement_areas')
+                + renderOptionCards(data.improvement_areas_options || [], 'improvement_areas', data.improvement_areas || '');
+            recommendationsBox.innerHTML = renderAIPrimarySuggestion(data.recommendations || '', 'recommendations')
+                + renderOptionCards(data.recommendations_options || [], 'recommendations', data.recommendations || '');
 
             if (meta) {
                 const sourceSummary = dbg.reference_sources && typeof dbg.reference_sources === 'object'
@@ -1544,6 +1571,42 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             // Use existing getFormData() if available (keeps shapes consistent)
             if (typeof getFormData === 'function') {
                 const data = getFormData();
+                const ratings = data.ratings || {};
+                const indicatorComments = [];
+                const commentSummary = {
+                    communications: [],
+                    management: [],
+                    assessment: []
+                };
+
+                Object.entries(ratings).forEach(([category, entries]) => {
+                    if (!Array.isArray(entries)) {
+                        return;
+                    }
+
+                    entries.forEach((entry, index) => {
+                        const comment = (entry && typeof entry.comment === 'string') ? entry.comment.trim() : '';
+                        if (!comment) {
+                            return;
+                        }
+
+                        const normalized = {
+                            category,
+                            criterion_index: index,
+                            rating: entry && entry.rating ? entry.rating : '',
+                            criterion_text: entry && entry.criterion_text ? entry.criterion_text : '',
+                            comment
+                        };
+
+                        indicatorComments.push(normalized);
+                        if (Array.isArray(commentSummary[category])) {
+                            commentSummary[category].push(comment);
+                        } else {
+                            commentSummary[category] = [comment];
+                        }
+                    });
+                });
+
                 // The AI service expects: faculty_name, department, subject_observed, observation_type, averages, ratings
                 // getFormData() already returns those keys in this system.
                 return {
@@ -1552,7 +1615,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     subject_observed: data.subject_observed || '',
                     observation_type: data.observation_type || '',
                     averages: data.averages || { communications: 0, management: 0, assessment: 0, overall: 0 },
-                    ratings: data.ratings || {},
+                    ratings,
+                    indicator_comments: indicatorComments,
+                    comments_summary: commentSummary,
                     // Allows the AI service to generate shorter/standard/detailed if you add UI later
                     style: data.style || 'standard'
                 };
@@ -1566,7 +1631,13 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 subject_observed: (document.getElementById('subjectObserved')?.value || ''),
                 observation_type: (document.querySelector('input[name="observationType"]:checked')?.value || ''),
                 averages,
-                ratings: {}
+                ratings: {},
+                indicator_comments: [],
+                comments_summary: {
+                    communications: [],
+                    management: [],
+                    assessment: []
+                }
             };
         }
 
@@ -1992,12 +2063,15 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                         }
                 }
 
-                function renderOptionCards(options, targetField) {
-                    const list = Array.isArray(options) ? options : [];
+                function renderOptionCards(options, targetField, primaryText = '') {
+                    const base = String(primaryText || '').trim();
+                    const list = (Array.isArray(options) ? options : []).filter(txt => String(txt || '').trim() && String(txt || '').trim() !== base);
                     if (!list.length) return '<div class="text-muted small">No suggestions yet.</div>';
 
                     return `
-                        <div class="ai-suggestion-list">
+                        <div>
+                            <div class="small text-muted fw-semibold mb-2">Other generated versions</div>
+                            <div class="ai-suggestion-list">
                             ${list.map((txt) => `
                                 <button type="button"
                                         class="ai-suggestion-chip ai-use-option-btn"
@@ -2007,6 +2081,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     <span style="display: block; width: 100%; text-align: center; text-justify: inter-word;">${escapeHtml(txt)}</span>
                                 </button>
                             `).join('')}
+                            </div>
                         </div>
                     `;
                 }

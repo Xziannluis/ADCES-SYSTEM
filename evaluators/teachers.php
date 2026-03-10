@@ -397,27 +397,6 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
     <title>Manage Teachers - <?php echo $_SESSION['department']; ?></title>
     <?php include '../includes/header.php'; ?>
     <style>
-        .teacher-cards-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 20px;
-            margin-top: 20px;
-        }
-        
-        .teacher-card {
-            border: 1px solid #e0e0e0;
-            border-radius: 12px;
-            overflow: hidden;
-            transition: all 0.3s ease;
-            background: white;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        
-        .teacher-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.15);
-        }
-        
         .teacher-photo-section {
             position: relative;
             height: 180px;
@@ -480,15 +459,11 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
         }
 
         .teacher-actions {
-            display: flex;
-            gap: 5px;
             justify-content: center;
             margin-top: 15px;
-            flex-wrap: wrap;
         }
 
         .teacher-actions .btn {
-            flex: 1;
             min-width: 80px;
             font-size: 0.75rem;
             padding: 5px 10px;
@@ -585,50 +560,22 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
             display: inline-block;
         }
 
-        .assign-form-container {
-            background-color: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-
         .assigned-teachers-section {
             margin-top: 30px;
         }
 
-        .assignment-card {
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            margin-bottom: 15px;
-            overflow: hidden;
-        }
-
-        .assignment-header {
-            background-color: #f8f9fa;
-            padding: 15px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-
-        .assignment-body {
-            padding: 15px;
-        }
-
-        .teacher-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }
-
-        .teacher-item {
-            padding: 10px;
-            border-bottom: 1px solid #f0f0f0;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
         .teacher-item:last-child {
             border-bottom: none;
+        }
+
+        @media (max-width: 767.98px) {
+            .teacher-photo-section {
+                height: 160px;
+            }
+
+            .teacher-info {
+                padding: 16px;
+            }
         }
     </style>
 </head>

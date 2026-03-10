@@ -127,6 +127,138 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
         .stat-card:hover {
             transform: translateY(-5px);
         }
+
+        .list-group-item {
+            overflow-wrap: anywhere;
+        }
+
+        .recent-evaluations-list .list-group-item,
+        .coordinators-list .list-group-item {
+            overflow-wrap: normal;
+            word-break: normal;
+        }
+
+        .recent-evaluation-row,
+        .coordinator-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            width: 100%;
+        }
+
+        .recent-evaluation-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+        }
+
+        .recent-evaluation-main,
+        .coordinator-main {
+            min-width: 0;
+            flex: 1 1 auto;
+            width: 100%;
+        }
+
+        .recent-evaluation-main h6,
+        .coordinator-main strong,
+        .recent-evaluation-main small,
+        .coordinator-main .text-muted {
+            overflow-wrap: normal;
+            word-break: normal;
+            white-space: normal;
+        }
+
+        .recent-evaluation-main h6 {
+            display: block;
+            max-width: 100%;
+            line-height: 1.35;
+        }
+
+        .recent-evaluation-main small {
+            display: block;
+            margin-top: 0.25rem;
+        }
+
+        .recent-evaluation-actions,
+        .coordinator-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 0.5rem;
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+
+        .recent-evaluations-list .list-group-item {
+            display: block;
+            width: 100%;
+        }
+
+        .recent-evaluations-list .badge {
+            flex: 0 0 auto;
+        }
+
+        .recent-evaluations-list .btn {
+            flex: 0 0 auto;
+        }
+
+        @media (max-width: 991.98px) {
+            .dashboard-secondary-col {
+                width: 100%;
+                flex: 0 0 100%;
+                max-width: 100%;
+            }
+
+            .card-header .d-flex {
+                flex-wrap: wrap;
+                gap: 0.75rem;
+            }
+
+            .coordinators-list .coordinator-row {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+
+            .coordinators-list .coordinator-actions,
+            .recent-evaluations-list .recent-evaluation-actions {
+                width: 100%;
+                justify-content: space-between;
+                flex-wrap: wrap;
+            }
+
+            .recent-evaluations-list .recent-evaluation-row {
+                display: flex;
+                align-items: flex-start;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .card-header .btn {
+                width: 100%;
+            }
+
+            .recent-evaluations-list .recent-evaluation-row,
+            .coordinators-list .coordinator-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .recent-evaluation-main,
+            .coordinator-main {
+                width: 100%;
+            }
+
+            .recent-evaluations-list .recent-evaluation-actions,
+            .coordinators-list .coordinator-actions {
+                justify-content: flex-start;
+            }
+
+            .recent-evaluations-list .recent-evaluation-actions .btn,
+            .coordinators-list .coordinator-actions .btn {
+                width: auto;
+            }
+        }
     </style>
 </head>
 <body>
@@ -184,7 +316,7 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
             <!-- Main Row: My Coordinators (left) and Recent Evaluations (right) -->
             <div class="row mb-4">
                 <?php if(in_array($_SESSION['role'], ['dean', 'principal'])): ?>
-                    <div class="col-md-6">
+                    <div class="col-md-6 dashboard-secondary-col">
                         <div class="card mb-3">
                             <div class="card-header bg-info text-white">
                                 <div class="d-flex justify-content-between align-items-center">
@@ -196,16 +328,18 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                             </div>
                             <div class="card-body">
                                 <?php if(!empty($assigned_coordinators)): ?>
-                                    <ul class="list-group">
+                                    <ul class="list-group coordinators-list">
                                         <?php foreach($assigned_coordinators as $coord): ?>
-                                            <li class="list-group-item d-flex justify-content-between align-items-center">
-                                                <div>
+                                            <li class="list-group-item">
+                                                <div class="coordinator-row">
+                                                <div class="coordinator-main">
                                                     <strong><?php echo htmlspecialchars($coord['name']); ?></strong>
                                                     <span class="text-muted ms-2"><?php echo ucfirst(str_replace('_',' ',$coord['role'])); ?></span>
                                                     <div class="text-muted small"><?php echo htmlspecialchars($coord['department']); ?></div>
                                                 </div>
-                                                <div class="btn-group">
+                                                <div class="btn-group coordinator-actions">
                                                     <a href="assign_teachers.php?evaluator_id=<?php echo $coord['id']; ?>" class="btn btn-sm btn-outline-info">View Teachers</a>
+                                                </div>
                                                 </div>
                                             </li>
                                         <?php endforeach; ?>
@@ -216,24 +350,24 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-6">
+                    <div class="col-md-6 dashboard-secondary-col">
                         <div class="card">
                             <div class="card-header">
                                 <h5 class="mb-0">Recent Evaluations</h5>
                             </div>
                             <div class="card-body">
                                 <?php if($recent_evals->rowCount() > 0): ?>
-                                    <div class="list-group">
+                                    <div class="list-group recent-evaluations-list">
                                         <?php while($eval = $recent_evals->fetch(PDO::FETCH_ASSOC)): 
                                             $teacher_data = $teacher->getById($eval['teacher_id']);
                                         ?>
                                         <div class="list-group-item">
-                                            <div class="d-flex justify-content-between align-items-center">
-                                                <div>
+                                            <div class="recent-evaluation-row">
+                                                <div class="recent-evaluation-main">
                                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_data['name']); ?></h6>
                                                     <small class="text-muted"><?php echo date('M j, Y', strtotime($eval['observation_date'])); ?></small>
                                                 </div>
-                                                <div class="d-flex align-items-center gap-2">
+                                                <div class="recent-evaluation-actions">
                                                     <span class="badge bg-<?php 
                                                         $r = (int) floor($rating);
                                                         if($r === 5) echo 'success';
