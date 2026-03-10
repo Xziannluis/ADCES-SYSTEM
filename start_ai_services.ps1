@@ -45,3 +45,4 @@ if ($started) {
 
 Write-Host 'AI service did not become ready in time.' -ForegroundColor Red
 exit 1
+s

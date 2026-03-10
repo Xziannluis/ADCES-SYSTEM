@@ -20,6 +20,7 @@ body {
     background-color: #f8f9fa;
     line-height: 1.6;
     color: #333;
+    overflow-x: hidden;
 }
 
 /* Login Styles */
@@ -76,8 +77,13 @@ body {
     width: 280px;
     height: 100vh;
     position: fixed;
+    top: 0;
+    left: 0;
     padding: 0;
     box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+    overflow-y: auto;
+    z-index: 1040;
+    transition: transform 0.3s ease;
 }
 
 .sidebar-header {
@@ -108,6 +114,12 @@ body {
     list-style: none;
     padding: 20px 0;
     margin: 0;
+}
+
+.sidebar-backdrop,
+.mobile-sidebar-toggle,
+.mobile-sidebar-header {
+    display: none;
 }
 
 .sidebar-nav .nav-link {
@@ -145,6 +157,7 @@ body {
     padding: 0;
     min-height: 100vh;
     width: calc(100% - 280px);
+    transition: margin-left 0.3s ease, width 0.3s ease;
 }
 
 .content-header {
@@ -156,6 +169,35 @@ body {
 
 .content-body {
     padding: 30px;
+}
+
+.teacher-cards-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1.25rem;
+}
+
+.teacher-card {
+    width: 100%;
+}
+
+.teacher-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.teacher-actions .btn {
+    flex: 1 1 140px;
+}
+
+.table-responsive {
+    -webkit-overflow-scrolling: touch;
+}
+
+img {
+    max-width: 100%;
+    height: auto;
 }
 
 /* Dashboard Stats */
@@ -323,6 +365,188 @@ body {
     padding-bottom: 10px;
     margin-bottom: 20px;
     font-weight: 600;
+}
+
+@media (max-width: 991.98px) {
+    .sidebar {
+        transform: translateX(-100%);
+        width: min(280px, 86vw);
+    }
+
+    body.sidebar-open {
+        overflow: hidden;
+    }
+
+    body.sidebar-open .sidebar {
+        transform: translateX(0);
+    }
+
+    .sidebar-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s ease;
+        z-index: 1035;
+    }
+
+    body.sidebar-open .sidebar-backdrop {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .mobile-sidebar-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 1rem 1rem 0;
+    }
+
+    .mobile-sidebar-toggle,
+    .mobile-sidebar-close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: 0.75rem;
+        background: #2c3e50;
+        color: #fff;
+        width: 42px;
+        height: 42px;
+        box-shadow: 0 8px 20px rgba(44, 62, 80, 0.18);
+    }
+
+    .sidebar .mobile-sidebar-close {
+        background: rgba(255,255,255,0.18);
+    }
+
+    .main-content {
+        margin-left: 0;
+        width: 100%;
+        padding-top: 0.5rem;
+    }
+
+    .container-fluid {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .content-header,
+    .content-body {
+        padding: 1rem;
+    }
+
+    .dashboard-stats {
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 1rem;
+    }
+
+    .card-body,
+    .evaluation-section,
+    .filters-card,
+    .assign-form-container {
+        padding: 1rem;
+    }
+
+    .d-flex.justify-content-between.align-items-center.mb-4 {
+        flex-direction: column;
+        align-items: stretch !important;
+        gap: 0.75rem;
+    }
+
+    .user-menu-btn {
+        width: 100%;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-width: 767.98px) {
+    body {
+        font-size: 14px;
+    }
+
+    .sidebar-header {
+        padding: 1rem;
+    }
+
+    .sidebar-nav .nav-link {
+        padding: 0.85rem 1rem;
+        font-size: 0.95rem;
+    }
+
+    .dashboard-stat {
+        padding: 1rem;
+    }
+
+    .dashboard-stat i {
+        font-size: 2rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .dashboard-stat .number {
+        font-size: 1.75rem;
+    }
+
+    .teacher-cards-container {
+        grid-template-columns: 1fr;
+    }
+
+    .teacher-actions .btn {
+        width: 100%;
+        flex-basis: 100%;
+    }
+
+    .table th,
+    .table td {
+        padding: 0.75rem;
+        font-size: 0.92rem;
+        white-space: nowrap;
+    }
+
+    .modal-dialog {
+        margin: 0.75rem;
+    }
+
+    .btn,
+    .form-select,
+    .form-control,
+    .input-group-text {
+        font-size: 0.95rem;
+    }
+
+    .badge {
+        white-space: normal;
+    }
+}
+
+@media (max-width: 575.98px) {
+    .container-fluid {
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
+    }
+
+    .card,
+    .evaluation-section,
+    .content-header,
+    .content-body {
+        border-radius: 0.85rem;
+    }
+
+    h3, .h3 {
+        font-size: 1.35rem;
+    }
+
+    h4, .h4 {
+        font-size: 1.15rem;
+    }
+
+    .dropdown-menu {
+        width: min(92vw, 320px);
+    }
 }
 
 .rating-scale {

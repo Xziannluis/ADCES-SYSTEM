@@ -230,6 +230,101 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
             background: #d4edda;
             color: #155724;
         }
+
+        @media (max-width: 991.98px) {
+            .content-area {
+                margin: 16px 0;
+                padding: 20px;
+            }
+
+            .teacher-info-card {
+                padding: 20px;
+            }
+
+            .evaluation-card .row {
+                row-gap: 15px;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .container-fluid {
+                padding-left: 12px;
+                padding-right: 12px;
+            }
+
+            .col-md-10.offset-md-1 {
+                width: 100%;
+                margin-left: 0;
+            }
+
+            .content-area {
+                border-radius: 10px;
+                padding: 18px 16px;
+            }
+
+            .teacher-info-card {
+                margin-top: 16px;
+                border-radius: 10px;
+                padding: 18px 16px;
+            }
+
+            .teacher-info-card h3 {
+                font-size: 1.45rem;
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 10px;
+            }
+
+            .schedule-bell {
+                margin-left: 0 !important;
+            }
+
+            .evaluation-card {
+                padding: 16px;
+            }
+
+            .btn-view {
+                width: 100%;
+                text-align: center;
+            }
+
+            .navbar-brand {
+                font-size: 1.05rem;
+            }
+
+            .nav-link.dropdown-toggle {
+                white-space: nowrap;
+                max-width: 70vw;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+        }
+
+        @media (max-width: 575.98px) {
+            body {
+                background: #eef2f7;
+            }
+
+            .content-area,
+            .teacher-info-card,
+            .evaluation-card,
+            .no-evaluations {
+                border-radius: 8px;
+            }
+
+            .teacher-info-card h3 {
+                font-size: 1.25rem;
+            }
+
+            .schedule-badge,
+            .badge-status {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                white-space: normal;
+            }
+        }
     </style>
 </head>
 <body>

@@ -72,10 +72,56 @@ class EvaluationController {
     private $evaluationModel;
     private $aiController;
 
+    private const EVALUATION_TIMEZONE = 'Asia/Manila';
+
     public function __construct($database) {
         $this->db = $database;
         $this->evaluationModel = new Evaluation($database);
         $this->aiController = new AIController($database);
+    }
+
+    private function buildScheduleGate(?string $scheduleVal, ?string $roomVal): array {
+        $scheduleVal = is_string($scheduleVal) ? trim($scheduleVal) : '';
+        $roomVal = is_string($roomVal) ? trim($roomVal) : '';
+
+        if ($scheduleVal === '' && $roomVal === '') {
+            return [
+                'allowed' => false,
+                'message' => 'Cannot submit evaluation: no evaluation schedule is set for this teacher.',
+            ];
+        }
+
+        if ($scheduleVal === '') {
+            return [
+                'allowed' => false,
+                'message' => 'Cannot submit evaluation yet: the teacher has a room assigned but no scheduled date and time.',
+            ];
+        }
+
+        try {
+            $timezone = new DateTimeZone(self::EVALUATION_TIMEZONE);
+            $scheduledAt = new DateTime($scheduleVal, $timezone);
+            $scheduledAt->setTimezone($timezone);
+            $now = new DateTime('now', $timezone);
+        } catch (Exception $e) {
+            error_log('Invalid evaluation schedule for teacher gating: ' . $e->getMessage());
+            return [
+                'allowed' => false,
+                'message' => 'Cannot submit evaluation: the evaluation schedule is invalid. Please ask the dean/principal to reschedule it.',
+            ];
+        }
+
+        if ($now < $scheduledAt) {
+            return [
+                'allowed' => false,
+                'message' => 'Cannot submit evaluation yet. Evaluation opens on ' . $scheduledAt->format('F d, Y \a\t h:i A') . '.',
+            ];
+        }
+
+        return [
+            'allowed' => true,
+            'message' => '',
+        ];
     }
 
     public function submitEvaluation($postData, $evaluatorId) {
@@ -102,10 +148,12 @@ class EvaluationController {
             $scheduleVal = $t['evaluation_schedule'] ?? null;
             $roomVal = $t['evaluation_room'] ?? null;
 
-            // Consider it "scheduled" if either schedule datetime is set OR room is set.
-            // (Room is usually set together with schedule from the UI; this avoids false negatives in prod data.)
-            if (empty($scheduleVal) && empty($roomVal)) {
-                throw new Exception('Cannot submit evaluation: no evaluation schedule is set for this teacher.');
+            $scheduleGate = $this->buildScheduleGate(
+                isset($scheduleVal) ? (string)$scheduleVal : null,
+                isset($roomVal) ? (string)$roomVal : null
+            );
+            if (!$scheduleGate['allowed']) {
+                throw new Exception($scheduleGate['message']);
             }
 
             // Log submission for debugging
@@ -201,10 +249,40 @@ class EvaluationController {
         $stmt->bindValue(':others_specify', $others_specify);
 
         if ($stmt->execute()) {
-            return $this->db->lastInsertId();
+            if (!empty($teacher_id)) {
+                $clearStmt = $this->db->prepare("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, updated_at = NOW() WHERE id = :id");
+                $clearStmt->bindValue(':id', $teacher_id);
+                $clearStmt->execute();
+            }
+            return $this->resolveInsertedEvaluationId($teacher_id, $evaluatorId);
         }
         $err = $stmt->errorInfo();
         throw new Exception('DB Error creating evaluation record: ' . ($err[2] ?? json_encode($err)));
+    }
+
+    private function resolveInsertedEvaluationId($teacherId, $evaluatorId) {
+        $lastId = (int)$this->db->lastInsertId();
+        if ($lastId > 0) {
+            return $lastId;
+        }
+
+        if (empty($teacherId) || empty($evaluatorId)) {
+            return 0;
+        }
+
+        $fallbackStmt = $this->db->prepare(
+            "SELECT id
+             FROM evaluations
+             WHERE teacher_id = :teacher_id
+               AND evaluator_id = :evaluator_id
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+        $fallbackStmt->bindValue(':teacher_id', $teacherId, PDO::PARAM_INT);
+        $fallbackStmt->bindValue(':evaluator_id', $evaluatorId, PDO::PARAM_INT);
+        $fallbackStmt->execute();
+
+        return (int)($fallbackStmt->fetchColumn() ?: 0);
     }
 
     private function saveEvaluationDetails($evaluationId, $data) {

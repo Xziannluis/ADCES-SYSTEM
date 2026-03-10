@@ -18,6 +18,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+import zlib
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -46,7 +47,7 @@ class FeedbackTemplateBackend:
     def ensure_schema(self) -> None:
         raise NotImplementedError
 
-    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: str) -> int:
+    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes) -> int:
         raise NotImplementedError
 
     def fetch_templates(self, field_name: str) -> List[Dict[str, Any]]:
@@ -76,7 +77,7 @@ class SQLiteFeedbackTemplateBackend(FeedbackTemplateBackend):
                 field_name TEXT NOT NULL,
                 evaluation_comment TEXT NOT NULL,
                 feedback_text TEXT NOT NULL,
-                embedding_vector TEXT NOT NULL
+                embedding_vector BLOB NOT NULL
             )
             """
         )
@@ -85,7 +86,7 @@ class SQLiteFeedbackTemplateBackend(FeedbackTemplateBackend):
         )
         self.connection.commit()
 
-    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: str) -> int:
+    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes) -> int:
         cursor = self.connection.execute(
             """
             INSERT INTO feedback_templates (field_name, evaluation_comment, feedback_text, embedding_vector)
@@ -134,7 +135,7 @@ class MySQLFeedbackTemplateBackend(FeedbackTemplateBackend):
                     `field_name` VARCHAR(64) NOT NULL,
                     `evaluation_comment` TEXT NOT NULL,
                     `feedback_text` TEXT NOT NULL,
-                    `embedding_vector` LONGTEXT NOT NULL,
+                    `embedding_vector` LONGBLOB NOT NULL,
                     `source` VARCHAR(64) DEFAULT 'seed',
                     `is_active` TINYINT(1) NOT NULL DEFAULT 1,
                     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -146,7 +147,7 @@ class MySQLFeedbackTemplateBackend(FeedbackTemplateBackend):
             )
         self.connection.commit()
 
-    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: str) -> int:
+    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes) -> int:
         with self.connection.cursor() as cur:
             cur.execute(
                 f"""
@@ -212,12 +213,32 @@ class FeedbackRetrievalSystem:
         return np.asarray(vector, dtype=np.float32)
 
     @staticmethod
-    def serialize_embedding(vector: np.ndarray) -> str:
-        return json.dumps(vector.astype(float).tolist(), ensure_ascii=False)
+    def serialize_embedding(vector: np.ndarray) -> bytes:
+        packed = np.asarray(vector, dtype=np.float32).tobytes(order="C")
+        return zlib.compress(packed, level=9)
 
     @staticmethod
-    def deserialize_embedding(raw_value: str) -> np.ndarray:
-        return np.asarray(json.loads(raw_value), dtype=np.float32)
+    def deserialize_embedding(raw_value: Any) -> np.ndarray:
+        if raw_value is None:
+            return np.asarray([], dtype=np.float32)
+
+        if isinstance(raw_value, memoryview):
+            raw_value = raw_value.tobytes()
+
+        if isinstance(raw_value, (bytes, bytearray)):
+            try:
+                unpacked = zlib.decompress(bytes(raw_value))
+                return np.frombuffer(unpacked, dtype=np.float32)
+            except Exception:
+                try:
+                    return np.asarray(json.loads(bytes(raw_value).decode("utf-8")), dtype=np.float32)
+                except Exception:
+                    return np.asarray([], dtype=np.float32)
+
+        if isinstance(raw_value, str):
+            return np.asarray(json.loads(raw_value), dtype=np.float32)
+
+        return np.asarray(raw_value, dtype=np.float32)
 
     def add_feedback_template(
         self,
@@ -274,10 +295,45 @@ class FeedbackRetrievalSystem:
             score = self.cosine_similarity(query_embedding, stored_embedding)
             copy = dict(row)
             copy["_score"] = score
+            copy["_embedding"] = stored_embedding
             scored_rows.append(copy)
 
         scored_rows.sort(key=lambda item: item.get("_score", -1.0), reverse=True)
-        selected = scored_rows[: max(1, int(top_k or 1))]
+        desired = max(1, int(top_k or 1))
+        shortlist = scored_rows[: max(desired * 4, desired)]
+
+        selected: List[Dict[str, Any]] = []
+        while shortlist and len(selected) < desired:
+            best_index = 0
+            best_value = None
+            for idx, candidate in enumerate(shortlist):
+                relevance = float(candidate.get("_score", -1.0))
+                diversity_penalty = 0.0
+                if selected:
+                    similarities_to_selected = [
+                        self.cosine_similarity(candidate.get("_embedding"), picked.get("_embedding"))
+                        for picked in selected
+                        if candidate.get("_embedding") is not None and picked.get("_embedding") is not None
+                    ]
+                    if similarities_to_selected:
+                        diversity_penalty = max(similarities_to_selected) * 0.12
+
+                lexical_penalty = 0.0
+                candidate_text = f"{candidate.get('evaluation_comment') or ''} {candidate.get('feedback_text') or ''}".strip().lower()
+                if selected and candidate_text:
+                    selected_texts = {
+                        f"{picked.get('evaluation_comment') or ''} {picked.get('feedback_text') or ''}".strip().lower()
+                        for picked in selected
+                    }
+                    if candidate_text in selected_texts:
+                        lexical_penalty = 0.2
+
+                mmr_value = relevance - diversity_penalty - lexical_penalty
+                if best_value is None or mmr_value > best_value:
+                    best_value = mmr_value
+                    best_index = idx
+
+            selected.append(shortlist.pop(best_index))
 
         return [
             FeedbackTemplate(
@@ -290,14 +346,25 @@ class FeedbackRetrievalSystem:
             for row in selected
         ]
 
-    def retrieve_feedback_for_form(self, evaluation_inputs: Dict[str, str]) -> Dict[str, Optional[FeedbackTemplate]]:
+    def retrieve_feedback_for_form(self, evaluation_inputs: Dict[str, str], top_k: int = 1) -> Dict[str, Optional[FeedbackTemplate]]:
         results: Dict[str, Optional[FeedbackTemplate]] = {}
         for field_name in SUPPORTED_FIELDS:
             query = (evaluation_inputs.get(field_name) or "").strip()
             if not query:
                 results[field_name] = None
                 continue
-            results[field_name] = self.retrieve_best_feedback(field_name, query)
+            matches = self.retrieve_top_feedback(field_name, query, top_k=max(1, int(top_k or 1)))
+            results[field_name] = matches[0] if matches else None
+        return results
+
+    def retrieve_top_feedback_for_form(self, evaluation_inputs: Dict[str, str], top_k: int = 5) -> Dict[str, List[FeedbackTemplate]]:
+        results: Dict[str, List[FeedbackTemplate]] = {}
+        for field_name in SUPPORTED_FIELDS:
+            query = (evaluation_inputs.get(field_name) or "").strip()
+            if not query:
+                results[field_name] = []
+                continue
+            results[field_name] = self.retrieve_top_feedback(field_name, query, top_k=max(1, int(top_k or 1)))
         return results
 
     def seed_feedback_templates(self, templates: Iterable[Dict[str, str]]) -> None:
@@ -485,6 +552,51 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         "This helped show a clearer link between instruction, participation, and follow-through.",
     ]
 
+    sentence_openers = [
+        "Observed evidence shows that",
+        "Classroom evidence indicates that",
+        "The lesson suggests that",
+        "The observation highlights that",
+        "From the evaluator's notes,",
+        "What stood out during the class was that",
+    ]
+
+    natural_bridges = [
+        "In practical terms,",
+        "Over the course of the lesson,",
+        "As the class progressed,",
+        "Across the observed segments,",
+        "In a way that learners could notice,",
+        "From a classroom perspective,",
+    ]
+
+    humanized_strength_addons = [
+        "Learners appeared to understand the flow of the lesson because the teaching moves were steady and purposeful.",
+        "The class responded well to the teacher's presence, which helped keep instruction focused and calm.",
+        "This gave the session a sense of structure that supported both engagement and classroom order.",
+        "The teacher's consistency helped make the lesson feel well-managed and easy for learners to follow.",
+        "There was clear evidence that the teacher's routines supported attention, participation, and lesson continuity.",
+        "The observed practice looked intentional rather than accidental, which strengthened the overall quality of the lesson.",
+    ]
+
+    humanized_improvement_addons = [
+        "This is a workable target for improvement because the practice is already partly visible and can be strengthened with consistency.",
+        "The issue does not appear severe, but it is noticeable enough to deserve focused follow-through in daily lessons.",
+        "A small shift in consistency here could produce a more visible improvement in learner response and lesson flow.",
+        "This area is close to becoming a dependable strength, but it still needs clearer and more regular execution.",
+        "The next round of observation would likely show improvement if this practice were reinforced more intentionally.",
+        "What matters most here is not adding more activities, but making the target practice easier to see and sustain.",
+    ]
+
+    humanized_recommendation_addons = [
+        "A short routine used regularly is often more effective than a large strategy used only once.",
+        "This step is realistic to apply even in a busy class because it can be built into the existing lesson flow.",
+        "The teacher may find it helpful to try one routine first, then refine it based on learner response.",
+        "This recommendation becomes stronger when paired with visible monitoring and quick follow-up.",
+        "The goal is to make the teaching move easy to repeat until it becomes part of the teacher's normal practice.",
+        "A practical next step like this can make improvement easier to observe and measure over time.",
+    ]
+
     output: List[Dict[str, str]] = []
 
     def add(field_name: str, evaluation_comment: str, feedback_text: str) -> None:
@@ -502,12 +614,15 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         modifier = strengths_modifiers[(index // (len(rating_bands) * len(strengths_focuses))) % len(strengths_modifiers)]
         opener = reflection_phrases[index % len(reflection_phrases)]
         closer = human_closers[(index // len(reflection_phrases)) % len(human_closers)]
+        sentence_opener = sentence_openers[index % len(sentence_openers)]
+        bridge = natural_bridges[(index // len(sentence_openers)) % len(natural_bridges)]
+        addon = humanized_strength_addons[(index // len(natural_bridges)) % len(humanized_strength_addons)]
         subject = subjects[index % len(subjects)]
         observation = observation_types[(index // len(subjects)) % len(observation_types)]
         add(
             "strengths",
             f"{opener} in the {subject}, the teacher shows {band[1]} evidence of {focus[0]} and {focus[1]} {modifier[0]} during a {observation}",
-            f"The teacher {focus[2]} {modifier[1]}. For a {band[0]} rating pattern, this reflects {band[2]} performance in the observed area. {band[4]} {closer}",
+            f"{sentence_opener} the teacher {focus[2]} {modifier[1]}. For a {band[0]} rating pattern, this reflects {band[2]} performance in the observed area. {bridge} {band[4]} {addon} {closer}",
         )
 
     for index in range(per_field):
@@ -516,12 +631,15 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         modifier = improvement_modifiers[(index // (len(rating_bands) * len(improvement_focuses))) % len(improvement_modifiers)]
         opener = reflection_phrases[index % len(reflection_phrases)]
         closer = human_closers[(index // len(reflection_phrases)) % len(human_closers)]
+        sentence_opener = sentence_openers[index % len(sentence_openers)]
+        bridge = natural_bridges[(index // len(sentence_openers)) % len(natural_bridges)]
+        addon = humanized_improvement_addons[(index // len(natural_bridges)) % len(humanized_improvement_addons)]
         subject = subjects[index % len(subjects)]
         observation = observation_types[(index // len(subjects)) % len(observation_types)]
         add(
             "areas_for_improvement",
             f"{opener} in the {subject}, {focus[1]} {modifier[0]} during a {observation} and reflects a {band[0]} performance concern in this criterion",
-            f"The teacher's practice indicates that {focus[2]} {modifier[1]}. This pattern is more common in {band[0]} profiles where the target practice is {band[2]}. {band[4]} {closer}",
+            f"{sentence_opener} the teacher's practice indicates that {focus[2]} {modifier[1]}. This pattern is more common in {band[0]} profiles where the target practice is {band[2]}. {bridge} {band[4]} {addon} {closer}",
         )
 
     for index in range(per_field):
@@ -529,12 +647,15 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
         focus = recommendation_focuses[(index // len(rating_bands)) % len(recommendation_focuses)]
         closer = recommendation_modifiers[(index // (len(rating_bands) * len(recommendation_focuses))) % len(recommendation_modifiers)]
         opener = reflection_phrases[index % len(reflection_phrases)]
+        sentence_opener = sentence_openers[index % len(sentence_openers)]
+        bridge = natural_bridges[(index // len(sentence_openers)) % len(natural_bridges)]
+        addon = humanized_recommendation_addons[(index // len(natural_bridges)) % len(humanized_recommendation_addons)]
         subject = subjects[index % len(subjects)]
         observation = observation_types[(index // len(subjects)) % len(observation_types)]
         add(
             "recommendations",
             f"{opener} in the {subject}, the teacher needs support in {focus[0]} and should {focus[1]} to address a {band[0]} classroom performance pattern noted in the {observation}",
-            f"{focus[2]} This recommendation is appropriate when the observed practice is {band[2]} and the rating pattern trends toward {band[0]}. {band[4]} {closer}",
+            f"{sentence_opener} {focus[2]} This recommendation is appropriate when the observed practice is {band[2]} and the rating pattern trends toward {band[0]}. {bridge} {band[4]} {addon} {closer}",
         )
 
     return output

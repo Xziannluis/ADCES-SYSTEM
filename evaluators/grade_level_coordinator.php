@@ -76,8 +76,6 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
                     <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="gradeCoordinatorMenu">
                         <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog me-2"></i>Settings</a></li>
                         <li><a class="dropdown-item" href="change-password.php"><i class="fas fa-key me-2"></i>Change Password</a></li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li><a class="dropdown-item" href="../auth/logout.php"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
                     </ul>
                 </div>
             </div>

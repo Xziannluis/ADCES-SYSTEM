@@ -16,7 +16,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from feedback_retrieval_system import FeedbackRetrievalSystem, build_mysql_seed_system
+try:
+    from .feedback_retrieval_system import FeedbackRetrievalSystem, build_mysql_seed_system
+except ImportError:
+    from feedback_retrieval_system import FeedbackRetrievalSystem, build_mysql_seed_system
 
 
 app = FastAPI(title="ADCES AI Service", version="2.0.0")
@@ -71,8 +74,6 @@ BASE_PATH = pathlib.Path(__file__).parent
 ROOT_PATH = BASE_PATH.resolve().parent.parent
 PHP_DB_CONFIG_PATH = ROOT_PATH / "config" / "database.php"
 FEEDBACK_PATH = BASE_PATH / "ai_feedback.jsonl"
-REFERENCE_EVALS_PATH = BASE_PATH / "reference_evaluations.jsonl"
-IMPORTED_REFERENCE_EVALS_PATH = BASE_PATH / "reference_evaluations.imported.jsonl"
 EMBEDDINGS_CACHE_PATH = BASE_PATH / "comment_embeddings_cache.npz"
 _feedback_lock = Lock()
 _embedding_lock = Lock()
@@ -80,34 +81,6 @@ _embedding_lock = Lock()
 TOP_K_RETRIEVAL = 5
 OUTPUT_RECOMMENDATIONS = 3
 DEFAULT_SIMILARITY_THRESHOLD = 0.15
-
-RATING_BAND_GUIDANCE = {
-    "Excellent": {
-        "strengths": "The observed lesson demonstrates highly consistent teaching practice with visible strengths across the rated indicators.",
-        "improvement": "Only minor refinements are needed to sustain and extend the teacher's already strong performance.",
-        "recommendation": "Recommendations should focus on sustaining strong routines, deepening impact, and extending already effective practice.",
-    },
-    "Very satisfactory": {
-        "strengths": "The lesson shows strong and dependable teaching practice with several indicators already performed well.",
-        "improvement": "Targeted refinements in the lower-rated indicators can move the overall performance toward an excellent level.",
-        "recommendation": "Recommendations should strengthen consistency and help the teacher turn good practice into highly visible, repeatable evidence.",
-    },
-    "Satisfactory": {
-        "strengths": "The lesson shows acceptable teaching practice, with clear strengths that can be built on further.",
-        "improvement": "Several practices still need more consistent classroom evidence to lift the overall quality of the lesson.",
-        "recommendation": "Recommendations should target the weakest domain with practical steps that produce visible improvement in the next observation.",
-    },
-    "Below satisfactory": {
-        "strengths": "Some positive teaching behaviors are present, but they appear less consistent across the observed indicators.",
-        "improvement": "The current profile shows notable gaps that require focused support, stronger routines, and more reliable follow-through.",
-        "recommendation": "Recommendations should be concrete, manageable, and centered on establishing consistent practice in the weakest area first.",
-    },
-    "Needs improvement": {
-        "strengths": "Only limited strengths are currently visible in the observation, and these need support to become more consistent.",
-        "improvement": "Immediate support is needed in the lowest-rated indicators so the teacher can build more stable and observable classroom practice.",
-        "recommendation": "Recommendations should prioritize foundational actions, close monitoring, and one clear improvement target at a time.",
-    },
-}
 
 DOMAIN_ALIASES = {
     "communications": "Communication & instruction",
@@ -120,62 +93,6 @@ DOMAIN_ALIASES = {
     "feedback": "Assessment & feedback practices",
 }
 
-DOMAIN_ACTIONS = {
-    "Communication & instruction": [
-        "use clear modeling before independent work",
-        "add short guided questioning routines",
-        "include quick understanding checks before moving on",
-        "give concise directions supported by examples",
-    ],
-    "Classroom management & learning environment": [
-        "tighten transition routines between activities",
-        "reinforce clear expectations throughout the lesson",
-        "use visible time cues to maintain lesson pace",
-        "strengthen classroom procedures for group and independent work",
-    ],
-    "Assessment & feedback practices": [
-        "embed brief formative checks during instruction",
-        "give immediate feedback linked to lesson targets",
-        "use short follow-up prompts to verify learner understanding",
-        "provide opportunities for learners to revise after feedback",
-    ],
-}
-
-OPENERS = [
-    "A practical next step is to",
-    "To strengthen the next lesson, consider",
-    "An effective follow-through action is to",
-    "Continued improvement may be supported by",
-    "To build on the current evidence, it would help to",
-]
-
-CLOSERS = [
-    "This can help improve consistency and learner response during class activities.",
-    "This may support stronger classroom evidence in the next observation cycle.",
-    "This should make the targeted improvement more visible during instruction.",
-    "This can strengthen lesson clarity and support better follow-through for learners.",
-]
-
-LEADING_PHRASE_SWAPS = {
-    "use": ["use", "apply", "incorporate"],
-    "add": ["add", "build in", "introduce"],
-    "include": ["include", "integrate", "build in"],
-    "give": ["give", "provide", "offer"],
-    "tighten": ["tighten", "strengthen", "refine"],
-    "reinforce": ["reinforce", "clarify", "highlight"],
-    "embed": ["embed", "integrate", "plan"],
-    "provide": ["provide", "offer", "deliver"],
-    "strengthen": ["strengthen", "improve", "refine"],
-}
-
-COMMENT_PHRASE_SWAPS = {
-    "clear": ["clear", "explicit", "well-defined"],
-    "timely": ["timely", "prompt", "immediate"],
-    "consistent": ["consistent", "steady", "reliable"],
-    "structured": ["structured", "well-organized", "purposeful"],
-    "brief": ["brief", "short", "focused"],
-    "targeted": ["targeted", "focused", "specific"],
-}
 
 
 def _normalize_whitespace(text: str) -> str:
@@ -238,6 +155,8 @@ class GenerateRequest(BaseModel):
     improvement_areas: Optional[str] = ""
     recommendations: Optional[str] = ""
     style: Optional[str] = "standard"
+    regeneration_nonce: Optional[str] = ""
+    previously_shown: Dict[str, List[str]] = Field(default_factory=dict)
 
 
 class FeedbackItem(BaseModel):
@@ -260,19 +179,6 @@ class GenerateResponse(BaseModel):
     improvement_areas_options: Optional[List[str]] = None
     recommendations_options: Optional[List[str]] = None
     debug: Optional[Dict[str, Any]] = None
-
-
-class ReferenceEvaluationItem(BaseModel):
-    faculty_name: Optional[str] = ""
-    department: Optional[str] = ""
-    subject_observed: Optional[str] = ""
-    observation_type: Optional[str] = ""
-    averages: Averages = Field(default_factory=Averages)
-    ratings: Dict[str, Union[Dict[str, Any], List[Any]]] = Field(default_factory=dict)
-    strengths: str
-    improvement_areas: str
-    recommendations: str
-    source: Optional[str] = "manual"
 
 
 @lru_cache(maxsize=1)
@@ -388,11 +294,6 @@ def _evaluation_signature(req: GenerateRequest) -> Dict[str, Any]:
     }
 
 
-def _rating_guidance(req: GenerateRequest) -> Dict[str, str]:
-    sig = _evaluation_signature(req)
-    return RATING_BAND_GUIDANCE.get(sig["overall_level"], RATING_BAND_GUIDANCE["Satisfactory"])
-
-
 def _band_label(score: float) -> str:
     return _score_band(float(score or 0)).lower()
 
@@ -498,23 +399,6 @@ def _load_sbert():
 def _build_dataset_entries() -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
 
-    def ingest_reference_file(path: pathlib.Path, source_label: str) -> None:
-        if not path.exists():
-            return
-        try:
-            with path.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    raw = _normalize_whitespace(line)
-                    if not raw:
-                        continue
-                    try:
-                        payload = json.loads(raw)
-                    except Exception:
-                        continue
-                    ingest_reference_payload(payload, payload.get("source") or source_label)
-        except Exception:
-            return
-
     def add_entry(text: str, category: str, source: str, meta: Optional[Dict[str, Any]] = None) -> None:
         normalized = _normalize_sentence(text)
         if not normalized:
@@ -528,61 +412,21 @@ def _build_dataset_entries() -> List[Dict[str, Any]]:
             item.update(meta)
         entries.append(item)
 
-    def ingest_reference_payload(payload: Dict[str, Any], source: str) -> None:
-        ratings = payload.get("ratings") or {}
-        for raw_category, items in ratings.items():
-            category = _normalize_domain_name(raw_category)
-            iterable = list(items.values()) if isinstance(items, dict) else items if isinstance(items, list) else [items]
-            for raw in iterable:
-                coerced = _coerce_rating_item(raw)
-                if coerced and _normalize_whitespace(coerced.comment or ""):
-                    add_entry(
-                        coerced.comment or "",
-                        category,
-                        source,
-                        {
-                            "kind": "rating_comment",
-                            "subject": _normalize_whitespace(payload.get("subject_observed") or ""),
-                            "observation_type": _normalize_whitespace(payload.get("observation_type") or ""),
-                        },
-                    )
-
-        signature_source = GenerateRequest(
-            faculty_name=payload.get("faculty_name") or "",
-            department=payload.get("department") or "",
-            subject_observed=payload.get("subject_observed") or "",
-            observation_type=payload.get("observation_type") or "",
-            ratings=ratings,
-            averages=Averages(**(payload.get("averages") or {})),
-        )
-        signature = _evaluation_signature(signature_source)
-        add_entry(
-            payload.get("recommendations") or "",
-            signature["weakest"],
-            source,
-            {
-                "kind": "recommendation",
-                "subject": signature["subject"],
-                "observation_type": signature["observation_type"],
-                "overall_level": signature["overall_level"],
-            },
-        )
-
     retrieval_system = _load_feedback_retrieval_system()
     field_map = {
-        "strengths": "Communication & instruction",
-        "areas_for_improvement": "Classroom management & learning environment",
-        "recommendations": "Assessment & feedback practices",
+        "strengths": "strengths",
+        "areas_for_improvement": "areas_for_improvement",
+        "recommendations": "recommendations",
     }
-    for field_name, category in field_map.items():
+    for field_name, template_field in field_map.items():
         try:
             templates = retrieval_system.fetch_templates(field_name)
         except Exception:
             templates = []
         for row in templates:
             add_entry(
-                row.get("evaluation_comment") or "",
-                category,
+                row.get("feedback_text") or row.get("evaluation_comment") or "",
+                template_field,
                 row.get("source") or f"mysql:{field_name}",
                 {
                     "kind": f"mysql_template:{field_name}",
@@ -590,9 +434,6 @@ def _build_dataset_entries() -> List[Dict[str, Any]]:
                     "template_field": field_name,
                 },
             )
-
-    ingest_reference_file(REFERENCE_EVALS_PATH, "reference_eval")
-    ingest_reference_file(IMPORTED_REFERENCE_EVALS_PATH, "imported_reference_eval")
 
     deduped: List[Dict[str, Any]] = []
     seen = set()
@@ -675,7 +516,7 @@ def _ensure_dataset_embeddings() -> Tuple[List[Dict[str, Any]], np.ndarray]:
             pass
 
 
-def _reference_source_summary(items: List[Dict[str, Any]]) -> Dict[str, int]:
+def _mysql_source_summary(items: List[Dict[str, Any]]) -> Dict[str, int]:
     out: Dict[str, int] = {}
     for item in items:
         source = _normalize_whitespace(item.get("source") or "unknown") or "unknown"
@@ -702,7 +543,6 @@ def _retrieve_top_comments(req: GenerateRequest, comments: List[Dict[str, Any]])
     query_embedding = model.encode([query_text], convert_to_numpy=True, normalize_embeddings=True)
     scores = _cosine_search(query_embedding, embeddings)
 
-    weakest = _evaluation_signature(req)["weakest"]
     ranked_indices = np.argsort(scores)[::-1]
     selected: List[Dict[str, Any]] = []
     seen = set()
@@ -710,8 +550,8 @@ def _retrieve_top_comments(req: GenerateRequest, comments: List[Dict[str, Any]])
     for idx in ranked_indices.tolist():
         item = dict(dataset[idx])
         similarity = float(scores[idx])
-        if item.get("category") == weakest:
-            similarity += 0.05
+        if item.get("category") in {"strengths", "areas_for_improvement", "recommendations"}:
+            similarity += 0.03
         fingerprint = _comment_fingerprint(item["text"])
         if not fingerprint or fingerprint in seen:
             continue
@@ -737,181 +577,6 @@ def _retrieve_top_comments(req: GenerateRequest, comments: List[Dict[str, Any]])
     return selected[:TOP_K_RETRIEVAL]
 
 
-def _choose_variant(word: str, rng: random.Random, bank: Dict[str, List[str]]) -> str:
-    lower = word.lower()
-    choices = bank.get(lower)
-    if not choices:
-        return word
-    replacement = rng.choice(choices)
-    if word[0].isupper():
-        replacement = replacement.capitalize()
-    return replacement
-
-
-def _soft_rephrase_comment(text: str, rng: random.Random) -> str:
-    sentence = _normalize_sentence(text)
-    for src, variants in COMMENT_PHRASE_SWAPS.items():
-        pattern = re.compile(rf"\b{re.escape(src)}\b", re.IGNORECASE)
-        if pattern.search(sentence) and rng.random() < 0.75:
-            sentence = pattern.sub(rng.choice(variants), sentence, count=1)
-
-    sentence = re.sub(r"\bthe teacher\b", rng.choice(["the teacher", "instruction", "classroom practice"]), sentence, count=1, flags=re.IGNORECASE)
-    sentence = re.sub(r"\bshould be\b", rng.choice(["can be", "may be", "should be"]), sentence, count=1, flags=re.IGNORECASE)
-    sentence = re.sub(r"\bcan be\b", rng.choice(["can be", "may be"]), sentence, count=1, flags=re.IGNORECASE)
-    return _normalize_sentence(sentence)
-
-
-def _build_context_clause(req: GenerateRequest, category: str, rng: random.Random) -> str:
-    sig = _evaluation_signature(req)
-    clauses = [
-        f"for {sig['subject']}",
-        f"within {category.lower()}",
-        f"as part of follow-through in {sig['weakest'].lower()}",
-        "during the next observation cycle",
-    ]
-    return rng.choice(clauses)
-
-
-def _combine_comments(base: str, support: str, req: GenerateRequest, category: str, rng: random.Random) -> str:
-    base_clean = _soft_rephrase_comment(base, rng).rstrip(".")
-    support_clean = _soft_rephrase_comment(support, rng)
-    support_clean = support_clean[0].lower() + support_clean[1:] if len(support_clean) > 1 else support_clean.lower()
-    opener = rng.choice(OPENERS)
-    connector = rng.choice([
-        "while also",
-        "and at the same time",
-        "together with efforts to",
-        "alongside routines to",
-    ])
-    context_clause = _build_context_clause(req, category, rng)
-    return _normalize_sentence(f"{opener} {base_clean.lower()} {context_clause}, {connector} {support_clean}")
-
-
-def _build_action_sentence(category: str, req: GenerateRequest, used_focuses: set[str], rng: random.Random) -> str:
-    actions = list(DOMAIN_ACTIONS.get(category, []))
-    if not actions:
-        actions = list(DOMAIN_ACTIONS[_evaluation_signature(req)["weakest"]])
-    rng.shuffle(actions)
-    selected = None
-    for action in actions:
-        focus = _extract_action_focus(action)
-        if focus not in used_focuses:
-            selected = action
-            used_focuses.add(focus)
-            break
-    if not selected:
-        selected = actions[0]
-
-    verb = selected.split(" ", 1)[0]
-    remainder = selected.split(" ", 1)[1] if " " in selected else ""
-    varied = f"{_choose_variant(verb, rng, LEADING_PHRASE_SWAPS)} {remainder}".strip()
-    opener = rng.choice(OPENERS)
-    closer = rng.choice(CLOSERS)
-    return _normalize_sentence(f"{opener} {varied}.")[:-1] + f" {closer}"
-
-
-def _fallback_recommendations(req: GenerateRequest, rng: random.Random) -> List[str]:
-    weakest = _evaluation_signature(req)["weakest"]
-    used_focuses: set[str] = set()
-    return [_build_action_sentence(weakest, req, used_focuses, rng) for _ in range(OUTPUT_RECOMMENDATIONS)]
-
-
-def _generate_recommendation_variations(req: GenerateRequest, retrieved: List[Dict[str, Any]]) -> List[str]:
-    sig = _evaluation_signature(req)
-    rng = random.Random()
-    rng.seed(_stable_seed(sig["teacher"], sig["subject"], datetime.utcnow().isoformat(timespec="seconds"), random.random()))
-
-    if not retrieved:
-        return _fallback_recommendations(req, rng)
-
-    weakest = sig["weakest"]
-    used_focuses: set[str] = set()
-    outputs: List[str] = []
-    raw_texts = [item["text"] for item in retrieved]
-    category_groups: Dict[str, List[Dict[str, Any]]] = {}
-    for item in retrieved:
-        category_groups.setdefault(item["category"], []).append(item)
-
-    preferred = category_groups.get(weakest, []) or retrieved
-
-    first = preferred[0]
-    used_focuses.add(_extract_action_focus(first["text"]))
-    paraphrased = _soft_rephrase_comment(first["text"], rng)
-    paraphrased = _normalize_sentence(f"{rng.choice(OPENERS)} {paraphrased[0].lower() + paraphrased[1:] if len(paraphrased) > 1 else paraphrased.lower()}")
-    if _comment_fingerprint(paraphrased) not in {_comment_fingerprint(t) for t in raw_texts}:
-        outputs.append(paraphrased)
-    else:
-        outputs.append(_build_action_sentence(first["category"], req, used_focuses, rng))
-
-    combo_candidates = preferred if len(preferred) >= 2 else retrieved
-    if len(combo_candidates) >= 2:
-        outputs.append(_combine_comments(combo_candidates[0]["text"], combo_candidates[1]["text"], req, combo_candidates[0]["category"], rng))
-        used_focuses.add(_extract_action_focus(combo_candidates[1]["text"]))
-
-    outputs.append(_build_action_sentence(weakest, req, used_focuses, rng))
-
-    deduped: List[str] = []
-    seen_dataset = {_comment_fingerprint(text) for text in raw_texts}
-    seen_output = set()
-    for item in outputs:
-        normalized = _normalize_sentence(item)
-        fingerprint = _comment_fingerprint(normalized)
-        if not fingerprint or fingerprint in seen_output or fingerprint in seen_dataset:
-            continue
-        seen_output.add(fingerprint)
-        deduped.append(normalized)
-
-    while len(deduped) < OUTPUT_RECOMMENDATIONS:
-        candidate = _build_action_sentence(weakest, req, used_focuses, rng)
-        fingerprint = _comment_fingerprint(candidate)
-        if fingerprint in seen_output or fingerprint in seen_dataset:
-            continue
-        seen_output.add(fingerprint)
-        deduped.append(candidate)
-
-    return deduped[:OUTPUT_RECOMMENDATIONS]
-
-
-def _build_strengths(req: GenerateRequest, comments: List[Dict[str, Any]]) -> str:
-    sig = _evaluation_signature(req)
-    strongest = sig["strongest"]
-    guidance = _rating_guidance(req)
-    matching = [item["comment"] for item in comments if item["comment"] and item["domain"] == strongest]
-    evidence = _dedupe_preserve_order(matching)[:2]
-    if not evidence:
-        evidence = [
-            f"Classroom practice was strongest in {strongest.lower()} during the observed lesson",
-            f"The overall profile reflects {sig['overall_level'].lower()} performance in {sig['subject']}",
-        ]
-    pieces = [
-        f"The observation reflects {sig['overall_level'].lower()} performance, with the strongest indicators appearing in {strongest.lower()}.",
-        guidance["strengths"],
-        _normalize_sentence(evidence[0]),
-    ]
-    if len(evidence) > 1:
-        pieces.append(_normalize_sentence(evidence[1]))
-    return " ".join(_dedupe_preserve_order(pieces))
-
-
-def _build_improvement_areas(req: GenerateRequest, comments: List[Dict[str, Any]]) -> str:
-    sig = _evaluation_signature(req)
-    weakest = sig["weakest"]
-    guidance = _rating_guidance(req)
-    matching = [item["comment"] for item in comments if item["comment"] and item["domain"] == weakest]
-    evidence = _dedupe_preserve_order(matching)[:2]
-    pieces = [
-        f"The clearest opportunity for refinement is {weakest.lower()}, where further consistency would strengthen the overall lesson experience.",
-        guidance["improvement"],
-    ]
-    if evidence:
-        pieces.append(_normalize_sentence(evidence[0]))
-    else:
-        pieces.append(_normalize_sentence(f"Additional attention to {weakest.lower()} would help balance current strengths with more consistent follow-through during instruction"))
-    if len(evidence) > 1:
-        pieces.append(_normalize_sentence(evidence[1]))
-    return " ".join(_dedupe_preserve_order(pieces))
-
-
 def _relevant_comments_for_field(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> List[str]:
     sig = _evaluation_signature(req)
     target_domain = sig["strongest"] if field_name == "strengths" else sig["weakest"]
@@ -930,50 +595,602 @@ def _relevant_comments_for_field(req: GenerateRequest, comments: List[Dict[str, 
 def _compose_field_query(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> str:
     sig = _evaluation_signature(req)
     relevant = _relevant_comments_for_field(req, comments, field_name)
-    band = sig["overall_level"].lower()
-    if field_name == "strengths":
-        focus = sig["strongest"]
-        prompt = f"{sig['subject']} {sig['observation_type']} strength in {focus.lower()} with {band} performance"
-    elif field_name == "areas_for_improvement":
-        focus = sig["weakest"]
-        prompt = f"{sig['subject']} {sig['observation_type']} improvement needed in {focus.lower()} with {band} performance"
-    else:
-        focus = sig["weakest"]
-        prompt = f"{sig['subject']} {sig['observation_type']} recommendation for {focus.lower()} with {band} performance"
+    overall_band = sig["overall_level"].lower()
+    strongest = sig["strongest"]
+    weakest = sig["weakest"]
+    strongest_score = sig["domains"].get(strongest, 0.0)
+    weakest_score = sig["domains"].get(weakest, 0.0)
+    focus = strongest if field_name == "strengths" else weakest
+    focus_score = sig["domains"].get(focus, 0.0)
+    subject = sig["subject"]
+    observation_type = sig["observation_type"]
 
-    if relevant:
-        prompt = f"{prompt}. Evidence: " + "; ".join(relevant)
+    evidence = "; ".join(relevant) if relevant else ""
+
+    if field_name == "strengths":
+        prompt = (
+            f"strengths feedback for {subject} during {observation_type}. "
+            f"Overall performance is {overall_band}. "
+            f"Strongest domain is {strongest} with score {strongest_score:.2f}. "
+            f"Use affirmative evaluator language that highlights effective practice in {strongest.lower()}."
+        )
+    elif field_name == "areas_for_improvement":
+        prompt = (
+            f"areas for improvement feedback for {subject} during {observation_type}. "
+            f"Overall performance is {overall_band}. "
+            f"Weakest domain is {weakest} with score {weakest_score:.2f}. "
+            f"Use diagnostic evaluator language focused on improving {weakest.lower()}."
+        )
+    else:
+        prompt = (
+            f"recommendations feedback for {subject} during {observation_type}. "
+            f"Overall performance is {overall_band}. "
+            f"Target domain is {weakest} with score {weakest_score:.2f}. "
+            f"Use actionable evaluator recommendations for improving {weakest.lower()} in the next observation."
+        )
+
+    if evidence:
+        prompt = f"{prompt} Evidence: {evidence}."
+    else:
+        prompt = f"{prompt} Focus score is {focus_score:.2f}."
+
     return _normalize_whitespace(prompt)
 
 
-def _blend_feedback_with_evidence(field_name: str, template_text: str, evidence_lines: List[str], req: GenerateRequest) -> str:
-    template_sentence = _normalize_sentence(template_text)
-    evidence = [_normalize_sentence(line) for line in evidence_lines if _normalize_whitespace(line)]
-    sig = _evaluation_signature(req)
-    guidance = _rating_guidance(req)
+def _field_target_category(req: GenerateRequest, field_name: str) -> str:
+    return field_name
+
+
+def _field_source_text(item: Dict[str, Any]) -> str:
+    return _normalize_sentence(item.get("feedback_text") or item.get("text") or "")
+
+
+def _pick_dataset_candidates(req: GenerateRequest, field_name: str, retrieved: List[Dict[str, Any]]) -> List[str]:
+    target_category = _field_target_category(req, field_name)
+    preferred = [item for item in retrieved if _normalize_whitespace(item.get("category") or "") == target_category]
+    pool = preferred or retrieved
+    output: List[str] = []
+    seen = set()
+    for item in pool:
+        text = _field_source_text(item)
+        if not _is_clean_candidate_text(text, field_name):
+            continue
+        key = _comment_fingerprint(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        output.append(text)
+        if len(output) >= 3:
+            break
+
+    previously_shown = {
+        _comment_fingerprint(_normalize_sentence(text))
+        for text in (req.previously_shown or {}).get(field_name, [])
+        if _normalize_whitespace(text)
+    }
+    unseen = [text for text in output if _comment_fingerprint(text) not in previously_shown]
+    if unseen:
+        return unseen + [text for text in output if text not in unseen]
+    if output:
+        return output
+
+    fallback_output: List[str] = []
+    fallback_seen = set()
+    for item in pool:
+        text = _field_source_text(item)
+        key = _comment_fingerprint(text)
+        if not key or key in fallback_seen:
+            continue
+        fallback_seen.add(key)
+        fallback_output.append(text)
+        if len(fallback_output) >= 3:
+            break
+
+    fallback_unseen = [text for text in fallback_output if _comment_fingerprint(text) not in previously_shown]
+    if fallback_unseen:
+        return fallback_unseen + [text for text in fallback_output if text not in fallback_unseen]
+    return fallback_output
+
+
+def _split_clauses(text: str) -> List[str]:
+    raw = re.split(r'(?<=[.;:!?])\s+|\s+(?:and|but|while|because|so|which|that)\s+', _normalize_whitespace(text), flags=re.IGNORECASE)
+    cleaned: List[str] = []
+    seen = set()
+    for part in raw:
+        sentence = _normalize_sentence(part)
+        key = _comment_fingerprint(sentence)
+        if not key or key in seen or len(sentence.split()) < 4:
+            continue
+        seen.add(key)
+        cleaned.append(sentence)
+    return cleaned
+
+
+def _is_clean_candidate_text(text: str, field_name: str) -> bool:
+    normalized = _normalize_whitespace(text)
+    if not normalized or len(normalized.split()) < 6:
+        return False
+
+    reject_patterns = [
+        r"\bprofile(s)?\b",
+        r"\brating pattern\b",
+        r"\bevaluation profile\b",
+        r"\bobserved practice\b",
+        r"\btarget practice\b",
+        r"\bperformance in the observed area\b",
+        r"\bvisible in future observations\b",
+        r"\bappropriate when\b",
+        r"\bmore noticeable during the observation\b",
+        r"\btargeted refinements needed\b",
+    ]
+    if any(re.search(pattern, normalized, re.IGNORECASE) for pattern in reject_patterns):
+        return False
+
+    clauses = _split_clauses(normalized)
+    if not clauses:
+        return False
+
+    return any(_normalize_clause_shape(clause, field_name) for clause in clauses)
+
+
+def _is_clean_reconstruction_clause(text: str, field_name: str) -> bool:
+    normalized = _normalize_clause_shape(text, field_name)
+    if not normalized or len(normalized.split()) < 4 or _looks_meta_clause(normalized):
+        return False
+
+    reject_patterns = [
+        r"\bthis\s+(?:is|was|can|should)\b",
+        r"\bperformance should\b",
+        r"\buse this\b",
+        r"\bstill needs more consistent classroom evidence\b",
+    ]
+    return not any(re.search(pattern, normalized, re.IGNORECASE) for pattern in reject_patterns)
+
+
+def _looks_meta_clause(text: str) -> bool:
+    normalized = _normalize_clause_fragment(text)
+    if not normalized:
+        return True
+    meta_patterns = [
+        r"\bwhat stood out during the class was\b",
+        r"\bfrom the evaluator'?s notes\b",
+        r"\bfrom a classroom perspective\b",
+        r"\bthe teacher'?s practice indicates\b",
+        r"\bthis area'?s practice indicates\b",
+        r"\bthis pattern\b",
+        r"\brating pattern\b",
+        r"\bevaluation profile\b",
+        r"\bobserved practice\b",
+        r"\btarget practice\b",
+        r"\bclassroom practice\b",
+        r"\bperformance in the observed area\b",
+        r"\bvisible in future observations\b",
+        r"\bappropriate when\b",
+        r"\bprofile(s)?\b",
+        r"\brating\b",
+        r"\bperformance is\b",
+        r"\bobservation period\b",
+    ]
+    return any(re.search(pattern, normalized, re.IGNORECASE) for pattern in meta_patterns)
+
+
+def _normalize_clause_shape(text: str, field_name: str) -> str:
+    normalized = _normalize_clause_fragment(text)
+    if not normalized or _looks_meta_clause(normalized):
+        return ""
+
+    normalized = re.sub(r"\bthis made the teaching practice more noticeable during the observation\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bmore noticeable during the observation\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bthe observed practice is consistently visible\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\btargeted refinements needed to reach an excellent level\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bthis added stronger evidence of intentional\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bshould now be sustained\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bwhat matters most here is not adding more activities\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bthis helped show a clearer link between instruction, participation\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bneeds to strengthen [^.]*\b(contributed|helped)\b[^.]*", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bwhat stood out during the class was\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bfrom the evaluator'?s notes\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bfrom a classroom perspective\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bthe teacher'?s practice indicates\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bthis area'?s practice indicates\b", "", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s{2,}", " ", normalized).strip(" ,.;:-")
+
+    if not normalized or _looks_meta_clause(normalized):
+        return ""
+
+    clause_type = _classify_clause(normalized, field_name)
 
     if field_name == "strengths":
-        intro = _normalize_sentence(
-            f"The evaluation shows the strongest evidence in {sig['strongest'].lower()}, based on the indicators marked during the observation"
-        )
-        guidance_line = guidance["strengths"]
+        verb_map = {
+            "adjust": "adjusts",
+            "use": "uses",
+            "maintain": "maintains",
+            "monitor": "monitors",
+            "organize": "organizes",
+            "support": "supports",
+            "check": "checks",
+            "explain": "explains",
+        }
+        for base, inflected in verb_map.items():
+            normalized = re.sub(rf"^{base}\b", inflected, normalized, flags=re.IGNORECASE)
+        if re.match(r"^(adjusts|uses|maintains|monitors|organizes|supports|checks|explains)\b", normalized, re.IGNORECASE):
+            normalized = f"the teacher {normalized}"
     elif field_name == "areas_for_improvement":
-        intro = _normalize_sentence(
-            f"The evaluation results point to {sig['weakest'].lower()} as the clearest area that still needs improvement"
-        )
-        guidance_line = guidance["improvement"]
-    else:
-        intro = _normalize_sentence(
-            f"Based on the evaluation results, the next improvement step should focus on {sig['weakest'].lower()}"
-        )
-        guidance_line = guidance["recommendation"]
+        if clause_type == "evidence" and re.match(r"^(adjusts|uses|maintains|monitors|organizes|supports|checks|explains)\b", normalized, re.IGNORECASE):
+            normalized = re.sub(r"^(adjusts|uses|maintains|monitors|organizes|supports|checks|explains)\b", r"needs to \1", normalized, count=1, flags=re.IGNORECASE)
+        elif clause_type == "detail" and not re.search(r"\bneeds|should|improve|could be improved|benefit from\b", normalized, re.IGNORECASE):
+            normalized = f"needs to strengthen {normalized}"
+    elif field_name == "recommendations":
+        if re.match(r"^(adjusts|uses|maintains|monitors|organizes|supports|checks|explains)\b", normalized, re.IGNORECASE):
+            normalized = re.sub(r"^(adjusts|uses|maintains|monitors|organizes|supports|checks|explains)\b", r"\1 more consistently", normalized, count=1, flags=re.IGNORECASE)
+        elif clause_type != "action" and not re.match(r"^(use|provide|plan|apply|build|prioritize|strengthen|restate|pause|review|monitor|establish)\b", normalized, re.IGNORECASE):
+            normalized = f"use {normalized}"
 
-    pieces = [intro, _normalize_sentence(guidance_line)]
-    if evidence:
-        pieces.extend(evidence[:2])
-    if template_sentence:
-        pieces.append(template_sentence)
-    return " ".join(_dedupe_preserve_order(pieces))
+    normalized = re.sub(r"\bthe teacher demonstrates\s+(adjust|use|maintain|monitor|organize|support|check|explain)\b", r"the teacher \1s", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bthe teacher reflects\s+(use|adjust|maintain|monitor|organize|support|check|explain)\b", r"the teacher \1s", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bthe teacher (demonstrates|shows|reflects|highlights)\s+(uses|adjusts|maintains|monitors|organizes|supports|checks|explains)\b", r"the teacher \2", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\b(use|apply|plan|provide|build|prioritize|strengthen)\s+use\b", r"\1", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bneeds to needs to\b", "needs to", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bneeds to strengthen this\b", "needs to strengthen classroom feedback", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bneeds to strengthen the teacher\b", "needs clearer teacher support in this area", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bneeds to strengthen [^.]*\b(contributed|helped)\b[^.]*", "needs to strengthen classroom feedback routines", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bthe teacher\s+(shows|reflects|highlights)\s+should\b", "the teacher should", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s{2,}", " ", normalized).strip(" ,.;:-")
+
+    return "" if _looks_meta_clause(normalized) else _normalize_clause_fragment(normalized)
+
+
+def _classify_clause(text: str, field_name: str) -> str:
+    normalized = _normalize_clause_fragment(text)
+    if re.match(r"^(use|provide|plan|apply|build|prioritize|strengthen|restate|pause|review|monitor|establish)\b", normalized, re.IGNORECASE):
+        return "action"
+    if re.search(r"\b(needs|need to|should|improve|improved|limited|lacks|inconsistent|could be improved|benefit from)\b", normalized, re.IGNORECASE):
+        return "need"
+    if re.search(r"\b(demonstrates|shows|maintains|uses|explains|adjusts|monitors|organizes|supports|checks)\b", normalized, re.IGNORECASE):
+        return "evidence"
+    if _looks_meta_clause(normalized):
+        return "meta"
+    return "detail"
+
+
+def _score_clause_for_field(text: str, field_name: str) -> Tuple[int, int]:
+    clause_type = _classify_clause(text, field_name)
+    type_weights = {
+        "strengths": {"evidence": 4, "detail": 3, "action": 1, "need": 0, "meta": -2},
+        "areas_for_improvement": {"need": 4, "detail": 3, "evidence": 2, "action": 1, "meta": -2},
+        "recommendations": {"action": 4, "detail": 3, "need": 2, "evidence": 1, "meta": -2},
+    }
+    weight = type_weights.get(field_name, type_weights["recommendations"]).get(clause_type, 0)
+    length_score = min(len(_normalize_clause_fragment(text).split()), 12)
+    return weight, length_score
+
+
+FIELD_OPENERS = {
+    "strengths": [
+        "Observed evidence shows that",
+        "The evaluation indicates that",
+        "Classroom evidence suggests that",
+        "The observed lesson shows that",
+    ],
+    "areas_for_improvement": [
+        "The evaluation points to an area that still needs stronger consistency:",
+        "Classroom evidence suggests one clear improvement priority:",
+        "The observation indicates that one area still needs refinement:",
+        "The clearest opportunity for improvement is that",
+    ],
+    "recommendations": [
+        "A practical next step is to",
+        "To strengthen the next observation, it would help to",
+        "One useful follow-through action is to",
+        "A realistic recommendation is to",
+    ],
+}
+
+FIELD_CONNECTORS = {
+    "strengths": [
+        "This was evident in the way",
+        "This could be seen when",
+        "This was noticeable because",
+        "This was demonstrated as",
+    ],
+    "areas_for_improvement": [
+        "This becomes more visible when",
+        "This is noticeable because",
+        "This concern appears when",
+        "This can be seen when",
+    ],
+    "recommendations": [
+        "This can help because",
+        "This is worthwhile since",
+        "This should improve results because",
+        "This matters because",
+    ],
+}
+
+FIELD_CLOSERS = {
+    "strengths": [
+        "This gives the lesson a more organized and purposeful flow.",
+        "This helps sustain learner attention and lesson continuity.",
+        "This supports clearer evidence of effective classroom practice.",
+    ],
+    "areas_for_improvement": [
+        "Strengthening this area can make improvement more visible in future observations.",
+        "A more consistent routine here can produce stronger classroom evidence.",
+        "A focused adjustment in this area can improve lesson flow and learner response.",
+    ],
+    "recommendations": [
+        "This can make the improvement easier to observe and sustain over time.",
+        "This can support stronger follow-through and clearer learner response.",
+        "This can help turn the target area into a more consistent classroom practice.",
+    ],
+}
+
+SAFE_SYNONYM_BANK = {
+    "clear": ["clear", "well-defined", "easy to follow"],
+    "clearly": ["clearly", "in a well-structured way", "in a way learners could follow"],
+    "consistent": ["consistent", "steady", "reliable"],
+    "consistently": ["consistently", "reliably", "more steadily"],
+    "focused": ["focused", "purposeful", "well-directed"],
+    "timely": ["timely", "prompt", "well-timed"],
+}
+
+FIELD_STYLE_RULES = {
+    "strengths": {
+        "lead_verbs": ["demonstrates", "shows", "reflects", "highlights"],
+        "tone_words": ["effective", "purposeful", "affirming", "strong"],
+    },
+    "areas_for_improvement": {
+        "lead_verbs": ["indicates", "suggests", "shows", "reveals"],
+        "tone_words": ["developing", "inconsistent", "emerging", "less visible"],
+    },
+    "recommendations": {
+        "lead_verbs": ["prioritize", "strengthen", "apply", "build"],
+        "tone_words": ["practical", "manageable", "actionable", "focused"],
+    },
+}
+
+AWKWARD_LEAD_PATTERNS = [
+    (re.compile(r"\bpractice is visible when\b", re.IGNORECASE), ""),
+    (re.compile(r"\bpractice is visible as\b", re.IGNORECASE), ""),
+    (re.compile(r"\bthis recommendation is appropriate when\b", re.IGNORECASE), ""),
+    (re.compile(r"\bthis pattern is more common in\b", re.IGNORECASE), ""),
+    (re.compile(r"\bwhat stood out during the class was\b", re.IGNORECASE), ""),
+    (re.compile(r"\bfrom the evaluator'?s notes\b", re.IGNORECASE), ""),
+    (re.compile(r"\bfrom a classroom perspective\b", re.IGNORECASE), ""),
+    (re.compile(r"\bthe teacher's practice indicates\b", re.IGNORECASE), ""),
+    (re.compile(r"\bthis area's practice indicates\b", re.IGNORECASE), ""),
+]
+
+
+def _normalize_clause_fragment(text: str) -> str:
+    cleaned = _normalize_whitespace(text).strip(" .;,:-")
+    if not cleaned:
+        return ""
+    return cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+
+
+def _safe_synonym_swap(text: str, rng: random.Random) -> str:
+    updated = text
+    for source, variants in SAFE_SYNONYM_BANK.items():
+        pattern = re.compile(rf"\b{re.escape(source)}\b", re.IGNORECASE)
+        if pattern.search(updated) and rng.random() < 0.8:
+            replacement = rng.choice(variants)
+            updated = pattern.sub(replacement, updated, count=1)
+    return updated
+
+
+def _clean_clause_for_field(fragment: str, field_name: str) -> str:
+    cleaned = _normalize_clause_fragment(fragment)
+    for pattern, replacement in AWKWARD_LEAD_PATTERNS:
+        cleaned = pattern.sub(replacement, cleaned)
+
+    cleaned = re.sub(r"\b(the teacher)\s+(demonstrates|shows|reflects|highlights)\s+(demonstrates|shows|reflects|highlights)\b", r"\1 \2", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(prioritize|strengthen|apply|build)\s+(prioritize|strengthen|apply|build)\b", r"\1", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(is|was)\s+(visible|noticeable)\b", r"\1", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bthe teacher\s+(shows|reflects|highlights)\s+(uses|adjusts|maintains|monitors|organizes|supports|checks|explains)\b", r"the teacher \2", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bthe teacher demonstrates uses\b", "the teacher uses", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bthe teacher demonstrates adjusts\b", "the teacher adjusts", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bthe teacher demonstrates explains\b", "the teacher explains", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bthe teacher shows should\b", "the teacher should", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bneed(s)? to strengthen this\b", "needs to strengthen classroom feedback", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bneeds to strengthen [^.]*\b(contributed|helped)\b[^.]*", "needs to strengthen classroom feedback routines", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bwhat stood out during the class was\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bfrom the evaluator'?s notes\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bfrom a classroom perspective\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bthis area's practice indicates\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bthe teacher's practice indicates\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.;:-")
+
+    if field_name == "areas_for_improvement":
+        cleaned = re.sub(r"^less visible\s+", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^developing\s+", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"^the teacher\s*$", "the teacher needs more consistent support in this area", cleaned, flags=re.IGNORECASE)
+    if field_name == "recommendations":
+        cleaned = re.sub(r"^by\s+", "", cleaned, flags=re.IGNORECASE)
+    return _normalize_clause_fragment(cleaned)
+
+
+def _field_tone_adjustment(fragment: str, field_name: str, rng: random.Random) -> str:
+    normalized = _normalize_clause_shape(fragment, field_name)
+    if not normalized:
+        return ""
+    normalized = _clean_clause_for_field(normalized, field_name)
+    style = FIELD_STYLE_RULES.get(field_name, FIELD_STYLE_RULES["recommendations"])
+    normalized = _safe_synonym_swap(normalized, rng)
+    clause_type = _classify_clause(normalized, field_name)
+
+    if field_name == "strengths":
+        if normalized.startswith("the teacher "):
+            if not re.match(r"^the teacher\s+(uses|adjusts|maintains|monitors|organizes|supports|checks|explains|should)\b", normalized, re.IGNORECASE):
+                normalized = re.sub(r"^the teacher\s+", f"the teacher {rng.choice(style['lead_verbs'])} ", normalized, count=1, flags=re.IGNORECASE)
+        elif clause_type == "evidence" and not normalized.startswith("the teacher "):
+            normalized = f"the teacher {normalized}"
+        elif not normalized.startswith(("instruction", "classroom evidence", "the lesson", "students", "learners")):
+            normalized = f"the teacher {rng.choice(style['lead_verbs'])} {normalized}"
+    elif field_name == "areas_for_improvement":
+        if clause_type == "need":
+            pass
+        elif normalized.startswith("the teacher "):
+            if not re.match(r"^the teacher\s+(needs|should)\b", normalized, re.IGNORECASE):
+                normalized = re.sub(r"^the teacher\s+", "the teacher needs to ", normalized, count=1, flags=re.IGNORECASE)
+        else:
+            normalized = f"the teacher needs to strengthen {normalized}"
+    elif field_name == "recommendations":
+        if clause_type == "action":
+            pass
+        elif re.match(r"^the teacher\s+", normalized, re.IGNORECASE):
+            normalized = re.sub(r"^the teacher\s+", "provide support to help the teacher ", normalized, count=1, flags=re.IGNORECASE)
+        else:
+            normalized = f"{rng.choice(style['lead_verbs'])} {normalized}"
+
+    return _clean_clause_for_field(normalized, field_name)
+
+
+def _adapt_for_connector(sentence: str, field_name: str) -> str:
+    normalized = _normalize_sentence(sentence)
+    if field_name != "areas_for_improvement":
+        return normalized
+
+    adapted = re.sub(
+        r"^needs to strengthen classroom feedback routines$",
+        "classroom feedback routines are strengthened",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    adapted = re.sub(
+        r"^needs to strengthen classroom feedback$",
+        "classroom feedback is strengthened",
+        adapted,
+        flags=re.IGNORECASE,
+    )
+    adapted = re.sub(
+        r"^needs to ([a-z].+)$",
+        r"\1 is strengthened",
+        adapted,
+        flags=re.IGNORECASE,
+    )
+    return _normalize_sentence(adapted)
+
+
+def _choose_reconstruction_clauses(field_name: str, clauses: List[str]) -> List[str]:
+    unique: List[str] = []
+    seen = set()
+    for clause in clauses:
+        normalized = _normalize_sentence(clause)
+        key = _comment_fingerprint(normalized)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(clause)
+
+    ranked = sorted(
+        unique,
+        key=lambda clause: _score_clause_for_field(clause, field_name),
+        reverse=True,
+    )
+
+    filtered = [
+        clause for clause in ranked
+        if _classify_clause(clause, field_name) != "meta"
+        and _normalize_clause_shape(clause, field_name)
+        and _is_clean_reconstruction_clause(clause, field_name)
+    ]
+    return (filtered or ranked)[:3]
+
+
+def _compose_reconstructed_feedback(req: GenerateRequest, field_name: str, clauses: List[str], fallback_query: str) -> str:
+    rng = random.Random(
+        _stable_seed(
+            "reconstruct",
+            field_name,
+            req.faculty_name or "",
+            req.subject_observed or "",
+            req.observation_type or "",
+            fallback_query,
+            req.regeneration_nonce or "",
+        )
+    )
+
+    openers = FIELD_OPENERS.get(field_name, FIELD_OPENERS["recommendations"])
+    connectors = FIELD_CONNECTORS.get(field_name, FIELD_CONNECTORS["recommendations"])
+    closers = FIELD_CLOSERS.get(field_name, FIELD_CLOSERS["recommendations"])
+
+    previously_shown = {
+        _comment_fingerprint(_normalize_sentence(text))
+        for text in (req.previously_shown or {}).get(field_name, [])
+        if _normalize_whitespace(text)
+    }
+
+    picked = clauses[:]
+    rng.shuffle(picked)
+    unseen_first = [clause for clause in picked if _comment_fingerprint(_normalize_sentence(clause)) not in previously_shown]
+    if unseen_first:
+        picked = unseen_first + [clause for clause in picked if clause not in unseen_first]
+    picked = picked[:3]
+
+    lead = _field_tone_adjustment(picked[0], field_name, rng) if picked else _field_tone_adjustment(fallback_query, field_name, rng)
+    second = _field_tone_adjustment(picked[1], field_name, rng) if len(picked) > 1 else ""
+    third = _field_tone_adjustment(picked[2], field_name, rng) if len(picked) > 2 else ""
+
+    picked_sentences = [part for part in [lead, second, third] if part]
+
+    sentences: List[str] = []
+    if picked_sentences:
+        sentences.append(_normalize_sentence(f"{rng.choice(openers)} {picked_sentences[0]}"))
+    if len(picked_sentences) > 1:
+        connector = rng.choice(connectors)
+        if field_name == "recommendations" and re.match(r"^(use|provide|plan|apply|build|prioritize|strengthen|restate|pause|review|monitor|establish)\b", picked_sentences[1], re.IGNORECASE):
+            sentences.append(_normalize_sentence(picked_sentences[1]))
+        else:
+            connector_text = _adapt_for_connector(picked_sentences[1], field_name)
+            sentences.append(_normalize_sentence(f"{connector} {connector_text}"))
+    if len(picked_sentences) > 2:
+        sentences.append(_normalize_sentence(picked_sentences[2]))
+
+    if not sentences:
+        return _normalize_sentence(fallback_query)
+
+    if len(sentences) < 3:
+        sentences.append(rng.choice(closers))
+
+    return " ".join(sentences[:3])
+
+
+def _paraphrase_dataset_feedback(req: GenerateRequest, field_name: str, retrieved: List[Dict[str, Any]], fallback_query: str) -> str:
+    candidates = _pick_dataset_candidates(req, field_name, retrieved)
+    available_clauses: List[str] = []
+    for candidate in candidates:
+        available_clauses.extend([
+            clause for clause in _split_clauses(candidate)
+            if _is_clean_reconstruction_clause(clause, field_name)
+        ])
+
+    if not available_clauses:
+        for candidate in candidates:
+            available_clauses.extend(_split_clauses(candidate))
+
+    chosen = _choose_reconstruction_clauses(field_name, available_clauses)
+
+    if not chosen:
+        return _normalize_sentence(fallback_query)
+
+    return _compose_reconstructed_feedback(req, field_name, chosen, fallback_query)
+
+
+def _build_clean_option_candidate(req: GenerateRequest, field_name: str, item: Dict[str, Any], fallback_text: str) -> str:
+    source_text = _field_source_text(item)
+    if _is_clean_candidate_text(source_text, field_name):
+        clauses = [
+            clause for clause in _split_clauses(source_text)
+            if _is_clean_reconstruction_clause(clause, field_name)
+        ]
+        chosen = _choose_reconstruction_clauses(field_name, clauses)
+        if chosen:
+            return _compose_reconstructed_feedback(req, field_name, chosen, fallback_text)
+
+    fallback_query = fallback_text or source_text
+    reconstructed = _paraphrase_dataset_feedback(req, field_name, [item], fallback_query)
+    return _ensure_2_3_sentences(reconstructed, fallback=fallback_text)
 
 
 def _summarize_comments_for_field(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> str:
@@ -1008,7 +1225,7 @@ def _summarize_comments_for_field(req: GenerateRequest, comments: List[Dict[str,
     raise ValueError(f"Unsupported AI-assisted field: {field_name}")
 
 
-def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]) -> Dict[str, str]:
+def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]) -> Tuple[Dict[str, str], Dict[str, List[Dict[str, Any]]]]:
     retrieval_system = _load_feedback_retrieval_system()
     queries = {
         "strengths": _normalize_whitespace(req.strengths or "") or _compose_field_query(req, comments, "strengths"),
@@ -1016,16 +1233,45 @@ def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]
         "recommendations": _normalize_whitespace(req.recommendations or "") or _compose_field_query(req, comments, "recommendations"),
     }
 
-    matched = retrieval_system.retrieve_feedback_for_form(queries)
-    return {
-        field_name: _blend_feedback_with_evidence(
-            field_name,
-            matched[field_name].feedback_text if matched[field_name] else queries[field_name],
-            _relevant_comments_for_field(req, comments, field_name),
+    try:
+        matched_top = retrieval_system.retrieve_top_feedback_for_form(queries, top_k=6)
+    except Exception:
+        matched_top = {}
+        for field_name, query in queries.items():
+            try:
+                matched_top[field_name] = retrieval_system.retrieve_top_feedback(field_name, query, top_k=6)
+            except Exception:
+                matched_top[field_name] = []
+
+    def _field_matches(field_name: str) -> List[Dict[str, Any]]:
+        matches = matched_top.get(field_name) or []
+        return [
+            {
+                "feedback_text": match.feedback_text,
+                "evaluation_comment": match.evaluation_comment,
+                "category": _field_target_category(req, field_name),
+                "source": f"mysql:{field_name}:top",
+                "similarity": match.similarity,
+            }
+            for match in matches
+            if getattr(match, "feedback_text", None)
+        ]
+
+    field_specific_matches = {
+        field_name: _field_matches(field_name)
+        for field_name in queries
+    }
+
+    feedback = {
+        field_name: _paraphrase_dataset_feedback(
             req,
+            field_name,
+            field_specific_matches[field_name],
+            queries[field_name],
         )
         for field_name in queries
     }
+    return feedback, field_specific_matches
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -1033,93 +1279,67 @@ def _split_sentences(text: str) -> List[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def _ensure_2_3_sentences(text: str, fallback: str = "") -> str:
-    sents = _split_sentences(text)
+def _ensure_2_3_sentences(text: Optional[str], fallback: str = "") -> str:
+    primary = _normalize_whitespace(text or "")
+    backup = _normalize_whitespace(fallback or "")
+    sents = _split_sentences(primary)
     if len(sents) >= 2:
         return " ".join(sents[:3])
-    if len(sents) == 1 and fallback:
-        fb = _split_sentences(fallback)
+    if len(sents) == 1 and backup:
+        fb = _split_sentences(backup)
         if fb:
             return f"{sents[0]} {fb[0]}"
     if len(sents) == 1:
         return f"{sents[0]} This should help make the improvement more visible in the next observation."
-    return _normalize_sentence(fallback or "This area should be strengthened through consistent, focused classroom practices.")
+    return _normalize_sentence(backup or "This area should be strengthened through consistent, focused classroom practices.")
 
 
 def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, retrieved: List[Dict[str, Any]]) -> List[str]:
-    sig = _evaluation_signature(req)
-    guidance = _rating_guidance(req)
-    rng = random.Random(_stable_seed(field_name, sig["teacher"], sig["subject"], datetime.utcnow().isoformat(timespec="seconds")))
-    weak = sig["weakest"]
-    strong = sig["strongest"]
-
-    base = _ensure_2_3_sentences(base_text, fallback=f"In {sig['subject']}, this area should be improved through consistent follow-through.")
-    opt1 = base
-
-    if field_name == "strengths":
-        alt = (
-            f"The observed lesson showed strong evidence in {strong.lower()}, especially in classroom clarity and structure. "
-            f"{guidance['strengths']} "
-            f"These practices can be sustained in succeeding observations."
+    base = _ensure_2_3_sentences(base_text, fallback=base_text)
+    rng = random.Random(
+        _stable_seed(
+            "options",
+            field_name,
+            req.faculty_name or "",
+            req.subject_observed or "",
+            req.observation_type or "",
+            req.regeneration_nonce or "",
         )
-    elif field_name == "areas_for_improvement":
-        alt = (
-            f"The most visible area for improvement is {weak.lower()}, where consistency can still be strengthened. "
-            f"{guidance['improvement']} "
-            f"This can create stronger evidence of progress in future evaluations."
-        )
-    else:
-        actions = DOMAIN_ACTIONS.get(weak, DOMAIN_ACTIONS["Assessment & feedback practices"])
-        rng.shuffle(actions)
-        act1 = actions[0]
-        act2 = actions[1] if len(actions) > 1 else actions[0]
-        alt = (
-            f"{guidance['recommendation']} "
-            f"A practical next step is to {act1}. "
-            f"You may also {act2} to reinforce the target area during class activities. "
-            f"These actions can improve learner response and instructional consistency."
-        )
-
-    opt2 = _ensure_2_3_sentences(alt, fallback=base)
-
-    retrieved_text = ""
-    for item in retrieved:
-        t = _normalize_sentence(item.get("text", ""))
-        if t:
-            retrieved_text = t
-            break
-
-    if not retrieved_text:
-        retrieved_text = "Current classroom evidence suggests that focused follow-through is needed in this area."
-
-    if field_name == "recommendations":
-        opt3_raw = (
-            f"Based on the observed evidence, prioritize one focused strategy per lesson segment. "
-            f"{retrieved_text} "
-            f"Monitor the effect weekly and adjust the strategy based on learner response."
-        )
-    elif field_name == "strengths":
-        opt3_raw = (
-            f"Classroom evidence confirms positive performance in this domain. "
-            f"{retrieved_text} "
-            f"This strength can be maintained through consistent instructional routines."
-        )
-    else:
-        opt3_raw = (
-            f"Observed evidence indicates this area still needs targeted improvement. "
-            f"{retrieved_text} "
-            f"A consistent intervention plan can make progress more measurable."
-        )
-
-    opt3 = _ensure_2_3_sentences(opt3_raw, fallback=base)
-
+    )
     out: List[str] = []
     seen = set()
-    for o in [opt1, opt2, opt3]:
-        key = _comment_fingerprint(o)
+    previously_shown = {
+        _comment_fingerprint(_normalize_sentence(text))
+        for text in (req.previously_shown or {}).get(field_name, [])
+        if _normalize_whitespace(text)
+    }
+
+    option_candidates = [base]
+    for item in retrieved:
+        candidate = _build_clean_option_candidate(req, field_name, item, base)
+        normalized_candidate = _ensure_2_3_sentences(candidate, fallback=base)
+        if normalized_candidate:
+            option_candidates.append(normalized_candidate)
+
+    candidates = option_candidates
+    if len(candidates) > 1:
+        rest = candidates[1:]
+        rng.shuffle(rest)
+        candidates = [candidates[0], *rest]
+
+    unseen_candidates = [candidate for candidate in candidates if _comment_fingerprint(_normalize_sentence(candidate)) not in previously_shown]
+    if unseen_candidates:
+        candidates = unseen_candidates + [candidate for candidate in candidates if candidate not in unseen_candidates]
+
+    for candidate in candidates:
+        normalized = _ensure_2_3_sentences(candidate, fallback=base)
+        key = _comment_fingerprint(normalized)
         if key and key not in seen:
             seen.add(key)
-            out.append(o)
+            out.append(normalized)
+        if len(out) >= 3:
+            break
+
     while len(out) < 3:
         out.append(base)
     return out[:3]
@@ -1129,15 +1349,19 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
 def generate(req: GenerateRequest):
     comments = _flatten_comments(req)
     retrieved = _retrieve_top_comments(req, comments)
-    field_feedback = _retrieve_form_feedback(req, comments)
-    strengths = field_feedback["strengths"] or _build_strengths(req, comments)
-    improvement_areas = field_feedback["areas_for_improvement"] or _build_improvement_areas(req, comments)
-    recommendations = field_feedback["recommendations"]
+    field_feedback, field_retrieved = _retrieve_form_feedback(req, comments)
+    strengths_fallback = _summarize_comments_for_field(req, comments, "strengths")
+    improvement_fallback = _summarize_comments_for_field(req, comments, "areas_for_improvement")
+    recommendations_fallback = _summarize_comments_for_field(req, comments, "recommendations")
+
+    strengths = _ensure_2_3_sentences(field_feedback.get("strengths"), fallback=strengths_fallback)
+    improvement_areas = _ensure_2_3_sentences(field_feedback.get("areas_for_improvement"), fallback=improvement_fallback)
+    recommendations = _ensure_2_3_sentences(field_feedback.get("recommendations"), fallback=recommendations_fallback)
     sig = _evaluation_signature(req)
 
-    strengths_options = _make_three_options(strengths, req, "strengths", retrieved)
-    improvement_options = _make_three_options(improvement_areas, req, "areas_for_improvement", retrieved)
-    recommendation_options = _make_three_options(recommendations, req, "recommendations", retrieved)
+    strengths_options = _make_three_options(strengths, req, "strengths", field_retrieved.get("strengths", []))
+    improvement_options = _make_three_options(improvement_areas, req, "areas_for_improvement", field_retrieved.get("areas_for_improvement", []))
+    recommendation_options = _make_three_options(recommendations, req, "recommendations", field_retrieved.get("recommendations", []))
 
     return GenerateResponse(
         strengths=strengths,
@@ -1148,11 +1372,15 @@ def generate(req: GenerateRequest):
         recommendations_options=recommendation_options,
         debug={
             "top_comments": retrieved,
-            "reference_sources": _reference_source_summary(retrieved),
+            "mysql_sources": _mysql_source_summary(retrieved),
+            "field_mysql_sources": {
+                field_name: _mysql_source_summary(items)
+                for field_name, items in field_retrieved.items()
+            },
             "embedding_cache_path": str(EMBEDDINGS_CACHE_PATH),
             "dataset_size": len(_build_dataset_entries()),
             "model": os.getenv("SBERT_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
-            "generator": "retrieval-only",
+            "generator": "mysql-only-retrieval",
             "overall_band": sig["overall_level"],
             "domain_bands": {domain: _band_label(score) for domain, score in sig["domains"].items()},
             "feedback_queries": {
@@ -1162,17 +1390,3 @@ def generate(req: GenerateRequest):
             },
         },
     )
-
-
-@app.post("/reference-evaluations")
-async def add_reference_evaluation(item: ReferenceEvaluationItem):
-    entry = item.model_dump()
-    entry["created_at"] = datetime.utcnow().isoformat() + "Z"
-    with REFERENCE_EVALS_PATH.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    try:
-        if EMBEDDINGS_CACHE_PATH.exists():
-            EMBEDDINGS_CACHE_PATH.unlink()
-    except Exception:
-        pass
-    return {"ok": True}

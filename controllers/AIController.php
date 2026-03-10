@@ -183,17 +183,46 @@ class AIController {
     }
     
     private function saveRecommendations($evaluationId, $recommendations) {
-        $query = "INSERT INTO ai_recommendations (evaluation_id, area, suggestion, priority) 
-                  VALUES (:evaluation_id, :area, :suggestion, :priority)";
-        
-        $stmt = $this->db->prepare($query);
-        
-        foreach ($recommendations as $recommendation) {
-            $stmt->bindParam(':evaluation_id', $evaluationId);
-            $stmt->bindParam(':area', $recommendation['area']);
-            $stmt->bindParam(':suggestion', $recommendation['suggestion']);
-            $stmt->bindParam(':priority', $recommendation['priority']);
-            $stmt->execute();
+        // The ai_recommendations schema has varied between versions.
+        // If the table includes `area`/`suggestion`/`priority` columns, use them.
+        // Otherwise fall back to inserting a single recommendation_text column to remain compatible.
+        $hasStructuredColumns = false;
+        try {
+            $colCheck = $this->db->query("SHOW COLUMNS FROM ai_recommendations LIKE 'area'");
+            $hasStructuredColumns = (bool)$colCheck && $colCheck->fetch();
+        } catch (Exception $e) {
+            // Table might not exist or permission issue; fall back to simple insert below.
+            $hasStructuredColumns = false;
+        }
+
+        if ($hasStructuredColumns) {
+            $query = "INSERT INTO ai_recommendations (evaluation_id, area, suggestion, priority) 
+                      VALUES (:evaluation_id, :area, :suggestion, :priority)";
+            $stmt = $this->db->prepare($query);
+            foreach ($recommendations as $recommendation) {
+                $stmt->bindParam(':evaluation_id', $evaluationId);
+                $stmt->bindValue(':area', $recommendation['area']);
+                $stmt->bindValue(':suggestion', $recommendation['suggestion']);
+                $stmt->bindValue(':priority', $recommendation['priority']);
+                try { $stmt->execute(); } catch (Exception $e) { error_log('ai_recommendations insert failed (structured): ' . $e->getMessage()); }
+            }
+            return;
+        }
+
+        // Fallback: older schema uses recommendation_text column. Insert a human readable summary.
+        try {
+            $query = "INSERT INTO ai_recommendations (evaluation_id, recommendation_text) VALUES (:evaluation_id, :recommendation_text)";
+            $stmt = $this->db->prepare($query);
+            foreach ($recommendations as $recommendation) {
+                $text = (isset($recommendation['area']) ? $recommendation['area'] . ': ' : '')
+                      . ($recommendation['suggestion'] ?? '')
+                      . (isset($recommendation['priority']) ? ' (priority: ' . $recommendation['priority'] . ')' : '');
+                $stmt->bindParam(':evaluation_id', $evaluationId);
+                $stmt->bindValue(':recommendation_text', $text);
+                try { $stmt->execute(); } catch (Exception $e) { error_log('ai_recommendations insert failed (fallback): ' . $e->getMessage()); }
+            }
+        } catch (Exception $e) {
+            error_log('ai_recommendations fallback insert preparation failed: ' . $e->getMessage());
         }
     }
 }

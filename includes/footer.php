@@ -24,6 +24,62 @@ const tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
 function confirmAction(message) {
     return confirm(message || 'Are you sure you want to perform this action?');
 }
+
+(function setupResponsiveSidebar() {
+    const sidebar = document.querySelector('.sidebar');
+    const mainContent = document.querySelector('.main-content');
+    if (!sidebar || !mainContent || document.querySelector('.mobile-sidebar-toggle')) {
+        return;
+    }
+
+    const openButton = document.createElement('button');
+    openButton.type = 'button';
+    openButton.className = 'mobile-sidebar-toggle';
+    openButton.setAttribute('aria-label', 'Open navigation');
+    openButton.innerHTML = '<i class="fas fa-bars"></i>';
+
+    const header = document.createElement('div');
+    header.className = 'mobile-sidebar-header';
+    const title = document.createElement('div');
+    title.className = 'fw-semibold text-dark';
+    title.textContent = document.title || 'Navigation';
+    header.appendChild(openButton);
+    header.appendChild(title);
+
+    mainContent.insertBefore(header, mainContent.firstChild);
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'mobile-sidebar-close';
+    closeButton.setAttribute('aria-label', 'Close navigation');
+    closeButton.innerHTML = '<i class="fas fa-times"></i>';
+    sidebar.insertBefore(closeButton, sidebar.firstChild);
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'sidebar-backdrop';
+    document.body.appendChild(backdrop);
+
+    const openSidebar = () => document.body.classList.add('sidebar-open');
+    const closeSidebar = () => document.body.classList.remove('sidebar-open');
+
+    openButton.addEventListener('click', openSidebar);
+    closeButton.addEventListener('click', closeSidebar);
+    backdrop.addEventListener('click', closeSidebar);
+
+    sidebar.querySelectorAll('a').forEach(link => {
+        link.addEventListener('click', () => {
+            if (window.innerWidth < 992) {
+                closeSidebar();
+            }
+        });
+    });
+
+    window.addEventListener('resize', () => {
+        if (window.innerWidth >= 992) {
+            closeSidebar();
+        }
+    });
+})();
 </script>
 
 </body>

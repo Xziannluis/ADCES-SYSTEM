@@ -1037,7 +1037,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
 
         if ($hasTeacherDepartments) {
             $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id,
-                                    GROUP_CONCAT(td.department ORDER BY td.department SEPARATOR ', ') AS secondary_departments
+                                    GROUP_CONCAT(td.department ORDER BY td.department SEPARATOR ',') AS secondary_department_codes
                             FROM teachers t 
                             LEFT JOIN users u ON t.user_id = u.id 
                             LEFT JOIN teacher_departments td ON td.teacher_id = t.id
@@ -1048,7 +1048,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
             $teacher_query .= " GROUP BY t.id ORDER BY t.name ASC";
         } else {
             $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id,
-                                    NULL AS secondary_departments
+                                    NULL AS secondary_department_codes
                             FROM teachers t 
                             LEFT JOIN users u ON t.user_id = u.id 
                             WHERE (u.role = 'teacher' AND u.id IS NOT NULL)";
@@ -1082,6 +1082,11 @@ function getAssignedCoordinators($db, $supervisor_id) {
                     $counter = 1;
                     while($row = $teacher_result->fetch(PDO::FETCH_ASSOC)):
                         if(!empty($row['username'])):
+                            $secondaryDepartmentCodes = array_values(array_filter(array_map('trim', explode(',', (string)($row['secondary_department_codes'] ?? '')))));
+                            $secondaryDepartmentLabels = array_map(function ($code) use ($departments) {
+                                return $departments[$code] ?? $code;
+                            }, $secondaryDepartmentCodes);
+                            $secondaryDepartmentsDisplay = implode(', ', $secondaryDepartmentLabels);
                     ?>
                     <tr>
                         <td><?php echo $counter++; ?></td>
@@ -1092,8 +1097,8 @@ function getAssignedCoordinators($db, $supervisor_id) {
                                     <div class="fw-bold"><?php echo htmlspecialchars($row['name']); ?></div>
                                     <small class="text-muted d-md-none"><?php echo htmlspecialchars($row['username']); ?></small>
                                     <small class="text-muted d-lg-none"><?php echo htmlspecialchars($row['department']); ?></small>
-                                    <?php if (!empty($row['secondary_departments'])): ?>
-                                        <small class="text-muted d-block">Also in: <?php echo htmlspecialchars($row['secondary_departments']); ?></small>
+                                    <?php if (!empty($secondaryDepartmentsDisplay)): ?>
+                                        <small class="text-muted d-block">Also in: <?php echo htmlspecialchars($secondaryDepartmentsDisplay); ?></small>
                                     <?php endif; ?>
                                 </div>
                             </div>
@@ -1103,8 +1108,8 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         </td>
                         <td class="d-none d-lg-table-cell">
                             <?php echo htmlspecialchars($row['department']); ?>
-                            <?php if (!empty($row['secondary_departments'])): ?>
-                                <div><small class="text-muted">Also in: <?php echo htmlspecialchars($row['secondary_departments']); ?></small></div>
+                            <?php if (!empty($secondaryDepartmentsDisplay)): ?>
+                                <div><small class="text-muted">Also in: <?php echo htmlspecialchars($secondaryDepartmentsDisplay); ?></small></div>
                             <?php endif; ?>
                         </td>
                         <td>
@@ -1115,7 +1120,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         </td>
                         <td>
                             <div class="btn-group btn-group-sm" role="group">
-                                <button class="btn btn-outline-primary btn-edit-teacher" data-userid="<?php echo $row['user_id']; ?>" data-username="<?php echo htmlspecialchars($row['username']); ?>" data-name="<?php echo htmlspecialchars($row['name']); ?>" data-department="<?php echo htmlspecialchars($row['department']); ?>" data-email="<?php echo htmlspecialchars($row['email'] ?? ''); ?>" data-secondary-departments="<?php echo htmlspecialchars($row['secondary_departments'] ?? ''); ?>">
+                                <button class="btn btn-outline-primary btn-edit-teacher" data-userid="<?php echo $row['user_id']; ?>" data-username="<?php echo htmlspecialchars($row['username']); ?>" data-name="<?php echo htmlspecialchars($row['name']); ?>" data-department="<?php echo htmlspecialchars($row['department']); ?>" data-email="<?php echo htmlspecialchars($row['email'] ?? ''); ?>" data-secondary-departments="<?php echo htmlspecialchars(implode(',', $secondaryDepartmentCodes)); ?>">
                                     <i class="fas fa-edit"></i>
                                     <span class="d-none d-sm-inline">Edit</span>
                                 </button>

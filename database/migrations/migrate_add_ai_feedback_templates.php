@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS ai_feedback_templates (
     field_name VARCHAR(64) NOT NULL,
     evaluation_comment TEXT NOT NULL,
     feedback_text TEXT NOT NULL,
-    embedding_vector LONGTEXT NOT NULL,
+    embedding_vector LONGBLOB NOT NULL,
     source VARCHAR(64) DEFAULT 'seed',
     is_active TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -24,4 +24,11 @@ CREATE TABLE IF NOT EXISTS ai_feedback_templates (
 ";
 
 $db->exec($sql);
+
+try {
+    $db->exec("ALTER TABLE ai_feedback_templates MODIFY embedding_vector LONGBLOB NOT NULL");
+} catch (Throwable $e) {
+    // Keep migration idempotent for existing environments.
+}
+
 echo "ai_feedback_templates table is ready.\n";

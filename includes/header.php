@@ -61,4 +61,16 @@
 		background: rgba(44, 62, 80, 0.08);
 		color: #2c3e50;
 	}
+
+	@media (max-width: 991.98px) {
+		.dropdown-menu[aria-labelledby$="Menu"],
+		.dropdown-menu[aria-labelledby="userDropdown"] {
+			width: min(92vw, 320px);
+		}
+
+		.user-menu-btn {
+			width: 100%;
+			justify-content: center;
+		}
+	}
 </style>

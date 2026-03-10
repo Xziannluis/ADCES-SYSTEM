@@ -102,28 +102,66 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     <div class="list-group" id="teacherList">
                         <?php while($teacher_row = $teachers->fetch(PDO::FETCH_ASSOC)): ?>
                         <?php
-                            $has_schedule = !empty($teacher_row['evaluation_schedule']);
+                            $scheduleRaw = $teacher_row['evaluation_schedule'] ?? '';
+                            $scheduleRoom = $teacher_row['evaluation_room'] ?? '';
+                            $has_schedule = !empty($scheduleRaw) || !empty($scheduleRoom);
+                            $can_evaluate_now = false;
+                            $schedule_message = 'No schedule set';
+                            $schedule_badge_class = 'bg-secondary';
+                            $schedule_badge_text = 'Schedule required';
+                            $schedule_display = trim((string)$scheduleRaw);
+                            $schedule_block_message = 'No schedule is set. Please ask the dean/principal to set one first.';
+
+                            if (!empty($scheduleRaw)) {
+                                try {
+                                    $timezone = new DateTimeZone('Asia/Manila');
+                                    $scheduledAt = new DateTime($scheduleRaw, $timezone);
+                                    $scheduledAt->setTimezone($timezone);
+                                    $now = new DateTime('now', $timezone);
+                                    $schedule_display = $scheduledAt->format('F d, Y \a\t h:i A');
+                                    $schedule_message = $scheduledAt->format('F d, Y \a\t h:i A');
+                                    if ($now >= $scheduledAt) {
+                                        $can_evaluate_now = true;
+                                        $schedule_badge_class = 'bg-success';
+                                        $schedule_badge_text = 'Evaluate this teacher';
+                                        $schedule_block_message = '';
+                                    } else {
+                                        $schedule_badge_class = 'bg-warning text-dark';
+                                        $schedule_badge_text = 'Not yet time';
+                                        $schedule_block_message = 'Evaluation opens on ' . $schedule_message . '.';
+                                    }
+                                } catch (Exception $e) {
+                                    $schedule_message = 'Invalid schedule';
+                                    $schedule_badge_class = 'bg-danger';
+                                    $schedule_badge_text = 'Invalid schedule';
+                                    $schedule_block_message = 'The saved schedule is invalid. Please ask the dean/principal to reschedule it.';
+                                }
+                            } elseif (!empty($scheduleRoom)) {
+                                $schedule_message = 'Room assigned, waiting for date/time';
+                                $schedule_badge_class = 'bg-warning text-dark';
+                                $schedule_badge_text = 'Schedule incomplete';
+                                $schedule_block_message = 'A room is assigned, but the evaluation date and time are still missing.';
+                            }
                         ?>
-                        <div class="list-group-item teacher-item <?php echo $has_schedule ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-has-schedule="<?php echo $has_schedule ? '1' : '0'; ?>">
+                        <div class="list-group-item teacher-item <?php echo $can_evaluate_now ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-has-schedule="<?php echo $has_schedule ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo $can_evaluate_now ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($schedule_block_message, ENT_QUOTES); ?>">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_row['name']); ?></h6>
                                     <p class="mb-0 text-muted"><?php echo htmlspecialchars($teacher_row['department']); ?></p>
                                     <small class="text-muted">
-                                        <?php if ($has_schedule): ?>
+                                        <?php if (!empty($scheduleRaw)): ?>
                                             <i class="fas fa-calendar me-1"></i>
-                                            <?php echo htmlspecialchars($teacher_row['evaluation_schedule']); ?>
+                                            <?php echo htmlspecialchars($schedule_display); ?>
+                                        <?php elseif (!empty($scheduleRoom)): ?>
+                                            <i class="fas fa-door-open me-1"></i>
+                                            <?php echo htmlspecialchars($schedule_message); ?>
                                         <?php else: ?>
                                             <i class="fas fa-ban me-1"></i>No schedule set
                                         <?php endif; ?>
                                     </small>
                                 </div>
                                 <div>
-                                    <?php if ($has_schedule): ?>
-                                        <span class="badge bg-success p-2">Evaluate this teacher</span>
-                                    <?php else: ?>
-                                        <span class="badge bg-secondary p-2">Schedule required</span>
-                                    <?php endif; ?>
+                                    <span class="badge <?php echo $schedule_badge_class; ?> p-2"><?php echo htmlspecialchars($schedule_badge_text); ?></span>
                                     <i class="fas fa-chevron-right ms-2"></i>
                                 </div>
                             </div>
@@ -709,7 +747,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 </div>
                                 
                                 <!-- Form Details -->
-                                <!-- New Form Code Bar (horizontal, wide, above Save Draft) -->
+                                <!-- New Form Code Bar (horizontal, wide, above form actions) -->
                                  <div style="border: 2px solid #000000ff; border-radius: 8px; padding: 16px; margin-bottom: 24px; background: #f8faff; max-width: 500px;">
                     <table style="width: 100%; border-collapse: collapse;">
                         <tr>
@@ -739,17 +777,10 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                             
                             <!-- Form Actions -->
                             <div class="form-actions mt-4">
-                                <div class="d-flex justify-content-between">
-                                    <div>
-                                        <button type="button" class="btn btn-secondary" id="saveDraft">
-                                            <i class="fas fa-save me-2"></i> Save Draft
-                                        </button>
-                                    </div>
-                                    <div>
-                                        <button type="submit" class="btn btn-success me-2" name="submit_evaluation">
-                                            <i class="fas fa-check me-2"></i> Submit Evaluation
-                                        </button>
-                                    </div>
+                                <div class="d-flex justify-content-end">
+                                    <button type="submit" class="btn btn-success" name="submit_evaluation">
+                                        <i class="fas fa-check me-2"></i> Submit Evaluation
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -987,11 +1018,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 }
             });
 
-            // Save draft button
-            document.getElementById('saveDraft').addEventListener('click', function() {
-                saveEvaluationDraft();
-            });
-
             // Download PDF button removed
 
             // Generate AI button
@@ -1116,48 +1142,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 overall: parseFloat(overallAvg)
             };
         }
-
-
-
-        function saveEvaluationDraft() {
-            if (validateForm(true)) {
-                if (!confirm('Save evaluation as draft? You can continue and submit later.')) return;
-
-                const saveBtn = document.getElementById('saveDraft');
-                const originalText = saveBtn.innerHTML;
-                saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Saving...';
-                saveBtn.disabled = true;
-
-                const payload = getFormData();
-
-                // Send POST to controller to save draft
-                fetch('../controllers/EvaluationController.php?action=save_draft', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams(flattenObject(payload)).toString()
-                }).then(res => res.json()).then(data => {
-                    if (data.success) {
-                        alert('Draft saved successfully! You can continue editing or submit later.');
-                        // Store returned evaluation_id for future reference (resume/edit)
-                        if (data.evaluation_id) {
-                            const draftInput = document.getElementById('draft_evaluation_id');
-                            if (draftInput) draftInput.value = data.evaluation_id;
-                        }
-                    } else {
-                        alert('Failed to save draft: ' + (data.message || 'Unknown error'));
-                    }
-                }).catch(err => {
-                    console.error(err);
-                    alert('Error saving draft. See console for details.');
-                }).finally(() => {
-                    saveBtn.innerHTML = originalText;
-                    saveBtn.disabled = false;
-                });
-            } else {
-                alert('Please complete all required ratings before saving draft.');
-            }
-        }
-
         function exportToPDF() {
                 const teacherId = document.getElementById('selected_teacher_id').value;
                 const teacherName = document.getElementById('facultyName').value;

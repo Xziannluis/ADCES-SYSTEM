@@ -151,12 +151,6 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                                 <i class="fas fa-key me-2"></i>Change Password
                             </a>
                         </li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li>
-                            <a class="dropdown-item" href="../auth/logout.php">
-                                <i class="fas fa-sign-out-alt me-2"></i>Logout
-                            </a>
-                        </li>
                     </ul>
                 </div>
             </div>

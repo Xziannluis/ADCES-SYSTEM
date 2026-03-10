@@ -30,18 +30,53 @@ $department_map = [
 $raw_department = (string)($_SESSION['department'] ?? '');
 $department_display = $department_map[$raw_department] ?? $raw_department;
 
+$scoped_evaluator_id = in_array($_SESSION['role'], ['dean', 'principal'], true)
+    ? null
+    : ($_SESSION['user_id'] ?? null);
+
 // Build Academic Year list based on actual evaluations (so dropdown only shows years with data)
 $available_years = [];
+$available_teachers = [];
 try {
-    $yearsStmt = $db->prepare(
-        "SELECT DISTINCT academic_year FROM evaluations WHERE evaluator_id = :evaluator_id AND academic_year IS NOT NULL AND academic_year <> '' ORDER BY academic_year DESC"
-    );
-    $yearsStmt->bindValue(':evaluator_id', $_SESSION['user_id']);
+    $yearsQuery = "SELECT DISTINCT e.academic_year
+        FROM evaluations e
+        INNER JOIN teachers t ON e.teacher_id = t.id
+        WHERE t.department = :department
+          AND e.academic_year IS NOT NULL
+          AND e.academic_year <> ''";
+    if ($scoped_evaluator_id !== null) {
+        $yearsQuery .= " AND e.evaluator_id = :evaluator_id";
+    }
+    $yearsQuery .= " ORDER BY e.academic_year DESC";
+
+    $yearsStmt = $db->prepare($yearsQuery);
+    $yearsStmt->bindValue(':department', $raw_department);
+    if ($scoped_evaluator_id !== null) {
+        $yearsStmt->bindValue(':evaluator_id', $scoped_evaluator_id);
+    }
     $yearsStmt->execute();
     $available_years = $yearsStmt->fetchAll(PDO::FETCH_COLUMN);
+
+    $teachersQuery = "SELECT DISTINCT t.id, t.name
+        FROM evaluations e
+        INNER JOIN teachers t ON e.teacher_id = t.id
+        WHERE t.department = :department";
+    if ($scoped_evaluator_id !== null) {
+        $teachersQuery .= " AND e.evaluator_id = :evaluator_id";
+    }
+    $teachersQuery .= " ORDER BY t.name ASC";
+
+    $teachersStmt = $db->prepare($teachersQuery);
+    $teachersStmt->bindValue(':department', $raw_department);
+    if ($scoped_evaluator_id !== null) {
+        $teachersStmt->bindValue(':evaluator_id', $scoped_evaluator_id);
+    }
+    $teachersStmt->execute();
+    $available_teachers = $teachersStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 } catch (Exception $e) {
     // Fail-safe: keep page working even if query fails
     $available_years = [];
+    $available_teachers = [];
 }
 
 // Get filter parameters
@@ -53,10 +88,16 @@ $teacher_id = trim((string)($_GET['teacher_id'] ?? ''));
 // Display labels used in the report header
 $academic_year_label = ($academic_year !== '') ? $academic_year : 'All';
 $semester_label = ($semester !== '') ? $semester : 'All';
+$teacher_label = 'All Teachers';
+foreach ($available_teachers as $teacher_option) {
+    if ((string)($teacher_option['id'] ?? '') === $teacher_id) {
+        $teacher_label = (string)($teacher_option['name'] ?? 'All Teachers');
+        break;
+    }
+}
 
 // Get evaluations for reporting
-$evaluations = $evaluation->getEvaluationsForReport($_SESSION['user_id'], $academic_year, $semester, $teacher_id);
-$teachers = $teacher->getByDepartment($_SESSION['department']);
+$evaluations = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id);
 
 // Calculate statistics
 $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year, $semester);
@@ -323,12 +364,12 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                         <label for="teacher_id" class="form-label">Teacher</label>
                         <select class="form-select" id="teacher_id" name="teacher_id">
                             <option value="">All Teachers</option>
-                            <?php while($teacher_row = $teachers->fetch(PDO::FETCH_ASSOC)): ?>
-                            <option value="<?php echo $teacher_row['id']; ?>" 
-                                <?php echo $teacher_id == $teacher_row['id'] ? 'selected' : ''; ?>>
-                                <?php echo htmlspecialchars($teacher_row['name']); ?>
-                            </option>
-                            <?php endwhile; ?>
+                            <?php foreach($available_teachers as $teacher_row): ?>
+                                <option value="<?php echo htmlspecialchars((string)$teacher_row['id']); ?>" 
+                                    <?php echo $teacher_id == (string)$teacher_row['id'] ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($teacher_row['name']); ?>
+                                </option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="col-md-2 d-flex align-items-end">
@@ -378,7 +419,8 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                     <div class="row">
                         <div class="col-12 text-end">
                             <strong>Academic Year:</strong> <?php echo htmlspecialchars($academic_year_label); ?><br>
-                            <strong>Semester:</strong> <?php echo htmlspecialchars($semester_label); ?>
+                            <strong>Semester:</strong> <?php echo htmlspecialchars($semester_label); ?><br>
+                            <strong>Teacher:</strong> <?php echo htmlspecialchars($teacher_label); ?>
                         </div>
                     </div>
                 </div>

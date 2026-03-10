@@ -92,6 +92,7 @@ $curlErr = curl_error($ch);
 $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
+
 header('Content-Type: application/json');
 
 if ($responseBody === false) {

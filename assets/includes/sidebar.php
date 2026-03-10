@@ -39,5 +39,9 @@
             <?php endif; ?>
             <li><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></li>
         <?php endif; ?>
+
+        <?php if (in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'], true)): ?>
+            <li class="mt-3"><a href="../auth/logout.php" class="nav-link"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
+        <?php endif; ?>
     </ul>
 </nav>

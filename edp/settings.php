@@ -110,8 +110,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <ul class="dropdown-menu dropdown-menu-end shadow" aria-labelledby="userDropdown">
                         <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog fa-fw me-2"></i>Settings</a></li>
                         <li><a class="dropdown-item" href="change-password.php"><i class="fas fa-key fa-fw me-2"></i>Change Password</a></li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li><a class="dropdown-item text-danger" href="../auth/logout.php"><i class="fas fa-sign-out-alt fa-fw me-2"></i>Logout</a></li>
                     </ul>
                 </div>
             </div>
