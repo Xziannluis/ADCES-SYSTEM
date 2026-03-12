@@ -479,6 +479,18 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
             max-width: 600px;
         }
 
+        .schedule-modal .modal-dialog {
+            max-width: 640px;
+            margin: 1rem auto;
+        }
+
+        @media (max-width: 768px) {
+            .schedule-modal .modal-dialog {
+                max-width: calc(100vw - 1rem);
+                margin: 0.5rem auto;
+            }
+        }
+
         .schedule-modal .modal-header {
             background: linear-gradient(135deg, #1b66c9, #0f4fa8);
             color: #fff;
