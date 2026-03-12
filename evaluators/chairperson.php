@@ -128,13 +128,14 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
 </head>
 <body>
     <?php include '../includes/sidebar.php'; ?>
-    <div class="main-content">
-        <div class="container-fluid">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3>Coordinator Dashboard - Chairperson</h3>
+    <div class="main-content" style="padding:0;">
+        <div class="dashboard-bg-layer"><div class="bg-img"></div></div>
+        <div class="dashboard-topbar">
+            <h2>Saint Michael College of Caraga</h2>
+            <div class="ms-auto">
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" id="chairpersonMenu" data-bs-toggle="dropdown" aria-expanded="false">
-                        <i class="fas fa-user me-2"></i><?php echo htmlspecialchars($_SESSION['name']); ?> (Chairperson)
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (Chairperson)
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="chairpersonMenu">
                         <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog me-2"></i>Settings</a></li>
@@ -142,6 +143,9 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
                     </ul>
                 </div>
             </div>
+        </div>
+        <div class="dashboard-body-wrap">
+        <div class="container-fluid" style="padding:24px;">
 
             <div class="dashboard-stats">
                 <div class="dashboard-stat stat-1">
@@ -234,6 +238,7 @@ $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
                 </div>
             </div>
 
+        </div>
         </div>
     </div>
     <?php include '../includes/footer.php'; ?>

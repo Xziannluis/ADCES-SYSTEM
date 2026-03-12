@@ -594,18 +594,24 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
 <body>
     <?php include '../includes/sidebar.php'; ?>
     
-    <div class="main-content">
-        <div class="container-fluid">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3>Teachers - <?php echo $_SESSION['department']; ?></h3>
-                <div>
-                    <span class="badge bg-primary">
-                        <i class="fas fa-users me-1"></i>
-                        Total: <?php echo $teachers->rowCount(); ?> | 
-                        Assigned: <?php echo count($assigned_teachers); ?>
-                    </span>
+    <div class="main-content" style="padding:0;">
+        <div class="dashboard-bg-layer"><div class="bg-img"></div></div>
+        <div class="dashboard-topbar">
+            <h2>Saint Michael College of Caraga</h2>
+            <div class="ms-auto">
+                <div class="dropdown">
+                    <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $_SESSION['role'])); ?>)
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="evaluatorMenu">
+                        <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog me-2"></i>Settings</a></li>
+                        <li><a class="dropdown-item" href="change-password.php"><i class="fas fa-key me-2"></i>Change Password</a></li>
+                    </ul>
                 </div>
             </div>
+        </div>
+        <div class="dashboard-body-wrap">
+        <div class="container-fluid" style="padding:24px;">
 
             <?php if(!empty($error_message)): ?>
             <div class="alert alert-danger alert-dismissible fade show">
@@ -708,6 +714,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                 </div>
             </div>
         </div>
+    </div>
     </div>
 
     <?php include '../includes/footer.php'; ?>

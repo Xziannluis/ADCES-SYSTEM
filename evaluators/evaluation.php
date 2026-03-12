@@ -124,11 +124,24 @@ if($_POST && isset($_POST['submit_evaluation'])) {
 <body>
     <?php include '../includes/sidebar.php'; ?>
     
-    <div class="main-content">
-        <div class="container-fluid">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3>Classroom Evaluation</h3>
+    <div class="main-content" style="padding:0;">
+        <div class="dashboard-bg-layer"><div class="bg-img"></div></div>
+        <div class="dashboard-topbar">
+            <h2>Saint Michael College of Caraga</h2>
+            <div class="ms-auto">
+                <div class="dropdown">
+                    <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $_SESSION['role'])); ?>)
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="evaluatorMenu">
+                        <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog me-2"></i>Settings</a></li>
+                        <li><a class="dropdown-item" href="change-password.php"><i class="fas fa-key me-2"></i>Change Password</a></li>
+                    </ul>
+                </div>
             </div>
+        </div>
+        <div class="dashboard-body-wrap">
+        <div class="container-fluid" style="padding:24px;">
 
             <?php if(isset($_SESSION['error'])): ?>
             <div class="alert alert-danger alert-dismissible fade show">
@@ -707,7 +720,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         </div>
                                         <div class="mt-2 ai-category-panel" id="aiStrengthsPanel" style="display:none;">
                                             <div class="ai-suggestion-wrap">
-                                                <div class="ai-suggestion-label">Click a suggestion to add it:</div>
                                                 <div id="aiSuggestionStrengths" class="ai-suggestion-content small"></div>
                                             </div>
                                         </div>
@@ -721,7 +733,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         </div>
                                         <div class="mt-2 ai-category-panel" id="aiImprovementsPanel" style="display:none;">
                                             <div class="ai-suggestion-wrap">
-                                                <div class="ai-suggestion-label">Click a suggestion to add it:</div>
                                                 <div id="aiSuggestionImprovements" class="ai-suggestion-content small"></div>
                                             </div>
                                         </div>
@@ -738,7 +749,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         </div>
                                         <div class="mt-2 ai-category-panel" id="aiRecommendationsPanel" style="display:none;">
                                             <div class="ai-suggestion-wrap">
-                                                <div class="ai-suggestion-label">Click a suggestion to add it:</div>
                                                 <div id="aiSuggestionRecommendations" class="ai-suggestion-content small"></div>
                                             </div>
                                         </div>
@@ -856,6 +866,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 </form>
             </div>
         </div>
+    </div>
     </div>
     
     <?php include '../includes/footer.php'; ?>
@@ -1509,12 +1520,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 return;
             }
 
-            strengthsBox.innerHTML = renderAIPrimarySuggestion(data.strengths || '', 'strengths')
-                + renderOptionCards(data.strengths_options || [], 'strengths', data.strengths || '');
-            improvementsBox.innerHTML = renderAIPrimarySuggestion(data.improvement_areas || '', 'improvement_areas')
-                + renderOptionCards(data.improvement_areas_options || [], 'improvement_areas', data.improvement_areas || '');
-            recommendationsBox.innerHTML = renderAIPrimarySuggestion(data.recommendations || '', 'recommendations')
-                + renderOptionCards(data.recommendations_options || [], 'recommendations', data.recommendations || '');
+            strengthsBox.innerHTML = renderSuggestionCards(data.strengths_options || [data.strengths || ''], 'strengths');
+            improvementsBox.innerHTML = renderSuggestionCards(data.improvement_areas_options || [data.improvement_areas || ''], 'improvement_areas');
+            recommendationsBox.innerHTML = renderSuggestionCards(data.recommendations_options || [data.recommendations || ''], 'recommendations');
 
             if (meta) {
                 const sourceSummary = dbg.reference_sources && typeof dbg.reference_sources === 'object'
@@ -2083,6 +2091,25 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                             `).join('')}
                             </div>
                         </div>
+                    `;
+                }
+
+                function renderSuggestionCards(options, targetField) {
+                    const list = (Array.isArray(options) ? options : []).filter(txt => String(txt || '').trim());
+                    if (!list.length) return '<div class="text-muted small">No suggestions available.</div>';
+
+                    return `
+                        <div class="ai-suggestion-label" style="font-size: 0.9rem; color: #6c757d; margin-bottom: 8px;">Click a suggestion to add it:</div>
+                        ${list.map((txt) => `
+                            <div class="ai-option-card"
+                                 onclick="(function(el){ var ta = document.getElementById('${targetField === 'improvement_areas' ? 'improvementAreas' : targetField}'); if(ta) ta.value = decodeURIComponent(el.getAttribute('data-text')); })(this)"
+                                 data-text="${encodeURIComponent(txt)}"
+                                 style="background: #f0f7ff; border: 1px solid #b8d4f0; border-radius: 20px; padding: 12px 20px; margin-bottom: 8px; cursor: pointer; text-align: center; font-size: 13px; line-height: 1.55; color: #333; transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;"
+                                 onmouseover="this.style.background='#dceefb'; this.style.borderColor='#7ab3e0'; this.style.boxShadow='0 2px 6px rgba(0,0,0,0.08)';"
+                                 onmouseout="this.style.background='#f0f7ff'; this.style.borderColor='#b8d4f0'; this.style.boxShadow='none';">
+                                ${escapeHtml(txt)}
+                            </div>
+                        `).join('')}
                     `;
                 }
     </script>

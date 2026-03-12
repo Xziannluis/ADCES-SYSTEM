@@ -229,8 +229,24 @@ while($row = $all_teachers->fetch(PDO::FETCH_ASSOC)) {
 <body>
     <?php include '../includes/sidebar.php'; ?>
     
-    <div class="main-content">
-        <div class="container-fluid">
+    <div class="main-content" style="padding:0;">
+        <div class="dashboard-bg-layer"><div class="bg-img"></div></div>
+        <div class="dashboard-topbar">
+            <h2>Saint Michael College of Caraga</h2>
+            <div class="ms-auto">
+                <div class="dropdown">
+                    <button class="btn user-menu-btn dropdown-toggle" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow" aria-labelledby="userDropdown">
+                        <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog fa-fw me-2"></i>Settings</a></li>
+                        <li><a class="dropdown-item" href="change-password.php"><i class="fas fa-key fa-fw me-2"></i>Change Password</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="dashboard-body-wrap">
+        <div class="container-fluid" style="padding:24px;">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h3>Manage Teacher Accounts</h3>
                 <span class="badge bg-info p-2">
@@ -340,6 +356,7 @@ while($row = $all_teachers->fetch(PDO::FETCH_ASSOC)) {
                 </div>
                 <?php endif; ?>
             </div>
+        </div>
         </div>
     </div>
 

@@ -586,7 +586,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
             <div class="page-header">
                 <div>
                     <h3 class="page-title">Create User Accounts</h3>
-                    <p class="page-subtitle">Manage leadership, evaluators, coordinators, and teacher access in one place.</p>
+                    <p class="page-subtitle">Manage leaders, evaluators, coordinators, and teacher access in one place.</p>
                 </div>
                 <div class="page-actions">
                     <button class="btn btn-action-dark" data-bs-toggle="modal" data-bs-target="#addLeadershipModal">

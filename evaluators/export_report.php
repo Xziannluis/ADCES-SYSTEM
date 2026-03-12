@@ -80,12 +80,7 @@ function exportEvaluationForm($evaluation_id, $academic_year, $semester) {
             <!-- Header Section -->
             <div class="flex items-start mb-6 border-b-2 border-gray-800 pb-4">
                 <div class="w-20 h-20 mr-6 flex-shrink-0">
-                    <div class="w-full h-full bg-blue-600 rounded-full flex items-center justify-center text-white font-bold text-lg border-4 border-yellow-400">
-                        <div class="text-center">
-                            <div class="text-xs">SMC</div>
-                            <div class="text-xs">⚓</div>
-                        </div>
-                    </div>
+                    <img src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo" class="w-full h-full" style="width:80px; height:auto;" />
                 </div>
                 <div class="flex-1 text-center">
                     <h1 class="text-lg font-bold mb-1">Saint Michael College of Caraga</h1>
@@ -510,7 +505,7 @@ function exportEvaluationForm($evaluation_id, $academic_year, $semester) {
             <div class="flex items-center justify-between text-xs">
                 <div>Member:</div>
                 <div class="flex items-center space-x-2">
-                    <div class="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs">SMC</div>
+                    <img src="../assets/img/SMCC_LOGO.webp" alt="SMCC" style="width:32px; height:32px; border-radius:50%;" />
                     <div class="w-8 h-8 bg-red-600 rounded-full flex items-center justify-center text-white text-xs">PH</div>
                     <div class="w-8 h-8 bg-green-600 rounded-full flex items-center justify-center text-white text-xs">QA</div>
                     <div class="w-8 h-8 bg-orange-600 rounded-full flex items-center justify-center text-white text-xs">ISO</div>

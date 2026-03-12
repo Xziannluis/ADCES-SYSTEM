@@ -97,7 +97,9 @@ foreach ($available_teachers as $teacher_option) {
 }
 
 // Get evaluations for reporting
-$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id);
+// For deans/principals, scope to their department so they only see their own department's evaluations
+$report_department = in_array($_SESSION['role'], ['dean', 'principal'], true) ? $raw_department : '';
+$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department);
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
 $deanPrintEvaluation = null;
@@ -255,6 +257,8 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             .sidebar-backdrop,
             .mobile-sidebar-toggle,
             .mobile-sidebar-header,
+            .dashboard-topbar,
+            .dashboard-bg-layer,
             .d-flex.justify-content-between.align-items-center.mb-4,
             .content-header,
             .page-header {
@@ -471,16 +475,29 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
 <body>
     <?php include '../includes/sidebar.php'; ?>
     
-    <div class="main-content">
-        <div class="container-fluid">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3 class="print-hide">Evaluation Reports - <?php echo $_SESSION['department']; ?></h3>
-                <div class="no-print mt-3">
+    <div class="main-content" style="padding:0;">
+        <div class="dashboard-bg-layer"><div class="bg-img"></div></div>
+        <div class="dashboard-topbar">
+            <h2>Saint Michael College of Caraga</h2>
+            <div class="ms-auto d-flex align-items-center gap-3">
+                <div class="no-print">
                     <button class="btn btn-primary me-2" onclick="window.print()">
                         <i class="fas fa-print me-2"></i>Print Report
                     </button>
                 </div>
+                <div class="dropdown">
+                    <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $_SESSION['role'])); ?>)
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="evaluatorMenu">
+                        <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog me-2"></i>Settings</a></li>
+                        <li><a class="dropdown-item" href="change-password.php"><i class="fas fa-key me-2"></i>Change Password</a></li>
+                    </ul>
+                </div>
             </div>
+        </div>
+        <div class="dashboard-body-wrap">
+        <div class="container-fluid" style="padding:24px;">
 
             <!-- Filters -->
             <div class="filters-card no-print">
@@ -535,7 +552,7 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                     <div style="display:flex; align-items:center; justify-content:space-between; gap: 10px;">
                         <!-- Use equal side widths so the center block is truly centered on the page -->
                         <div style="width: 170px; text-align:left;">
-                            <img src="../SMCCnewlogo.png" alt="SMCC" style="max-width: 80px; height:auto;" />
+                            <img src="../assets/img/SMCC_LOGO.webp" alt="SMCC" style="max-width: 80px; height:auto;" />
                         </div>
                         <div style="flex:1; text-align:center; line-height: 1.2;">
                             <div style="font-weight:700; font-size: 13px;">SAINT MICHAEL COLLEGE OF CARAGA</div>
@@ -844,5 +861,6 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             window.print();
         }
     </script>
+    </div>
 </body>
 </html>

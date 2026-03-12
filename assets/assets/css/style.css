@@ -71,7 +71,7 @@ body {
 
 /* Sidebar Styles */
 .sidebar {
-    background: linear-gradient(180deg, var(--primary) 0%, #34495e 100%);
+    background: #2c5282 !important;
     color: white;
     width: 280px;
     height: 100vh;
@@ -230,7 +230,7 @@ body {
 }
 
 .card-header {
-    background: linear-gradient(135deg, var(--primary) 0%, #34495e 100%);
+    background: linear-gradient(135deg, #2c5282 0%, #2a4a7f 100%);
     color: white;
     border-radius: 10px 10px 0 0 !important;
     padding: 15px 20px;

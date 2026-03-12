@@ -30,6 +30,61 @@ async def health():
     return {"ok": True}
 
 
+@app.post("/backfill_embeddings")
+async def backfill_embeddings():
+    """Generate SBERT embeddings for all seed rows with empty embedding_vector."""
+    import pymysql as _pymysql
+    config = _parse_php_db_config()
+    conn = _pymysql.connect(
+        host=config["host"], user=config["user"],
+        password=config["password"], database=config["database"],
+        charset="utf8mb4", cursorclass=_pymysql.cursors.DictCursor,
+        use_unicode=True,
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, evaluation_comment, LENGTH(embedding_vector) as ev_len "
+            "FROM ai_feedback_templates WHERE is_active = 1"
+        )
+        rows = cur.fetchall()
+
+    needs_update = [
+        r for r in rows
+        if not r["ev_len"] or int(r["ev_len"]) < 10
+    ]
+    if not needs_update:
+        conn.close()
+        return {"ok": True, "updated": 0, "total": len(rows), "message": "All rows already have embeddings."}
+
+    retrieval = _load_feedback_retrieval_system()
+    updated = 0
+    errors = 0
+    with conn.cursor() as cur:
+        for row in needs_update:
+            try:
+                comment = row["evaluation_comment"]
+                if isinstance(comment, bytes):
+                    comment = comment.decode("utf-8", errors="replace")
+                vec = retrieval.encode_text(str(comment))
+                serialized = FeedbackRetrievalSystem.serialize_embedding(vec)
+                cur.execute(
+                    "UPDATE ai_feedback_templates SET embedding_vector = %s WHERE id = %s",
+                    (serialized, row["id"]),
+                )
+                updated += 1
+            except Exception as e:
+                errors += 1
+                print(f"Error on row {row['id']}: {e}")
+    conn.commit()
+    conn.close()
+
+    # Clear cache so service reloads fresh embeddings
+    if EMBEDDINGS_CACHE_PATH.exists():
+        EMBEDDINGS_CACHE_PATH.unlink()
+
+    return {"ok": True, "updated": updated, "errors": errors, "total": len(rows)}
+
+
 @app.exception_handler(RequestValidationError)
 async def _validation_exception_handler(request: Request, exc: RequestValidationError):
     try:
@@ -91,6 +146,29 @@ DOMAIN_ALIASES = {
     "assessment": "Assessment & feedback practices",
     "assessment_feedback": "Assessment & feedback practices",
     "feedback": "Assessment & feedback practices",
+}
+
+# Keywords matching seed evaluation_comment text for each domain — used to
+# build SBERT queries that align closely with stored embeddings.
+DOMAIN_QUERY_KEYWORDS: Dict[str, str] = {
+    "Communication & instruction": (
+        "voice projection and clarity, visual aids and teaching materials, "
+        "non-verbal communication strategies, vocabulary and comprehension levels, "
+        "fluency in the language of instruction"
+    ),
+    "Classroom management & learning environment": (
+        "lesson planning and learning outcomes, classroom time management, "
+        "student participation and engagement, instructional strategies, "
+        "lesson introductions and closure, real-life examples, "
+        "diverse learner needs, class discussions, connections between lessons, "
+        "institutional core values, educational technology"
+    ),
+    "Assessment & feedback practices": (
+        "questioning techniques and higher-order thinking, comprehension checks, "
+        "formative assessment data and instruction, assessment alignment with competencies, "
+        "rubrics and criteria, normative assessments before grading, "
+        "feedback practices for student growth"
+    ),
 }
 
 
@@ -891,53 +969,31 @@ def _relevant_comments_for_field(req: GenerateRequest, comments: List[Dict[str, 
 
 
 def _compose_field_query(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> str:
+    """Build a clean, domain-focused SBERT query for semantic matching against seed evaluation_comments."""
     sig = _evaluation_signature(req)
-    context = _subject_department_context(req)
     relevant = _relevant_comments_for_field(req, comments, field_name)
-    overall_band = sig["overall_level"].lower()
     strongest = sig["strongest"]
     weakest = sig["weakest"]
-    strongest_score = sig["domains"].get(strongest, 0.0)
-    weakest_score = sig["domains"].get(weakest, 0.0)
-    focus = strongest if field_name == "strengths" else weakest
-    focus_score = sig["domains"].get(focus, 0.0)
-    subject = sig["subject"]
-    observation_type = sig["observation_type"]
 
-    evidence = "; ".join(relevant) if relevant else ""
+    # Pick the target domain and get matching keywords
+    if field_name == "strengths":
+        domain = strongest
+    else:
+        domain = weakest
+
+    keywords = DOMAIN_QUERY_KEYWORDS.get(domain, domain.lower())
 
     if field_name == "strengths":
-        prompt = (
-            f"strengths feedback for {subject} during {observation_type}. "
-            f"Department or program context is {context['department'] or 'the current department'}. "
-            f"Overall performance is {overall_band}. "
-            f"Strongest domain is {strongest} with score {strongest_score:.2f}. "
-            f"Prioritize explicit indicator comments and make the feedback relevant to the observed subject and lesson context. "
-            f"Use affirmative evaluator language that highlights effective practice in {strongest.lower()}."
-        )
+        prompt = f"Teacher demonstrates strong {keywords}."
     elif field_name == "areas_for_improvement":
-        prompt = (
-            f"areas for improvement feedback for {subject} during {observation_type}. "
-            f"Department or program context is {context['department'] or 'the current department'}. "
-            f"Overall performance is {overall_band}. "
-            f"Weakest domain is {weakest} with score {weakest_score:.2f}. "
-            f"Prioritize explicit indicator comments and explain the issue in a way that fits the observed subject and classroom context. "
-            f"Use diagnostic evaluator language focused on improving {weakest.lower()}."
-        )
+        prompt = f"Teacher needs improvement in {keywords}."
     else:
-        prompt = (
-            f"recommendations feedback for {subject} during {observation_type}. "
-            f"Department or program context is {context['department'] or 'the current department'}. "
-            f"Overall performance is {overall_band}. "
-            f"Target domain is {weakest} with score {weakest_score:.2f}. "
-            f"Prioritize explicit indicator comments and make the actions subject-aware, department-aware, and usable in the next lesson. "
-            f"Use actionable evaluator recommendations for improving {weakest.lower()} in the next observation."
-        )
+        prompt = f"Recommendations to improve {keywords}."
 
-    if evidence:
-        prompt = f"{prompt} Evidence: {evidence}."
-    else:
-        prompt = f"{prompt} Focus score is {focus_score:.2f}."
+    # Add evaluator comments as evidence for better matching
+    if relevant:
+        evidence = "; ".join(relevant[:3])
+        prompt = f"{prompt} {evidence}"
 
     return _normalize_whitespace(prompt)
 
@@ -1480,24 +1536,43 @@ def _compose_reconstructed_feedback(req: GenerateRequest, field_name: str, claus
 
 
 def _paraphrase_dataset_feedback(req: GenerateRequest, field_name: str, retrieved: List[Dict[str, Any]], fallback_query: str) -> str:
-    candidates = _pick_dataset_candidates(req, field_name, retrieved)
-    available_clauses: List[str] = []
-    for candidate in candidates:
-        available_clauses.extend([
-            clause for clause in _split_clauses(candidate)
-            if _is_clean_reconstruction_clause(clause, field_name)
-        ])
+    """Select the best matching feedback_text from retrieved seed data.
+    Prefer using the high-quality seed text directly rather than
+    splitting and reconstructing it."""
+    previously_shown = {
+        _comment_fingerprint(_normalize_sentence(text))
+        for text in (req.previously_shown or {}).get(field_name, [])
+        if _normalize_whitespace(text)
+    }
 
-    if not available_clauses:
-        for candidate in candidates:
-            available_clauses.extend(_split_clauses(candidate))
+    rng = random.Random(
+        _stable_seed(
+            "paraphrase", field_name,
+            req.faculty_name or "", req.subject_observed or "",
+            req.regeneration_nonce or "",
+        )
+    )
 
-    chosen = _choose_reconstruction_clauses(field_name, available_clauses)
+    # Collect clean feedback texts from retrieved items
+    candidates: List[str] = []
+    seen = set()
+    for item in retrieved:
+        text = _normalize_sentence(item.get("feedback_text") or item.get("text") or "")
+        if not text or len(text.split()) < 8:
+            continue
+        key = _comment_fingerprint(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        candidates.append(text)
 
-    if not chosen:
+    if not candidates:
         return _normalize_sentence(fallback_query)
 
-    return _compose_reconstructed_feedback(req, field_name, chosen, fallback_query)
+    # Prefer unseen candidates
+    unseen = [c for c in candidates if _comment_fingerprint(c) not in previously_shown]
+    pool = unseen if unseen else candidates
+    return pool[rng.randint(0, len(pool) - 1)]
 
 
 def _build_clean_option_candidate(req: GenerateRequest, field_name: str, item: Dict[str, Any], fallback_text: str) -> str:
@@ -1593,12 +1668,12 @@ def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]
     }
 
     try:
-        matched_top = retrieval_system.retrieve_top_feedback_for_form(queries, top_k=6)
+        matched_top = retrieval_system.retrieve_top_feedback_for_form(queries, top_k=10)
     except Exception:
         matched_top = {}
         for field_name, query in queries.items():
             try:
-                matched_top[field_name] = retrieval_system.retrieve_top_feedback(field_name, query, top_k=6)
+                matched_top[field_name] = retrieval_system.retrieve_top_feedback(field_name, query, top_k=10)
             except Exception:
                 matched_top[field_name] = []
 
@@ -1644,44 +1719,67 @@ def _ensure_2_3_sentences(text: Optional[str], fallback: str = "") -> str:
     sents = _split_sentences(primary)
     if len(sents) >= 2:
         return " ".join(sents[:3])
-    if len(sents) == 1 and backup:
-        fb = _split_sentences(backup)
-        if fb:
-            return f"{sents[0]} {fb[0]}"
     if len(sents) == 1:
-        return f"{sents[0]} This should help make the improvement more visible in the next observation."
-    return _normalize_sentence(backup or "This area should be strengthened through consistent, focused classroom practices.")
+        return sents[0]
+    sents_b = _split_sentences(backup)
+    if len(sents_b) >= 2:
+        return " ".join(sents_b[:3])
+    if sents_b:
+        return sents_b[0]
+    return _normalize_sentence(backup or "No specific feedback available for this criterion.")
 
 
 def _inject_subject_context(text: str, req: GenerateRequest, field_name: str) -> str:
-    normalized = _ensure_2_3_sentences(text, fallback=text)
-    context = _subject_department_context(req)
-    subject = context["lesson_context"]
-    department = _normalize_whitespace(req.department or "")
-    if not subject and not department:
-        return normalized
+    """Return the text as-is without adding subject prefixes."""
+    return _normalize_sentence(_normalize_whitespace(text) or "")
 
-    subject_lower = subject.lower()
-    department_lower = department.lower()
-    current_lower = normalized.lower()
 
-    if field_name == "recommendations":
-        if subject and subject_lower not in current_lower:
-            normalized = _normalize_sentence(f"For the next {subject} lesson, {normalized[0].lower() + normalized[1:]}")
-        if department and department_lower not in normalized.lower():
-            normalized = f"{normalized} {_normalize_sentence(f'This recommendation aligns with the {department} context.') }"
-    elif field_name == "areas_for_improvement":
-        if subject and subject_lower not in current_lower:
-            normalized = _normalize_sentence(f"In {subject}, {normalized[0].lower() + normalized[1:]}")
-    elif field_name == "strengths":
-        if subject and subject_lower not in current_lower:
-            normalized = _normalize_sentence(f"During {subject}, {normalized[0].lower() + normalized[1:]}")
-
-    return _ensure_2_3_sentences(normalized, fallback=normalized)
+def _vary_sentence_starters(sentences: List[str]) -> List[str]:
+    """Rewrite sentences sharing the same opening word to add natural variety."""
+    if len(sentences) < 2:
+        return sentences
+    starter_counts: Dict[str, int] = {}
+    for s in sentences:
+        first = s.split()[0].lower() if s.split() else ""
+        starter_counts[first] = starter_counts.get(first, 0) + 1
+    _ALTS: Dict[str, List[str]] = {
+        "the": ["Overall, the", "Notably, the", "Additionally, the"],
+        "teacher": ["The educator", "The instructor", "Notably, the teacher"],
+        "students": ["Learners", "The class", "Notably, students"],
+        "this": ["Such an approach", "Notably, this", "In practice, this"],
+        "a": ["Such a", "Notably, a", "In particular, a"],
+        "it": ["Notably, it", "In this regard, it"],
+    }
+    result: List[str] = []
+    used_alts: Dict[str, int] = {}
+    for s in sentences:
+        words = s.split()
+        if not words:
+            result.append(s)
+            continue
+        first = words[0].lower()
+        if starter_counts.get(first, 0) > 1 and first in _ALTS and len(result) > 0:
+            alt_idx = used_alts.get(first, 0)
+            alts = _ALTS[first]
+            if alt_idx < len(alts):
+                rest = " ".join(words[1:])
+                rewritten = f"{alts[alt_idx]} {rest[0].lower() + rest[1:]}" if rest else alts[alt_idx]
+                result.append(_normalize_sentence(rewritten))
+                used_alts[first] = alt_idx + 1
+            else:
+                result.append(s)
+        else:
+            result.append(s)
+    return result
 
 
 def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, retrieved: List[Dict[str, Any]]) -> List[str]:
-    base = _ensure_2_3_sentences(base_text, fallback=base_text)
+    """Build exactly 3 distinct suggestion options.
+
+    Each option groups 2-3 feedback texts from the SAME evaluation indicator
+    (evaluation_comment) so the paragraph reads coherently about one teaching
+    criterion.  The 3 options come from 3 different indicators for variety.
+    Sentence starters are varied to avoid repetitive patterns."""
     rng = random.Random(
         _stable_seed(
             "options",
@@ -1692,47 +1790,98 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
             req.regeneration_nonce or "",
         )
     )
-    out: List[str] = []
-    seen = set()
+
     previously_shown = {
         _comment_fingerprint(_normalize_sentence(text))
         for text in (req.previously_shown or {}).get(field_name, [])
         if _normalize_whitespace(text)
     }
 
-    option_candidates = [base]
+    # Group retrieved items by evaluation_comment (the indicator they describe)
+    indicator_groups: Dict[str, List[str]] = {}
+    seen_fp: set = set()
     for item in retrieved:
-        candidate = _build_clean_option_candidate(req, field_name, item, base)
-        normalized_candidate = _ensure_2_3_sentences(candidate, fallback=base)
-        if normalized_candidate:
-            option_candidates.append(normalized_candidate)
+        text = _normalize_sentence(item.get("feedback_text") or item.get("text") or "")
+        indicator = _normalize_whitespace(item.get("evaluation_comment") or "general")
+        if not text or len(text.split()) < 5:
+            continue
+        fp = _comment_fingerprint(text)
+        if not fp or fp in seen_fp:
+            continue
+        seen_fp.add(fp)
+        indicator_groups.setdefault(indicator, []).append(text)
 
-    candidates = option_candidates
-    if len(candidates) > 1:
-        rest = candidates[1:]
-        rng.shuffle(rest)
-        candidates = [candidates[0], *rest]
+    # Sort indicator groups by richness (most texts first), shuffle within each
+    sorted_indicators = sorted(indicator_groups.keys(), key=lambda k: -len(indicator_groups[k]))
+    for key in sorted_indicators:
+        rng.shuffle(indicator_groups[key])
 
-    unseen_candidates = [candidate for candidate in candidates if _comment_fingerprint(_normalize_sentence(candidate)) not in previously_shown]
-    if unseen_candidates:
-        candidates = unseen_candidates + [candidate for candidate in candidates if candidate not in unseen_candidates]
+    # Collect all unique texts as a supplementary pool for padding short groups
+    all_texts: List[str] = []
+    for ind in sorted_indicators:
+        all_texts.extend(indicator_groups[ind])
 
-    for candidate in candidates:
-        normalized = _ensure_2_3_sentences(candidate, fallback=base)
-        key = _comment_fingerprint(normalized)
-        if key and key not in seen:
-            seen.add(key)
-            out.append(normalized)
+    # Build 3 options from 3 different indicator groups, each guaranteed 2-3 sentences
+    out: List[str] = []
+    used_indicators: set = set()
+    global_used_fp: set = set()
+
+    for indicator in sorted_indicators:
         if len(out) >= 3:
             break
+        if indicator in used_indicators:
+            continue
 
-    while len(out) < 3:
-        out.append(base)
+        texts = indicator_groups[indicator]
+        target_size = rng.choice([2, 3])
+
+        # Start with texts from this indicator
+        group = list(texts[:target_size])
+
+        # If not enough from this indicator, supplement from other indicators
+        if len(group) < 2:
+            supplements = [
+                t for t in all_texts
+                if _comment_fingerprint(t) not in {_comment_fingerprint(g) for g in group}
+                and _comment_fingerprint(t) not in global_used_fp
+            ]
+            rng.shuffle(supplements)
+            for s in supplements:
+                if len(group) >= target_size:
+                    break
+                group.append(s)
+
+        group = _vary_sentence_starters(group)
+        combined = " ".join(group)
+        if _comment_fingerprint(combined) in previously_shown:
+            continue
+
+        out.append(_normalize_sentence(combined))
+        used_indicators.add(indicator)
+        for g in group:
+            global_used_fp.add(_comment_fingerprint(g))
+
+    # Fallback: fill remaining slots from unused texts
+    if len(out) < 3:
+        remaining = [
+            t for t in all_texts
+            if _comment_fingerprint(t) not in global_used_fp
+        ]
+        rng.shuffle(remaining)
+        idx = 0
+        while len(out) < 3 and idx < len(remaining):
+            target_size = rng.choice([2, 3])
+            gs = min(target_size, len(remaining) - idx)
+            group = _vary_sentence_starters(remaining[idx:idx + gs])
+            out.append(_normalize_sentence(" ".join(group)))
+            idx += gs
+
     return out[:3]
 
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest):
+    """Generate 3 unique feedback suggestions per category from seed data."""
     comments = _flatten_comments(req)
     prioritized_comments = _prioritize_comments(req, comments)
     retrieved = _retrieve_top_comments(req, comments)
@@ -1741,26 +1890,21 @@ def generate(req: GenerateRequest):
     improvement_fallback = _summarize_comments_for_field(req, comments, "areas_for_improvement")
     recommendations_fallback = _summarize_comments_for_field(req, comments, "recommendations")
 
-    strengths = _inject_subject_context(
-        _ensure_2_3_sentences(field_feedback.get("strengths"), fallback=strengths_fallback),
-        req,
-        "strengths",
-    )
-    improvement_areas = _inject_subject_context(
-        _ensure_2_3_sentences(field_feedback.get("areas_for_improvement"), fallback=improvement_fallback),
-        req,
-        "areas_for_improvement",
-    )
-    recommendations = _inject_subject_context(
-        _ensure_2_3_sentences(field_feedback.get("recommendations"), fallback=recommendations_fallback),
-        req,
-        "recommendations",
-    )
+    # Get the primary feedback text for each field (raw, no subject injection yet)
+    strengths_primary = field_feedback.get("strengths") or strengths_fallback
+    improvement_primary = field_feedback.get("areas_for_improvement") or improvement_fallback
+    recommendations_primary = field_feedback.get("recommendations") or recommendations_fallback
     sig = _evaluation_signature(req)
 
-    strengths_options = _make_three_options(strengths, req, "strengths", field_retrieved.get("strengths", []))
-    improvement_options = _make_three_options(improvement_areas, req, "areas_for_improvement", field_retrieved.get("areas_for_improvement", []))
-    recommendation_options = _make_three_options(recommendations, req, "recommendations", field_retrieved.get("recommendations", []))
+    # Build 3 options per field — the primary text becomes the first option
+    strengths_options = _make_three_options(strengths_primary, req, "strengths", field_retrieved.get("strengths", []))
+    improvement_options = _make_three_options(improvement_primary, req, "areas_for_improvement", field_retrieved.get("areas_for_improvement", []))
+    recommendation_options = _make_three_options(recommendations_primary, req, "recommendations", field_retrieved.get("recommendations", []))
+
+    # Use first option as the primary output
+    strengths = strengths_options[0] if strengths_options else strengths_primary
+    improvement_areas = improvement_options[0] if improvement_options else improvement_primary
+    recommendations = recommendation_options[0] if recommendation_options else recommendations_primary
 
     return GenerateResponse(
         strengths=strengths,

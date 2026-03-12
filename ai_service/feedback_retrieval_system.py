@@ -316,7 +316,17 @@ class FeedbackRetrievalSystem:
                         if candidate.get("_embedding") is not None and picked.get("_embedding") is not None
                     ]
                     if similarities_to_selected:
-                        diversity_penalty = max(similarities_to_selected) * 0.12
+                        diversity_penalty = max(similarities_to_selected) * 0.35
+
+                # Penalize same indicator appearing too often
+                indicator_penalty = 0.0
+                candidate_indicator = (candidate.get('evaluation_comment') or '').strip().lower()
+                if selected and candidate_indicator:
+                    indicator_count = sum(1 for p in selected if (p.get('evaluation_comment') or '').strip().lower() == candidate_indicator)
+                    if indicator_count >= 3:
+                        indicator_penalty = 0.15
+                    elif indicator_count >= 2:
+                        indicator_penalty = 0.08
 
                 lexical_penalty = 0.0
                 candidate_text = f"{candidate.get('evaluation_comment') or ''} {candidate.get('feedback_text') or ''}".strip().lower()
@@ -328,7 +338,7 @@ class FeedbackRetrievalSystem:
                     if candidate_text in selected_texts:
                         lexical_penalty = 0.2
 
-                mmr_value = relevance - diversity_penalty - lexical_penalty
+                mmr_value = relevance - diversity_penalty - lexical_penalty - indicator_penalty
                 if best_value is None or mmr_value > best_value:
                     best_value = mmr_value
                     best_index = idx

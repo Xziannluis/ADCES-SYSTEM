@@ -387,7 +387,7 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                     <div style="display:flex; align-items:center; justify-content:space-between; gap: 10px;">
                         <!-- Use equal side widths so the center block is truly centered on the page -->
                         <div style="width: 170px; text-align:left;">
-                            <img src="../SMCCnewlogo.png" alt="SMCC" style="max-width: 80px; height:auto;" />
+                            <img src="../assets/img/SMCC_LOGO.webp" alt="SMCC" style="max-width: 80px; height:auto;" />
                         </div>
                         <div style="flex:1; text-align:center; line-height: 1.2;">
                             <div style="font-weight:700; font-size: 13px;">SAINT MICHAEL COLLEGE OF CARAGA</div>

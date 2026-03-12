@@ -11,6 +11,7 @@ $departments = [
     'SHS' => '(SHS) Senior High School'
 ];
 $selected_department = isset($_GET['department']) ? $_GET['department'] : '';
+$selected_role_filter = isset($_GET['role_filter']) && $_GET['role_filter'] !== '' ? $_GET['role_filter'] : 'leadership';
 require_once '../auth/session-check.php';
 if($_SESSION['role'] != 'edp') {
     header("Location: ../login.php");
@@ -378,17 +379,62 @@ function getAssignedCoordinators($db, $supervisor_id) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Deans - AI Classroom Evaluation</title>
+    <title>Manage Account - AI Classroom Evaluation</title>
     <?php include '../includes/header.php'; ?>
     <style>
-        .filter-toolbar .form-select.all-selected {
-            background-color: #2b3a4a;
-            color: #ffffff;
-            border-color: #2b3a4a;
+        .filter-toolbar .form-select {
+            background-color: #ffffff !important;
+            background: #ffffff !important;
+            color: #333333 !important;
+            border: 1px solid #dee2e6 !important;
+            font-weight: 500;
+            border-radius: 6px;
+            padding: 0.35rem 2rem 0.35rem 0.75rem;
+            min-width: 160px;
         }
 
-        .filter-toolbar .form-select.all-selected:focus {
-            box-shadow: 0 0 0 0.2rem rgba(43, 58, 74, 0.25);
+        .filter-toolbar .form-select:focus {
+            box-shadow: 0 0 0 0.2rem rgba(44, 82, 130, 0.35);
+            border-color: #2c5282 !important;
+        }
+
+        .filter-toolbar .form-select option {
+            background-color: #ffffff;
+            color: #333333;
+        }
+
+        .filter-toolbar .filter-label {
+            color: #2c5282;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .section-card .card-header {
+            background: #1a1a2e !important;
+            color: #fff !important;
+        }
+
+        .modal-header {
+            background: #fff !important;
+            color: #333 !important;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .modal-header .modal-title {
+            color: #333 !important;
+        }
+
+        .modal-header .btn-close {
+            filter: none;
+        }
+
+        .modal-dialog {
+            max-width: 500px !important;
+        }
+
+        .section-card .table-light th {
+            background-color: #f8f9fa !important;
+            color: #333 !important;
         }
 
         .subjects-container, .grade-levels-container, .supervisor-container {
@@ -407,10 +453,8 @@ function getAssignedCoordinators($db, $supervisor_id) {
         }
         /* Evaluator name/designation styles to match preview */
         .evaluator-name {
-            text-transform: uppercase;
             font-weight: 700;
-            font-size: 1rem;
-            letter-spacing: 0.02em;
+            font-size: 0.875rem;
         }
         .evaluator-designation {
             text-transform: uppercase;
@@ -472,9 +516,9 @@ function getAssignedCoordinators($db, $supervisor_id) {
         .table .btn-outline-success,
         .table .btn-outline-info,
         .table .btn-outline-warning {
-            color: #ffffff;
-            border-color: #2b3a4a;
-            background-color: #2b3a4a;
+            color: #333;
+            border-color: #333;
+            background-color: transparent;
         }
 
         .table .btn-outline-primary:hover,
@@ -485,9 +529,9 @@ function getAssignedCoordinators($db, $supervisor_id) {
         .table .btn-outline-success:focus,
         .table .btn-outline-info:focus,
         .table .btn-outline-warning:focus {
-            color: #ffffff;
-            border-color: #24303d;
-            background-color: #24303d;
+            color: #fff;
+            border-color: #333;
+            background-color: #333;
         }
 
         /* Chip-style badges for coordinators and specializations */
@@ -556,19 +600,35 @@ function getAssignedCoordinators($db, $supervisor_id) {
             background: #f8f9fa;
             padding: 0.1rem 0.3rem;
             border-radius: 3px;
-            color: #e83e8c;
+            color: #333333;
         }
     </style>
 </head>
 <body>
     <?php include '../includes/sidebar.php'; ?>
     
-    <div class="main-content">
-        <div class="container-fluid">
+    <div class="main-content" style="padding:0;">
+        <div class="dashboard-bg-layer"><div class="bg-img"></div></div>
+        <div class="dashboard-topbar">
+            <h2>Saint Michael College of Caraga</h2>
+            <div class="ms-auto">
+                <div class="dropdown">
+                    <button class="btn user-menu-btn dropdown-toggle" type="button" id="userDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow" aria-labelledby="userDropdown">
+                        <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog fa-fw me-2"></i>Settings</a></li>
+                        <li><a class="dropdown-item" href="change-password.php"><i class="fas fa-key fa-fw me-2"></i>Change Password</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        <div class="dashboard-body-wrap">
+        <div class="container-fluid" style="padding:24px;">
             <div class="page-header">
                 <div>
-                    <h3 class="page-title">Create User Accounts</h3>
-                    <p class="page-subtitle">Manage leadership, evaluators, coordinators, and teacher access in one place.</p>
+                    <h3 class="page-title">Manage Account</h3>
+                    <p class="page-subtitle">Manage leaders, evaluators, coordinators, and teacher access in one place.</p>
                 </div>
                 <div class="page-actions">
                     <div class="dropdown">
@@ -578,17 +638,17 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="addAccountDropdown">
                             <li>
                                 <button class="dropdown-item add-account-option" type="button" data-target-modal="addLeadershipModal">
-                                    <i class="fas fa-crown me-2"></i>Add President/VP
+                                    Add President/VP
                                 </button>
                             </li>
                             <li>
                                 <button class="dropdown-item add-account-option" type="button" data-target-modal="addEvaluatorModal">
-                                    <i class="fas fa-user-tie me-2"></i>Add Evaluators
+                                    Add Evaluators
                                 </button>
                             </li>
                             <li>
                                 <button class="dropdown-item add-account-option" type="button" data-target-modal="addTeacherModal">
-                                    <i class="fas fa-chalkboard-teacher me-2"></i>Add Teacher Account
+                                    Add Teacher
                                 </button>
                             </li>
                         </ul>
@@ -612,8 +672,14 @@ function getAssignedCoordinators($db, $supervisor_id) {
             </div>
             <?php endif; ?>
 
-            <form method="get" class="filter-toolbar">
-                <span class="filter-label"><i class="fas fa-filter me-2"></i>Department</span>
+            <form method="get" class="filter-toolbar" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                <span class="filter-label"><i class="fas fa-filter me-2"></i>Filter</span>
+                <select name="role_filter" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+                    <option value="leadership" <?php if($selected_role_filter == 'leadership') echo 'selected'; ?>>President & Vice President</option>
+                    <option value="supervisors" <?php if($selected_role_filter == 'supervisors') echo 'selected'; ?>>Deans & Principals</option>
+                    <option value="coordinators" <?php if($selected_role_filter == 'coordinators') echo 'selected'; ?>>Coordinators</option>
+                    <option value="teachers" <?php if($selected_role_filter == 'teachers') echo 'selected'; ?>>Teachers</option>
+                </select>
                 <select name="department" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
                     <option value="">All Departments</option>
                     <?php foreach($departments as $key => $label): ?>
@@ -622,15 +688,16 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 </select>
             </form>
 
+<?php if(!$selected_role_filter || $selected_role_filter === 'leadership'): ?>
 <!-- Leadership Section (President & Vice President) -->
 <div class="card mb-4 section-card">
-    <div class="card-header bg-primary text-white">
-        <h5 class="mb-0"><i class="fas fa-crown me-2"></i>President & Vice President</h5>
+    <div class="card-header" style="background-color:#1a1a2e; color:#fff;">
+        <h5 class="mb-0">President & Vice President</h5>
     </div>
     <div class="card-body">
         <div class="table-responsive">
             <table class="table table-striped table-hover">
-                <thead class="table-dark">
+                <thead class="table-light">
                     <tr>
                         <th width="5%">#</th>
                         <th>Name</th>
@@ -651,7 +718,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         <td><?php echo $counter++; ?></td>
                         <td>
                             <div class="d-flex align-items-center">
-                                <i class="fas fa-user-circle me-2 text-muted"></i>
                                 <?php echo htmlspecialchars($row['name']); ?>
                             </div>
                         </td>
@@ -659,7 +725,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             <code><?php echo htmlspecialchars($row['username']); ?></code>
                         </td>
                         <td>
-                            <span class="badge bg-primary">
+                            <span style="color: #000; font-weight: 600;">
                                 <?php echo ucfirst(str_replace('_', ' ', $row['role'])); ?>
                             </span>
                         </td>
@@ -670,17 +736,15 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             </span>
                         </td>
                         <td>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-outline-primary">
-                                    <i class="fas fa-edit"></i>
-                                    <span class="d-none d-md-inline">Edit</span>
+                            <div class="d-flex flex-wrap gap-1">
+                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-primary">
+                                    <i class="fas fa-edit me-1"></i>Edit
                                 </a>
-                                <form method="POST" style="display: inline;">
+                                <form method="POST" class="d-inline">
                                     <input type="hidden" name="user_id" value="<?php echo $row['id']; ?>">
                                     <input type="hidden" name="action" value="<?php echo $row['status'] == 'active' ? 'deactivate' : 'activate'; ?>">
-                                    <button type="submit" class="btn btn-<?php echo $row['status'] == 'active' ? 'outline-warning' : 'outline-success'; ?>">
-                                        <i class="fas fa-<?php echo $row['status'] == 'active' ? 'user-slash' : 'user-check'; ?>"></i>
-                                        <span class="d-none d-md-inline"><?php echo $row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?></span>
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        <i class="fas fa-<?php echo $row['status'] == 'active' ? 'user-slash' : 'user-check'; ?> me-1"></i><?php echo $row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?>
                                     </button>
                                 </form>
                             </div>
@@ -692,16 +756,18 @@ function getAssignedCoordinators($db, $supervisor_id) {
         </div>
     </div>
 </div>
+<?php endif; ?>
 
+<?php if(!$selected_role_filter || $selected_role_filter === 'supervisors'): ?>
 <!-- Supervisors Section (Deans & Principals) -->
 <div class="card mb-4 section-card">
-    <div class="card-header bg-info text-white">
-        <h5 class="mb-0"><i class="fas fa-user-tie me-2"></i>Deans & Principals</h5>
+    <div class="card-header" style="background-color:#1a1a2e; color:#fff;">
+        <h5 class="mb-0">Deans & Principals</h5>
     </div>
     <div class="card-body">
         <div class="table-responsive">
             <table class="table table-striped table-hover">
-                <thead class="table-dark">
+                <thead class="table-light">
                     <tr>
                         <th width="5%">#</th>
                         <th>Name</th>
@@ -723,7 +789,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         <td><?php echo $counter++; ?></td>
                         <td>
                             <div class="d-flex align-items-center">
-                                <i class="fas fa-user-tie me-2 text-info"></i>
                                 <div>
                                     <div class="fw-bold"><?php echo htmlspecialchars($row['name']); ?></div>
                                     <small class="text-muted d-lg-none"><?php echo htmlspecialchars($row['username']); ?></small>
@@ -734,7 +799,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             <code><?php echo htmlspecialchars($row['username']); ?></code>
                         </td>
                         <td>
-                            <span class="badge bg-info">
+                            <span style="color: #000; font-weight: 600;">
                                 <?php echo ucfirst(str_replace('_', ' ', $row['role'])); ?>
                             </span>
                         </td>
@@ -748,27 +813,20 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             </span>
                         </td>
                         <td>
-                            <div class="btn-group-vertical btn-group-sm" role="group">
-                                <div class="btn-group btn-group-sm" role="group">
-                                    <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-outline-primary">
-                                        <i class="fas fa-edit"></i>
-                                        <span class="d-none d-sm-inline">Edit</span>
-                                    </a>
-                                    <a href="assign_coordinators.php?supervisor_id=<?php echo $row['id']; ?>" class="btn btn-outline-info">
-                                        <i class="fas fa-users"></i>
-                                        <span class="d-none d-sm-inline">Coordinators</span>
-                                    </a>
-                                </div>
-                                <div class="btn-group btn-group-sm" role="group">
-                                    <form method="POST" class="d-inline">
-                                        <input type="hidden" name="user_id" value="<?php echo $row['id']; ?>">
-                                        <input type="hidden" name="action" value="<?php echo $row['status'] == 'active' ? 'deactivate' : 'activate'; ?>">
-                                        <button type="submit" class="btn btn-<?php echo $row['status'] == 'active' ? 'outline-warning' : 'outline-success'; ?>">
-                                            <i class="fas fa-<?php echo $row['status'] == 'active' ? 'user-slash' : 'user-check'; ?>"></i>
-                                            <span class="d-none d-sm-inline"><?php echo $row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?></span>
-                                        </button>
-                                    </form>
-                                </div>
+                            <div class="d-flex flex-wrap gap-1">
+                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-primary">
+                                    <i class="fas fa-edit me-1"></i>Edit
+                                </a>
+                                <a href="assign_coordinators.php?supervisor_id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-info">
+                                    <i class="fas fa-users me-1"></i>Coordinators
+                                </a>
+                                <form method="POST" class="d-inline">
+                                    <input type="hidden" name="user_id" value="<?php echo $row['id']; ?>">
+                                    <input type="hidden" name="action" value="<?php echo $row['status'] == 'active' ? 'deactivate' : 'activate'; ?>">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        <i class="fas fa-<?php echo $row['status'] == 'active' ? 'user-slash' : 'user-check'; ?> me-1"></i><?php echo $row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?>
+                                    </button>
+                                </form>
                             </div>
                         </td>
                     </tr>
@@ -778,16 +836,18 @@ function getAssignedCoordinators($db, $supervisor_id) {
         </div>
     </div>
 </div>
+<?php endif; ?>
 
+<?php if(!$selected_role_filter || $selected_role_filter === 'coordinators'): ?>
 <!-- Coordinators Section -->
 <div class="card mb-4 section-card">
-    <div class="card-header bg-success text-white">
-        <h5 class="mb-0"><i class="fas fa-users me-2"></i>Coordinators</h5>
+    <div class="card-header" style="background-color:#1a1a2e; color:#fff;">
+        <h5 class="mb-0">Coordinators</h5>
     </div>
     <div class="card-body">
         <div class="table-responsive">
             <table class="table table-striped table-hover">
-                <thead class="table-dark">
+                <thead class="table-light">
                     <tr>
                         <th width="5%">#</th>
                         <th>Name</th>
@@ -809,7 +869,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         <td><?php echo $counter++; ?></td>
                         <td>
                             <div class="d-flex align-items-center">
-                                <i class="fas fa-user me-2 text-success"></i>
                                 <div>
                                     <div class="evaluator-name"><?php echo htmlspecialchars($row['name']); ?></div>
                                     <?php if (!empty($row['designation'])): ?>
@@ -823,7 +882,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             <code><?php echo htmlspecialchars($row['username']); ?></code>
                         </td>
                         <td>
-                            <span class="badge bg-success">
+                            <span style="color: #000; font-weight: 600;">
                                 <?php echo ucfirst(str_replace('_', ' ', $row['role'])); ?>
                             </span>
                         </td>
@@ -837,27 +896,20 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             </span>
                         </td>
                         <td>
-                            <div class="btn-group-vertical btn-group-sm" role="group">
-                                <div class="btn-group btn-group-sm" role="group">
-                                    <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-outline-primary">
-                                        <i class="fas fa-edit"></i>
-                                        <span class="d-none d-sm-inline">Edit</span>
-                                    </a>
-                                    <a href="assign_teachers.php?evaluator_id=<?php echo $row['id']; ?>" class="btn btn-outline-success">
-                                        <i class="fas fa-chalkboard-teacher"></i>
-                                        <span class="d-none d-sm-inline">Teachers</span>
-                                    </a>
-                                </div>
-                                <div class="btn-group btn-group-sm" role="group">
-                                    <form method="POST" class="d-inline">
-                                        <input type="hidden" name="user_id" value="<?php echo $row['id']; ?>">
-                                        <input type="hidden" name="action" value="<?php echo $row['status'] == 'active' ? 'deactivate' : 'activate'; ?>">
-                                        <button type="submit" class="btn btn-<?php echo $row['status'] == 'active' ? 'outline-warning' : 'outline-success'; ?>">
-                                            <i class="fas fa-<?php echo $row['status'] == 'active' ? 'user-slash' : 'user-check'; ?>"></i>
-                                            <span class="d-none d-sm-inline"><?php echo $row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?></span>
-                                        </button>
-                                    </form>
-                                </div>
+                            <div class="d-flex flex-wrap gap-1">
+                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-primary">
+                                    <i class="fas fa-edit me-1"></i>Edit
+                                </a>
+                                <a href="assign_teachers.php?evaluator_id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-success">
+                                    <i class="fas fa-chalkboard-teacher me-1"></i>Teachers
+                                </a>
+                                <form method="POST" class="d-inline">
+                                    <input type="hidden" name="user_id" value="<?php echo $row['id']; ?>">
+                                    <input type="hidden" name="action" value="<?php echo $row['status'] == 'active' ? 'deactivate' : 'activate'; ?>">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        <i class="fas fa-<?php echo $row['status'] == 'active' ? 'user-slash' : 'user-check'; ?> me-1"></i><?php echo $row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?>
+                                    </button>
+                                </form>
                             </div>
                         </td>
                     </tr>
@@ -867,11 +919,13 @@ function getAssignedCoordinators($db, $supervisor_id) {
         </div>
     </div>
 </div>
+<?php endif; ?>
 
+<?php if(!$selected_role_filter || $selected_role_filter === 'teachers'): ?>
 <!-- Teachers Section -->
 <div class="card mb-4 section-card">
-    <div class="card-header bg-warning text-white">
-        <h5 class="mb-0"><i class="fas fa-chalkboard-teacher me-2"></i>Teachers</h5>
+    <div class="card-header" style="background-color:#1a1a2e; color:#fff;">
+        <h5 class="mb-0">Teachers</h5>
     </div>
     <div class="card-body">
         <?php
@@ -916,7 +970,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
         ?>
         <div class="table-responsive">
             <table class="table table-striped table-hover">
-                <thead class="table-dark">
+                <thead class="table-light">
                     <tr>
                         <th width="5%">#</th>
                         <th>Name</th>
@@ -941,7 +995,6 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         <td><?php echo $counter++; ?></td>
                         <td>
                             <div class="d-flex align-items-center">
-                                <i class="fas fa-chalkboard-teacher me-2 text-warning"></i>
                                 <div>
                                     <div class="fw-bold"><?php echo htmlspecialchars($row['name']); ?></div>
                                     <small class="text-muted d-md-none"><?php echo htmlspecialchars($row['username']); ?></small>
@@ -968,17 +1021,15 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             </span>
                         </td>
                         <td>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <button class="btn btn-outline-primary btn-edit-teacher" data-userid="<?php echo $row['user_id']; ?>" data-username="<?php echo htmlspecialchars($row['username']); ?>" data-name="<?php echo htmlspecialchars($row['name']); ?>" data-department="<?php echo htmlspecialchars($row['department']); ?>" data-email="<?php echo htmlspecialchars($row['email'] ?? ''); ?>" data-secondary-departments="<?php echo htmlspecialchars(implode(',', $secondaryDepartmentCodes)); ?>">
-                                    <i class="fas fa-edit"></i>
-                                    <span class="d-none d-sm-inline">Edit</span>
+                            <div class="d-flex flex-wrap gap-1">
+                                <button class="btn btn-sm btn-outline-primary btn-edit-teacher" data-userid="<?php echo $row['user_id']; ?>" data-username="<?php echo htmlspecialchars($row['username']); ?>" data-name="<?php echo htmlspecialchars($row['name']); ?>" data-department="<?php echo htmlspecialchars($row['department']); ?>" data-email="<?php echo htmlspecialchars($row['email'] ?? ''); ?>" data-secondary-departments="<?php echo htmlspecialchars(implode(',', $secondaryDepartmentCodes)); ?>">
+                                    <i class="fas fa-edit me-1"></i>Edit
                                 </button>
                                 <form method="POST" class="d-inline">
                                     <input type="hidden" name="user_id" value="<?php echo $row['user_id']; ?>">
                                     <input type="hidden" name="action" value="<?php echo $row['status'] == 'active' ? 'deactivate' : 'activate'; ?>">
-                                    <button type="submit" class="btn btn-<?php echo $row['status'] == 'active' ? 'outline-warning' : 'outline-success'; ?>">
-                                        <i class="fas fa-<?php echo $row['status'] == 'active' ? 'user-slash' : 'user-check'; ?>"></i>
-                                        <span class="d-none d-sm-inline"><?php echo $row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?></span>
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        <i class="fas fa-<?php echo $row['status'] == 'active' ? 'user-slash' : 'user-check'; ?> me-1"></i><?php echo $row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?>
                                     </button>
                                 </form>
                             </div>
@@ -993,6 +1044,11 @@ function getAssignedCoordinators($db, $supervisor_id) {
         </div>
     </div>
 </div>
+<?php endif; ?>
+
+        </div>
+        </div>
+    </div>
 
     <!-- Add Leadership Modal -->
     <div class="modal fade" id="addLeadershipModal" tabindex="-1">
@@ -1126,7 +1182,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
         <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Add Teacher Account</h5>
+                    <h5 class="modal-title">Add Teacher</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <form method="POST">
@@ -1166,7 +1222,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Create Teacher Account</button>
+                        <button type="submit" class="btn btn-primary">Create Teacher</button>
                     </div>
                 </form>
             </div>
@@ -1178,7 +1234,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 <div class="modal-dialog">
                     <div class="modal-content">
                         <div class="modal-header">
-                            <h5 class="modal-title">Edit Teacher Account</h5>
+                            <h5 class="modal-title">Edit Teacher</h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                         </div>
                         <form method="POST" id="editTeacherForm">

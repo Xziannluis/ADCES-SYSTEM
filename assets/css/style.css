@@ -9,6 +9,57 @@
     --gray: #95a5a6;
 }
 
+/* ── Dashboard topbar + blurred background (shared) ── */
+.dashboard-topbar .dropdown-menu {
+    min-width: 200px;
+    white-space: nowrap;
+}
+.dashboard-topbar .dropdown-item {
+    white-space: nowrap;
+}
+.dashboard-topbar {
+    background: #2c5282;
+    padding: 20px 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    color: #fff;
+    position: relative;
+    z-index: 1050;
+}
+.dashboard-topbar h2 {
+    font-weight: 700;
+    font-size: 1.75rem;
+    margin: 0;
+    letter-spacing: 0.5px;
+}
+.dashboard-bg-layer {
+    position: fixed;
+    top: 0;
+    left: 280px;
+    right: 0;
+    bottom: 0;
+    z-index: 0;
+    overflow: hidden;
+}
+.dashboard-bg-layer .bg-img {
+    position: absolute;
+    inset: 0;
+    background: url('../img/smcc_building.jpg') center center / cover no-repeat;
+    filter: blur(6px);
+    transform: scale(1.1);
+}
+.dashboard-bg-layer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(240,244,248,0.82);
+}
+.dashboard-body-wrap {
+    position: relative;
+    z-index: 1;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -72,7 +123,7 @@ body {
 
 /* Sidebar Styles */
 .sidebar {
-    background: linear-gradient(180deg, var(--primary) 0%, #34495e 100%);
+    background: #2c5282 !important;
     color: white;
     width: 280px;
     height: 100vh;
@@ -87,7 +138,7 @@ body {
 }
 
 .sidebar-header {
-    padding: 25px 20px;
+    padding: 20px 20px;
     border-bottom: 1px solid rgba(255,255,255,0.1);
     text-align: center;
 }
@@ -179,6 +230,11 @@ body {
 
 .teacher-card {
     width: 100%;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    overflow: hidden;
 }
 
 .teacher-actions {
@@ -541,7 +597,7 @@ img {
 }
 
 .card-header {
-    background: linear-gradient(135deg, var(--primary) 0%, #34495e 100%);
+    background: linear-gradient(135deg, #2c5282 0%, #2a4a7f 100%);
     color: white;
     border-radius: 10px 10px 0 0 !important;
     padding: 15px 20px;

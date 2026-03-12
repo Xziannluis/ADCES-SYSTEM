@@ -2,11 +2,9 @@
     <!-- ...existing code... -->
 <nav class="sidebar">
     <div class="sidebar-header">
-        <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px;">
-            <img src="../assets/img/sd.webp" alt="SMCC Logo" style="width: 45px; height: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
-            <h4 style="margin: 0; font-weight: 700;">ADCES</h4>
+        <div style="display: flex; align-items: center; justify-content: center;">
+            <img src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo" style="width: 70px; height: auto; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
         </div>
-        <p class="user-info"><?php echo $_SESSION['name']; ?></p>
     </div>
     
     <ul class="sidebar-nav">

@@ -149,7 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="login-container">
         <!-- SMCC Logo -->
         <div class="logo-container">
-            <img src="assets/img/sd.webp" alt="SMCC Logo" class="logo-image">
+            <img src="assets/img/SMCC_LOGO.webp" alt="SMCC Logo" class="logo-image">
         </div>
         
         <div class="login-header">
