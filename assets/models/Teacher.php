@@ -57,12 +57,9 @@ class Teacher {
 
     // Get active teachers by department
     public function getActiveByDepartment($department) {
-                // Exclude teachers who are linked to user accounts with roles 'chairperson' or 'principal'
                 $query = "SELECT t.* FROM " . $this->table_name . " t 
-                                    LEFT JOIN users u ON t.user_id = u.id 
                                     WHERE t.department = :department 
                                         AND t.status = 'active' 
-                                        AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
                                     ORDER BY t.name ASC";
                 $stmt = $this->conn->prepare($query);
                 $stmt->bindParam(':department', $department);

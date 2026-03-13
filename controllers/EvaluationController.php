@@ -200,7 +200,7 @@ class EvaluationController {
                 isset($scheduleVal) ? (string)$scheduleVal : null,
                 isset($roomVal) ? (string)$roomVal : null
             );
-            if (!$scheduleGate['allowed']) {
+            if (!$scheduleGate['allowed'] && !in_array($evaluatorRole, ['president', 'vice_president'])) {
                 throw new Exception($scheduleGate['message']);
             }
 

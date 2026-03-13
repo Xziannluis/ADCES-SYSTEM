@@ -42,7 +42,7 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
               LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id
               WHERE t.status = 'active'
                 AND (t.department = :department OR ta.evaluator_id IS NOT NULL)
-                AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
+                AND (u.role IS NULL OR u.role NOT IN ('dean', 'principal', 'president', 'vice_president'))
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':department', $_SESSION['department']);

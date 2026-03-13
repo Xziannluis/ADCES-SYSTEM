@@ -138,8 +138,9 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                     }
                 }
                 
-                // If creating a teacher account, also create/update the teacher record
-                if ($role === 'teacher' && $createResult === true) {
+                // If creating a teacher or coordinator account, also create/update the teacher record
+                // so they appear in teacher lists and can be evaluated
+                if (in_array($role, ['teacher', 'chairperson', 'subject_coordinator', 'grade_level_coordinator']) && $createResult === true) {
                     $teacher_email = $_POST['email'] ?? '';
                     // Get the newly created user ID
                     $query = "SELECT id FROM users WHERE username = :username";

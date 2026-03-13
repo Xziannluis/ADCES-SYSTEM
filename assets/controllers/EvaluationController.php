@@ -152,7 +152,14 @@ class EvaluationController {
                 isset($scheduleVal) ? (string)$scheduleVal : null,
                 isset($roomVal) ? (string)$roomVal : null
             );
-            if (!$scheduleGate['allowed']) {
+
+            // Look up evaluator role for schedule exemption
+            $evaluatorRoleStmt = $this->db->prepare("SELECT role FROM users WHERE id = :id LIMIT 1");
+            $evaluatorRoleStmt->bindValue(':id', $evaluatorId);
+            $evaluatorRoleStmt->execute();
+            $evaluatorRole = $evaluatorRoleStmt->fetchColumn() ?: '';
+
+            if (!$scheduleGate['allowed'] && !in_array($evaluatorRole, ['president', 'vice_president'])) {
                 throw new Exception($scheduleGate['message']);
             }
 

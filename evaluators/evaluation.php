@@ -78,7 +78,7 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
               LEFT JOIN teacher_departments td ON td.teacher_id = t.id
               WHERE t.status = 'active'
                 AND (t.department = :department OR td.department = :department OR ta.evaluator_id IS NOT NULL)
-                AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
+                AND (u.role IS NULL OR u.role NOT IN ('dean', 'principal', 'president', 'vice_president'))
               ORDER BY t.name ASC";
     } else {
         $query = "SELECT DISTINCT t.*
@@ -87,7 +87,7 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
               LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id
               WHERE t.status = 'active'
                 AND (t.department = :department OR ta.evaluator_id IS NOT NULL)
-                AND (u.role IS NULL OR u.role NOT IN ('chairperson', 'principal'))
+                AND (u.role IS NULL OR u.role NOT IN ('dean', 'principal', 'president', 'vice_president'))
               ORDER BY t.name ASC";
     }
     $stmt = $db->prepare($query);
@@ -164,12 +164,13 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                             $scheduleRaw = $teacher_row['evaluation_schedule'] ?? '';
                             $scheduleRoom = $teacher_row['evaluation_room'] ?? '';
                             $has_schedule = !empty($scheduleRaw) || !empty($scheduleRoom);
-                            $can_evaluate_now = false;
+                            $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
+                            $can_evaluate_now = $is_leader; // Presidents/VPs can always evaluate
                             $schedule_message = 'No schedule set';
-                            $schedule_badge_class = 'bg-secondary';
-                            $schedule_badge_text = 'Schedule required';
+                            $schedule_badge_class = $is_leader ? 'bg-success' : 'bg-secondary';
+                            $schedule_badge_text = $is_leader ? 'Evaluate this teacher' : 'Schedule required';
                             $schedule_display = trim((string)$scheduleRaw);
-                            $schedule_block_message = 'No schedule is set. Please ask the dean/principal to set one first.';
+                            $schedule_block_message = $is_leader ? '' : 'No schedule is set. Please ask the dean/principal to set one first.';
 
                             if (!empty($scheduleRaw)) {
                                 try {
