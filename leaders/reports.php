@@ -1,6 +1,6 @@
 <?php
 require_once '../auth/session-check.php';
-if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator'])) {
+if(!in_array($_SESSION['role'], ['president', 'vice_president'])) {
     header("Location: ../login.php");
     exit();
 }
@@ -15,8 +15,6 @@ $db = $database->getConnection();
 $evaluation = new Evaluation($db);
 $teacher = new Teacher($db);
 
-// Map department codes/names to their full display names for printing.
-// Add/adjust entries as needed to match your database values.
 $department_map = [
     'CCIS' => 'College of Computing and Information Sciences',
     'COE'  => 'College of Education',
@@ -31,32 +29,40 @@ $department_map = [
     'SHS'  => 'Senior High School Department',
 ];
 
-$raw_department = (string)($_SESSION['department'] ?? '');
+// Presidents/VPs can filter by department
+$filter_department = trim((string)($_GET['department'] ?? ''));
+$raw_department = $filter_department !== '' ? $filter_department : (string)($_SESSION['department'] ?? '');
 $department_display = $department_map[$raw_department] ?? $raw_department;
 
-$scoped_evaluator_id = in_array($_SESSION['role'], ['dean', 'principal'], true)
-    ? null
-    : ($_SESSION['user_id'] ?? null);
+// Presidents/VPs see all evaluations (no evaluator scoping)
+$scoped_evaluator_id = null;
 
-// Build Academic Year list based on actual evaluations (so dropdown only shows years with data)
+// Get all departments that have evaluations for the filter dropdown
+$all_departments = [];
+try {
+    $deptQuery = "SELECT DISTINCT t.department FROM evaluations e INNER JOIN teachers t ON e.teacher_id = t.id WHERE t.department IS NOT NULL ORDER BY t.department";
+    $deptStmt = $db->prepare($deptQuery);
+    $deptStmt->execute();
+    $all_departments = $deptStmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $all_departments = [];
+}
+
+// Build Academic Year list
 $available_years = [];
 $available_teachers = [];
 try {
     $yearsQuery = "SELECT DISTINCT e.academic_year
         FROM evaluations e
         INNER JOIN teachers t ON e.teacher_id = t.id
-        WHERE t.department = :department
-          AND e.academic_year IS NOT NULL
-          AND e.academic_year <> ''";
-    if ($scoped_evaluator_id !== null) {
-        $yearsQuery .= " AND e.evaluator_id = :evaluator_id";
+        WHERE e.academic_year IS NOT NULL AND e.academic_year <> ''";
+    if ($filter_department !== '') {
+        $yearsQuery .= " AND t.department = :department";
     }
     $yearsQuery .= " ORDER BY e.academic_year DESC";
-
     $yearsStmt = $db->prepare($yearsQuery);
-    $yearsStmt->bindValue(':department', $raw_department);
-    if ($scoped_evaluator_id !== null) {
-        $yearsStmt->bindValue(':evaluator_id', $scoped_evaluator_id);
+    if ($filter_department !== '') {
+        $yearsStmt->bindValue(':department', $filter_department);
     }
     $yearsStmt->execute();
     $available_years = $yearsStmt->fetchAll(PDO::FETCH_COLUMN);
@@ -64,32 +70,26 @@ try {
     $teachersQuery = "SELECT DISTINCT t.id, t.name
         FROM evaluations e
         INNER JOIN teachers t ON e.teacher_id = t.id
-        WHERE t.department = :department";
-    if ($scoped_evaluator_id !== null) {
-        $teachersQuery .= " AND e.evaluator_id = :evaluator_id";
+        WHERE 1=1";
+    if ($filter_department !== '') {
+        $teachersQuery .= " AND t.department = :department";
     }
     $teachersQuery .= " ORDER BY t.name ASC";
-
     $teachersStmt = $db->prepare($teachersQuery);
-    $teachersStmt->bindValue(':department', $raw_department);
-    if ($scoped_evaluator_id !== null) {
-        $teachersStmt->bindValue(':evaluator_id', $scoped_evaluator_id);
+    if ($filter_department !== '') {
+        $teachersStmt->bindValue(':department', $filter_department);
     }
     $teachersStmt->execute();
     $available_teachers = $teachersStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 } catch (Exception $e) {
-    // Fail-safe: keep page working even if query fails
     $available_years = [];
     $available_teachers = [];
 }
 
-// Get filter parameters
-// IMPORTANT: filters should be applied only when explicitly selected.
 $academic_year = trim((string)($_GET['academic_year'] ?? ''));
 $semester = trim((string)($_GET['semester'] ?? ''));
 $teacher_id = trim((string)($_GET['teacher_id'] ?? ''));
 
-// Display labels used in the report header
 $academic_year_label = ($academic_year !== '') ? $academic_year : 'All';
 $semester_label = ($semester !== '') ? $semester : 'All';
 $teacher_label = 'All Teachers';
@@ -100,11 +100,21 @@ foreach ($available_teachers as $teacher_option) {
     }
 }
 
-// Get evaluations for reporting
-$evaluations = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id);
+$report_department = $filter_department;
+$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department);
+$evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
-// Calculate statistics
-$stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year, $semester);
+$deanPrintEvaluation = null;
+foreach ($evaluations as $evaluationRow) {
+    $role = strtolower(trim((string)($evaluationRow['evaluator_role'] ?? '')));
+    if ($role === 'dean') {
+        $deanPrintEvaluation = $evaluationRow;
+        break;
+    }
+}
+
+$stats_department = $filter_department !== '' ? $filter_department : ($_SESSION['department'] ?? '');
+$stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $semester);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -161,6 +171,13 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             padding: 10px 8px;
             border: 1px solid #ddd;
             vertical-align: top;
+        }
+        .report-table td ul {
+            margin: 0;
+            padding-left: 18px;
+        }
+        .report-table td li {
+            margin-bottom: 4px;
         }
         .report-table tr:nth-child(even) {
             background: #f8f9fa;
@@ -220,6 +237,10 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
         }
         
         @media print {
+            @page {
+                size: portrait;
+                margin: 10mm;
+            }
             .no-print {
                 display: none !important;
             }
@@ -229,9 +250,33 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             .print-hide {
                 display: none !important;
             }
+            body {
+                margin: 0 !important;
+                background: #fff !important;
+                color: #000 !important;
+            }
+            .sidebar,
+            .sidebar-backdrop,
+            .mobile-sidebar-toggle,
+            .mobile-sidebar-header,
+            .dashboard-topbar,
+            .dashboard-bg-layer,
+            .d-flex.justify-content-between.align-items-center.mb-4,
+            .content-header,
+            .page-header {
+                display: none !important;
+            }
+            .main-content,
+            .container-fluid {
+                margin: 0 !important;
+                width: 100% !important;
+                max-width: 100% !important;
+                padding: 0 !important;
+            }
             .classroom-report {
                 border: none;
                 box-shadow: none;
+                margin: 0 !important;
             }
             .report-header {
                 background: #2c3e50 !important;
@@ -246,15 +291,23 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             }
             .report-table {
                 min-width: auto;
+                table-layout: fixed;
+                width: 100%;
             }
+            .report-table col.col-date { width: 10%; }
+            .report-table col.col-teacher { width: 12%; }
+            .report-table col.col-subject { width: 14%; }
+            .report-table col.col-strength { width: 20%; }
+            .report-table col.col-improvement { width: 16%; }
+            .report-table col.col-recommendation { width: 14%; }
+            .report-table col.col-agreement { width: 7%; }
+            .report-table col.col-rating { width: 7%; }
 
             /* More "paper" look */
-            body {
-                background: #fff !important;
-                color: #000 !important;
-            }
             .report-info {
                 background: #fff !important;
+                padding: 8px 0 6px;
+                font-size: 11px;
             }
             .report-table th,
             .report-table td {
@@ -264,10 +317,75 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                 background: #fff !important;
                 color: #000 !important;
                 font-weight: 700;
-                font-size: 12px;
+                font-size: 9px;
+                line-height: 1.15;
+                padding: 4px 3px;
             }
             .report-table td {
-                font-size: 12px;
+                font-size: 8.1px;
+                line-height: 1.15;
+                word-break: break-word;
+                overflow-wrap: anywhere;
+                padding: 3px 3px;
+                hyphens: auto;
+            }
+            .report-table th:first-child,
+            .report-table td:first-child {
+                white-space: nowrap;
+                word-break: normal;
+                overflow-wrap: normal;
+            }
+            .observation-notes {
+                font-size: 8.1px;
+                line-height: 1.15;
+            }
+            .observation-notes ul {
+                margin: 0;
+                padding-left: 10px;
+            }
+            .observation-notes li {
+                margin-bottom: 1px;
+            }
+            .report-table td small {
+                font-size: 7.4px !important;
+                line-height: 1.05;
+            }
+            .classroom-report {
+                padding-bottom: 8px;
+            }
+            .print-signature-block {
+                display: flex !important;
+                justify-content: flex-start;
+                margin-top: 8px;
+                padding-top: 4px;
+            }
+            .print-signature-card {
+                width: 260px;
+                text-align: center;
+            }
+            .print-signature-image-wrap {
+                height: 46px;
+                display: flex;
+                align-items: flex-end;
+                justify-content: center;
+                margin-bottom: 2px;
+                overflow: hidden;
+            }
+            .print-signature-image {
+                max-width: 100%;
+                max-height: 42px;
+                object-fit: contain;
+            }
+            .print-signature-line {
+                border-top: 1px solid #000;
+                padding-top: 3px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            .print-signature-role {
+                font-size: 10px;
+                font-weight: 600;
+                margin-top: 1px;
             }
         }
         
@@ -322,26 +440,82 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                 justify-content: flex-start;
             }
         }
+
+        @media (max-width: 991.98px) {
+            .filters-card form .col-md-3,
+            .filters-card form .col-md-4,
+            .filters-card form .col-md-2 {
+                width: 50%;
+            }
+
+            .d-flex.justify-content-between.align-items-center.mb-4 {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 0.75rem;
+            }
+        }
+
+        @media (max-width: 767.98px) {
+            .report-header,
+            .report-info,
+            .filters-card {
+                padding: 1rem;
+            }
+
+            .filters-card form .col-md-3,
+            .filters-card form .col-md-4,
+            .filters-card form .col-md-2 {
+                width: 100%;
+            }
+
+            .report-table {
+                min-width: 960px;
+            }
+        }
     </style>
 </head>
 <body>
     <?php include '../includes/sidebar.php'; ?>
     
-    <div class="main-content">
-        <div class="container-fluid">
-            <div class="d-flex justify-content-between align-items-center mb-4">
-                <h3 class="print-hide">Evaluation Reports - <?php echo $_SESSION['department']; ?></h3>
-                <div class="no-print mt-3">
+    <div class="main-content" style="padding:0;">
+        <div class="dashboard-bg-layer"><div class="bg-img"></div></div>
+        <div class="dashboard-topbar">
+            <h2>Saint Michael College of Caraga</h2>
+            <div class="ms-auto d-flex align-items-center gap-3">
+                <div class="no-print">
                     <button class="btn btn-primary me-2" onclick="window.print()">
                         <i class="fas fa-print me-2"></i>Print Report
                     </button>
                 </div>
+                <div class="dropdown">
+                    <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $_SESSION['role'])); ?>)
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="evaluatorMenu">
+                        <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog me-2"></i>Settings</a></li>
+                        <li><a class="dropdown-item" href="change-password.php"><i class="fas fa-key me-2"></i>Change Password</a></li>
+                    </ul>
+                </div>
             </div>
+        </div>
+        <div class="dashboard-body-wrap">
+        <div class="container-fluid" style="padding:24px;">
 
             <!-- Filters -->
             <div class="filters-card no-print">
                 <form method="GET" class="row g-3">
-                    <div class="col-md-3">
+                    <div class="col-md-2">
+                        <label for="department" class="form-label">Department</label>
+                        <select class="form-select" id="department" name="department">
+                            <option value="">All Departments</option>
+                            <?php foreach($all_departments as $dept): ?>
+                                <option value="<?php echo htmlspecialchars($dept); ?>" <?php echo $filter_department === $dept ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($dept); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
                         <label for="academic_year" class="form-label">Academic Year</label>
                         <select class="form-select" id="academic_year" name="academic_year">
                             <option value="" <?php echo empty($academic_year) ? 'selected' : ''; ?>>All Years</option>
@@ -356,7 +530,7 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                             <?php endif; ?>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label for="semester" class="form-label">Semester</label>
                         <select class="form-select" id="semester" name="semester">
                             <option value="">All Semesters</option>
@@ -364,7 +538,7 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                             <option value="2nd" <?php echo $semester == '2nd' ? 'selected' : ''; ?>>2nd Semester</option>
                         </select>
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-3">
                         <label for="teacher_id" class="form-label">Teacher</label>
                         <select class="form-select" id="teacher_id" name="teacher_id">
                             <option value="">All Teachers</option>
@@ -445,11 +619,15 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if($evaluations->rowCount() > 0): ?>
-                                <?php while($eval = $evaluations->fetch(PDO::FETCH_ASSOC)): ?>
+                            <?php if(!empty($evaluations)): ?>
+                                <?php foreach($evaluations as $eval): ?>
                                 <?php
                                 // Get rating text and class
-                                // Use rounding to align with the 1‑5 scale legend.
+                                // Round the average to nearest whole number and map directly to the
+                                // simple 1‑5 rating scale used in the legend. This avoids the
+                                // confusion caused by arbitrary decimal cutoffs and ensures that
+                                // an average of 3.8 (which rounds to 4) is treated the same as a
+                                // raw 4.0.
                                 $rounded = (int) floor($eval['overall_avg']);
                                 switch ($rounded) {
                                     case 5:
@@ -513,7 +691,9 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                                     <td><?php echo htmlspecialchars($eval['teacher_name']); ?></td>
                                     <td>
                                         <?php echo htmlspecialchars($eval['subject_observed']); ?><br>
-                                        <small class="text-muted"><?php echo htmlspecialchars($eval['observation_type']); ?> Observation</small>
+                                        <?php if (!empty($eval['observation_type']) && strtolower($eval['observation_type']) !== 'formal'): ?>
+                                            <small class="text-muted"><?php echo htmlspecialchars($eval['observation_type']); ?> Observation</small>
+                                        <?php endif; ?>
                                     </td>
                                     <td>
                                         <div class="observation-notes">
@@ -586,7 +766,7 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                                         </div>
                                     </td>
                                 </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
                                     <td colspan="8" class="text-center py-4">
@@ -603,18 +783,33 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
                 
 
                 <!-- Print Signature (Prepared by) -->
-                <div class="print-only avoid-page-break" style="margin-top: 24px;">
-                    <div style="max-width: 260px;">
-                        <div style="font-size: 12px;">Prepared by:</div>
-                        <div style="height: 40px;"></div>
-                        <div style="border-top: 1px solid #000; font-size: 12px; text-align:center; padding-top: 4px;">
-                            <?php echo htmlspecialchars($_SESSION['name'] ?? ''); ?>
-                            <?php if (!empty($_SESSION['role'])): ?>
-                                <div style="font-size: 11px; font-weight: 600; margin-top: 2px;">(<?php echo htmlspecialchars($_SESSION['role']); ?>)</div>
-                            <?php endif; ?>
+                <?php
+                    $deanPrintedName = '';
+                    $deanSignature = '';
+                    if (is_array($deanPrintEvaluation)) {
+                        $deanPrintedName = trim((string)($deanPrintEvaluation['rater_printed_name'] ?? ''));
+                        if ($deanPrintedName === '') {
+                            $deanPrintedName = trim((string)($deanPrintEvaluation['evaluator_name'] ?? ''));
+                        }
+                        $deanSignature = trim((string)($deanPrintEvaluation['rater_signature'] ?? ''));
+                    }
+                ?>
+                <?php if ($deanPrintEvaluation !== null): ?>
+                    <div class="print-only avoid-page-break print-signature-block">
+                        <div class="print-signature-card">
+                            <div style="font-size: 12px; text-align: left; margin-bottom: 4px;">Prepared by:</div>
+                            <div class="print-signature-image-wrap">
+                                <?php if ($deanSignature !== '' && strpos($deanSignature, 'data:image/') === 0): ?>
+                                    <img src="<?php echo htmlspecialchars($deanSignature); ?>" alt="Dean observer signature" class="print-signature-image" />
+                                <?php endif; ?>
+                            </div>
+                            <div class="print-signature-line">
+                                <?php echo htmlspecialchars($deanPrintedName !== '' ? $deanPrintedName : ''); ?>
+                            </div>
+                            <div class="print-signature-role">Dean</div>
                         </div>
                     </div>
-                </div>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -679,5 +874,6 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
             window.print();
         }
     </script>
+    </div>
 </body>
 </html>

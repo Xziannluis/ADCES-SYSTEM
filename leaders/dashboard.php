@@ -13,38 +13,41 @@ require_once '../models/User.php';
 $database = new Database();
 $db = $database->getConnection();
 $teacher = new Teacher($db);
- $evaluation = new Evaluation($db);
- $user = new User($db);
+$evaluation = new Evaluation($db);
+$user = new User($db);
 
-// Use the leader's department from session to limit visible teachers
-$leader_department = isset($_SESSION['department']) ? $_SESSION['department'] : null;
-$role = isset($_SESSION['role']) ? $_SESSION['role'] : null;
+$role = $_SESSION['role'] ?? '';
 
-if ($role === 'president') {
-    // President can see all active teachers grouped by department
-    $allTeachersStmt = $teacher->getAllTeachers('active');
-    $teachers_by_department = [];
-    while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
-        $dept = $t['department'] ?? 'Unassigned';
-        if (!isset($teachers_by_department[$dept])) {
-            $teachers_by_department[$dept] = [];
-        }
-        $teachers_by_department[$dept][] = $t;
-    }
-} elseif ($leader_department) {
-    // Vice President or leader limited to own department
-    $teachers = $teacher->getActiveByDepartment($leader_department);
-} else {
-    $teachers = null;
-}
+// Get statistics
+$total_teachers = $teacher->getTotalTeachers();
+$total_evaluators = $user->getTotalEvaluators();
+$stats = $evaluation->getAdminStats($_SESSION['user_id']);
+$recent_evals = $evaluation->getRecentEvaluations($_SESSION['user_id'], 5);
+
+$deans = $user->getUsersByRole('dean')->rowCount();
+$principals = $user->getUsersByRole('principal')->rowCount();
+$vice_presidents = $user->getUsersByRole('vice_president')->rowCount();
+$chairpersons = $user->getUsersByRole('chairperson')->rowCount();
+$coordinators = $user->getUsersByRole('subject_coordinator')->rowCount();
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Leaders Dashboard - Manage Teachers</title>
+    <title>Dashboard - AI Classroom Evaluation</title>
     <?php include '../includes/header.php'; ?>
+    <style>
+        .stat-card { transition: transform 0.3s ease; }
+        .stat-card:hover { transform: translateY(-5px); }
+        .list-group-item { overflow-wrap: anywhere; }
+        .recent-evaluations-list .list-group-item { overflow-wrap: normal; word-break: normal; display: block; width: 100%; }
+        .recent-evaluation-row { display: flex; align-items: center; gap: 1rem; width: 100%; }
+        .recent-evaluation-main { min-width: 0; flex: 1 1 0; }
+        .recent-evaluation-main h6 { display: block; max-width: 100%; line-height: 1.35; }
+        .recent-evaluation-main small { display: block; margin-top: 0.25rem; }
+        .recent-evaluation-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; flex: 0 0 auto; white-space: nowrap; }
+    </style>
 </head>
 <body>
     <?php include '../includes/sidebar.php'; ?>
@@ -71,6 +74,7 @@ if ($role === 'president') {
 
             <?php if(isset($_SESSION['success'])): ?>
             <div class="alert alert-success alert-dismissible fade show">
+                <i class="fas fa-check-circle me-2"></i>
                 <?php echo $_SESSION['success']; unset($_SESSION['success']); ?>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
@@ -83,59 +87,36 @@ if ($role === 'president') {
             </div>
             <?php endif; ?>
 
-            <?php
-            // Get statistics similar to EDP dashboard
-            $total_teachers = $teacher->getTotalTeachers();
-            $total_evaluators = $user->getTotalEvaluators();
-
-            $presidents = $user->getUsersByRole('president')->rowCount();
-            $vice_presidents = $user->getUsersByRole('vice_president')->rowCount();
-            $deans = $user->getUsersByRole('dean')->rowCount();
-            $principals = $user->getUsersByRole('principal')->rowCount();
-            $chairpersons = $user->getUsersByRole('chairperson')->rowCount();
-            $coordinators = $user->getUsersByRole('subject_coordinator')->rowCount();
-            ?>
-
             <!-- Statistics Cards -->
-            <div class="row">
-                <div class="col-md-6">
-                    <div class="dashboard-stat stat-1">
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="dashboard-stat stat-1 stat-card">
                         <i class="fas fa-chalkboard-teacher"></i>
                         <div class="number"><?php echo $total_teachers; ?></div>
                         <div>Total Teachers</div>
                     </div>
                 </div>
-                <div class="col-md-6">
-                    <div class="dashboard-stat stat-2">
+                <div class="col-md-4">
+                    <div class="dashboard-stat stat-2 stat-card">
                         <i class="fas fa-user-tie"></i>
                         <div class="number"><?php echo $total_evaluators; ?></div>
                         <div>Total Evaluators</div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Quick Actions and Evaluators Summary -->
-            <div class="row mt-4">
-                <div class="col-md-6">
-                    <div class="card">
-                        <div class="card-header">
-                            <h5 class="mb-0">Quick Actions</h5>
-                        </div> 
-                        <div class="card-body">
-                            <div class="d-grid gap-2">
-                                <a href="teachers.php" class="btn btn-primary">
-                                    <i class="fas fa-users me-2"></i>View Teachers
-                                </a>
-                                <a href="../evaluators/evaluation.php" class="btn btn-outline-primary">
-                                    <i class="fas fa-clipboard-check me-2"></i>New Evaluation
-                                </a>
-                            </div>
-                        </div>
+                <div class="col-md-4">
+                    <div class="dashboard-stat stat-3 stat-card">
+                        <i class="fas fa-clipboard-check"></i>
+                        <div class="number"><?php echo $stats['completed_evaluations']; ?></div>
+                        <div>My Evaluations</div>
                     </div>
                 </div>
+            </div>
 
+            <!-- Main content row -->
+            <div class="row mb-4">
+                <!-- Evaluators Summary -->
                 <div class="col-md-6">
-                    <div class="card">
+                    <div class="card mb-3">
                         <div class="card-header">
                             <h5 class="mb-0">Evaluators Summary</h5>
                         </div>
@@ -165,11 +146,85 @@ if ($role === 'president') {
                         </div>
                     </div>
                 </div>
+
+                <!-- Recent Evaluations -->
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Recent Evaluations</h5>
+                        </div>
+                        <div class="card-body">
+                            <?php if($recent_evals->rowCount() > 0): ?>
+                                <div class="list-group recent-evaluations-list">
+                                    <?php while($eval = $recent_evals->fetch(PDO::FETCH_ASSOC)):
+                                        $teacher_data = $teacher->getById($eval['teacher_id']);
+                                        $rating = $eval['overall_rating'] ?? 0;
+                                    ?>
+                                    <div class="list-group-item">
+                                        <div class="recent-evaluation-row">
+                                            <div class="recent-evaluation-main">
+                                                <h6 class="mb-0 text-truncate"><?php echo htmlspecialchars($teacher_data['name']); ?></h6>
+                                                <small class="text-muted"><?php echo date('M j, Y', strtotime($eval['observation_date'])); ?></small>
+                                            </div>
+                                            <div class="recent-evaluation-actions">
+                                                <span class="badge bg-<?php 
+                                                    $r = (int) floor($rating);
+                                                    if($r === 5) echo 'success';
+                                                    elseif($r === 4) echo 'primary';
+                                                    elseif($r === 3) echo 'info';
+                                                    elseif($r === 2) echo 'warning';
+                                                    else echo 'danger';
+                                                ?>"><?php echo number_format($rating, 1); ?></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <?php endwhile; ?>
+                                </div>
+                            <?php else: ?>
+                                <div class="text-center py-4">
+                                    <i class="fas fa-clipboard-list fa-3x text-muted mb-3"></i>
+                                    <h5>No Evaluations Yet</h5>
+                                    <p class="text-muted">Start by conducting your first classroom evaluation.</p>
+                                    <a href="evaluation.php" class="btn btn-primary">
+                                        <i class="fas fa-plus me-2"></i>Start Evaluation
+                                    </a>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="row">
+                <div class="col-md-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">Quick Actions</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex gap-2 flex-wrap">
+                                <a href="teachers.php" class="btn btn-primary">
+                                    <i class="fas fa-users me-2"></i>View Teachers
+                                </a>
+                                <a href="evaluation.php" class="btn btn-outline-primary">
+                                    <i class="fas fa-clipboard-check me-2"></i>New Evaluation
+                                </a>
+                                <a href="reports.php" class="btn btn-outline-primary">
+                                    <i class="fas fa-chart-bar me-2"></i>Reports
+                                </a>
+                                <a href="observation_plan.php" class="btn btn-outline-primary">
+                                    <i class="fas fa-clipboard-list me-2"></i>Observation Plan
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
+        </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <?php include '../includes/footer.php'; ?>
 </body>
 </html>

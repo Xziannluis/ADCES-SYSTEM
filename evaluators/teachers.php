@@ -17,7 +17,7 @@ $teacher = new Teacher($db);
 
 // Clear schedules that are in the past so they don't linger on teacher dashboards
 try {
-    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 1 DAY");
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW()");
 } catch (Exception $e) {
     error_log('Error clearing expired schedules: ' . $e->getMessage());
 }
@@ -295,7 +295,7 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'remove_assignment
 // Get teachers for current department (or only assigned teachers for coordinators)
 if (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
     $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
-    $assigned_query = "SELECT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id";
+    $assigned_query = "SELECT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id AND t.status = 'active'";
     if (!empty($programs)) {
         $programPlaceholders = [];
         foreach ($programs as $idx => $dept) {
@@ -314,8 +314,8 @@ if (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_le
     $stmt->execute();
     $teachers = $stmt; // keep interface similar (PDOStatement)
 } else {
-    // Deans/principals and others see full department list
-    $teachers = $teacher->getByDepartment($_SESSION['department']);
+    // Deans/principals and others see active teachers in department
+    $teachers = $teacher->getActiveByDepartment($_SESSION['department']);
 }
 
 // Get assigned teachers for current evaluator
@@ -691,14 +691,12 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                 <?php endif; ?>
 
                                 <div class="teacher-actions">
-                                    <button class="btn btn-sm btn-outline-info" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; line-height: 1.2;" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="editSchedule(<?php echo $teacher_row['id']; ?>, '<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? ''); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? ''); ?>')">
+                                    <button class="btn btn-sm btn-outline-dark" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; line-height: 1.2;" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="editSchedule(<?php echo $teacher_row['id']; ?>, '<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? ''); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? ''); ?>')">
                                         <i class="fas fa-calendar"></i> Schedule
                                     </button>
 
-                                    <!-- manual Done/Cancel removed: schedules clear automatically or expire -->
-
-                                    <a href="?action=toggle_status&teacher_id=<?php echo $teacher_row['id']; ?>" class="btn btn-sm btn-outline-<?php echo $teacher_row['status'] == 'active' ? 'warning' : 'success'; ?>" onclick="return confirm('Are you sure?');">
-                                        <i class="fas fa-<?php echo $teacher_row['status'] == 'active' ? 'ban' : 'check'; ?>"></i> <?php echo $teacher_row['status'] == 'active' ? 'Deactivate' : 'Activate'; ?>
+                                    <a href="?action=toggle_status&teacher_id=<?php echo $teacher_row['id']; ?>" class="btn btn-sm btn-outline-dark" onclick="return confirm('Are you sure you want to deactivate this teacher?');">
+                                        <i class="fas fa-ban"></i> Deactivate
                                     </a>
                                 </div>
                             </div>

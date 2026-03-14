@@ -17,7 +17,7 @@ $db = $database->getConnection();
 
 // automatically cancel any schedules that have already passed
 try {
-    $db->exec("UPDATE teachers SET evaluation_schedule=NULL, evaluation_room=NULL WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 1 DAY");
+    $db->exec("UPDATE teachers SET evaluation_schedule=NULL, evaluation_room=NULL WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW()");
 } catch (Exception $e) {
     error_log('Error clearing expired schedules on evaluation page: ' . $e->getMessage());
 }

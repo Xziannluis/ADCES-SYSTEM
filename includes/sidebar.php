@@ -29,16 +29,22 @@
         <?php elseif(in_array($_SESSION['role'], ['president', 'vice_president'])): ?>
             <li><a href="../leaders/evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluation</a></li>
             <li><a href="../leaders/teachers.php" class="nav-link"><i class="fas fa-chalkboard-teacher"></i> Teachers</a></li>
+            <li><a href="../leaders/observation_plan.php" class="nav-link"><i class="fas fa-clipboard-list"></i> Observation Plan</a></li>
+            <li><a href="../leaders/reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></li>
         <?php else: ?>
             <li><a href="evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluation</a></li>
             <li><a href="teachers.php" class="nav-link"><i class="fas fa-chalkboard-teacher"></i> Teachers</a></li>
             <?php if(in_array($_SESSION['role'], ['dean', 'principal'])): ?>
                 <li><a href="assign_coordinators.php" class="nav-link"><i class="fas fa-users-cog"></i> Coordinators</a></li>
+                <li><a href="observation_plan.php" class="nav-link"><i class="fas fa-clipboard-list"></i> Observation Plan</a></li>
+            <?php endif; ?>
+            <?php if(in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'])): ?>
+                <li><a href="deactivated_teachers.php" class="nav-link"><i class="fas fa-user-slash"></i> Deactivated Teachers</a></li>
             <?php endif; ?>
             <li><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></li>
         <?php endif; ?>
 
-        <?php if (in_array($_SESSION['role'] ?? '', ['edp', 'dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'], true)): ?>
+        <?php if (in_array($_SESSION['role'] ?? '', ['edp', 'dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true)): ?>
             <li class="mt-3"><a href="../auth/logout.php" class="nav-link"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
         <?php endif; ?>
     </ul>

@@ -16,7 +16,7 @@ $db = $database->getConnection();
 
 // remove any past schedules so teacher doesn't see outdated entries
 try {
-    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 1 DAY");
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW()");
 } catch (Exception $e) {
     error_log('Failed to clear expired schedule in teacher dashboard: ' . $e->getMessage());
 }

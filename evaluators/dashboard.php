@@ -148,15 +148,14 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
         }
 
         .recent-evaluation-row {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
         }
 
-        .recent-evaluation-main,
-        .coordinator-main {
+        .recent-evaluation-main {
             min-width: 0;
-            flex: 1 1 auto;
-            width: 100%;
+            flex: 1 1 0;
         }
 
         .recent-evaluation-main h6,
@@ -172,6 +171,12 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
             display: block;
             max-width: 100%;
             line-height: 1.35;
+        }
+
+        .coordinator-main {
+            min-width: 0;
+            flex: 1 1 auto;
+            width: 100%;
         }
 
         .recent-evaluation-main small {
@@ -360,7 +365,7 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                                         <div class="list-group-item">
                                             <div class="recent-evaluation-row">
                                                 <div class="recent-evaluation-main">
-                                                    <h6 class="mb-1"><?php echo htmlspecialchars($teacher_data['name']); ?></h6>
+                                                    <h6 class="mb-0 text-truncate"><?php echo htmlspecialchars($teacher_data['name']); ?></h6>
                                                     <small class="text-muted"><?php echo date('M j, Y', strtotime($eval['observation_date'])); ?></small>
                                                 </div>
                                                 <div class="recent-evaluation-actions">

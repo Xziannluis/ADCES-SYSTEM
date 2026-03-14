@@ -25,6 +25,10 @@ $department_map = [
     'CAS'  => 'College of Arts and Sciences',
     'CHM'  => 'College of Hospitality Management',
     'CTE'  => 'College of Teacher Education',
+    'BASIC ED' => 'Basic Education Department',
+    'ELEM' => 'Elementary Department',
+    'JHS'  => 'Junior High School Department',
+    'SHS'  => 'Senior High School Department',
 ];
 
 $raw_department = (string)($_SESSION['department'] ?? '');

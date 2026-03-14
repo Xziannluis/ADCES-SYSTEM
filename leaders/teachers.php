@@ -15,7 +15,7 @@ $teacher = new Teacher($db);
 $role = isset($_SESSION['role']) ? $_SESSION['role'] : null;
 $leader_department = isset($_SESSION['department']) ? $_SESSION['department'] : null;
 
-if ($role === 'president') {
+if (in_array($role, ['president', 'vice_president'])) {
     $allTeachersStmt = $teacher->getAllTeachers('active');
     $teachers_by_department = [];
     while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
@@ -25,8 +25,6 @@ if ($role === 'president') {
         }
         $teachers_by_department[$dept][] = $t;
     }
-} elseif ($leader_department) {
-    $teachers = $teacher->getActiveByDepartment($leader_department);
 } else {
     $teachers = null;
 }
@@ -89,7 +87,7 @@ if ($role === 'president') {
                 </div>
                 <div class="card-body">
                     <div class="table-responsive table-min-720">
-                        <?php if ($role === 'president'): ?>
+                        <?php if (!empty($teachers_by_department)): ?>
                             <?php foreach ($teachers_by_department as $dept => $deptTeachers): ?>
                                 <div class="mb-4">
                                     <h6 class="fw-bold text-uppercase"><?php echo htmlspecialchars($dept); ?></h6>
@@ -97,7 +95,7 @@ if ($role === 'president') {
                                         <thead class="table-dark">
                                             <tr>
                                                 <th style="width: 10%;">No.</th>
-                                                <th style="width: 5%;">Name</th>
+                                                <th style="width: 50%;">Name</th>
                                                 <th style="width: 25%;">Department</th>
                                                 <th style="width: 15%;">Actions</th>
                                             </tr>
@@ -119,35 +117,7 @@ if ($role === 'president') {
                                 </div>
                             <?php endforeach; ?>
                         <?php else: ?>
-                            <table class="table table-hover align-middle text-center">
-                                <thead class="table-dark">
-                                    <tr>
-                                        <th style="width: 10%;">#</th>
-                                        <th style="width: 50%;">Name</th>
-                                        <th style="width: 25%;">Department</th>
-                                        <th style="width: 15%;">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php if ($teachers && $teachers->rowCount() > 0): ?>
-                                        <?php $counter = 1; while($row = $teachers->fetch(PDO::FETCH_ASSOC)): ?>
-                                        <tr>
-                                            <td><?php echo $counter++; ?></td>
-                                            <td class="text-start ps-3"><?php echo htmlspecialchars($row['name']); ?></td>
-                                            <td><?php echo htmlspecialchars($row['department']); ?></td>
-                                            <td>
-                                                <a href="evaluation.php?teacher_id=<?php echo $row['id']; ?>" 
-                                                   class="btn btn-sm btn-primary px-3">Evaluate</a>
-                                            </td>
-                                        </tr>
-                                        <?php endwhile; ?>
-                                    <?php else: ?>
-                                        <tr>
-                                            <td colspan="4" class="text-center">No teachers found for your department.</td>
-                                        </tr>
-                                    <?php endif; ?>
-                                </tbody>
-                            </table>
+                            <p class="text-center text-muted">No teachers found.</p>
                         <?php endif; ?>
                     </div>
                 </div>
