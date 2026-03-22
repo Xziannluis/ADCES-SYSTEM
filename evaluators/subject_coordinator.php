@@ -208,7 +208,7 @@ try {
                                                 </div>
                                                 <div class="d-flex align-items-center gap-2">
                                                     <span class="badge bg-<?php 
-                                                        $rating = $eval['overall_avg'];
+                                                        $rating = (float)($eval['overall_avg'] ?? 0);
                                                         $r = (int) floor($rating);
                                                         if($r === 5) echo 'success';
                                                         elseif($r === 4) echo 'primary';

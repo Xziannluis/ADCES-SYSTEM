@@ -9,7 +9,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
     $db = (new Database())->getConnection();
     $evalController = new EvaluationController($db);
 
-    session_start();
+    if (session_status() === PHP_SESSION_NONE) session_start();
     $evaluatorId = $_SESSION['user_id'] ?? null;
 
     $postData = $_POST;
@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && $_GET['ac
     $db = (new Database())->getConnection();
     $evalController = new EvaluationController($db);
 
-    session_start();
+    if (session_status() === PHP_SESSION_NONE) session_start();
     $evaluatorId = $_SESSION['user_id'] ?? null;
 
     $postData = $_POST;

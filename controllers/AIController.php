@@ -191,11 +191,15 @@ class AIController {
         if (empty($criteria)) return 0;
         
         $total = 0;
+        $count = 0;
         foreach ($criteria as $criterion) {
-            $total += $criterion['rating'];
+            if (isset($criterion['rating'])) {
+                $total += (float)$criterion['rating'];
+                $count++;
+            }
         }
         
-        return $total / count($criteria);
+        return $count > 0 ? $total / $count : 0;
     }
     
     private function saveRecommendations($evaluationId, $recommendations) {

@@ -409,6 +409,7 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                                     <div class="list-group recent-evaluations-list">
                                         <?php while($eval = $recent_evals->fetch(PDO::FETCH_ASSOC)): 
                                             $teacher_data = $teacher->getById($eval['teacher_id']);
+                                            $rating = (float)($eval['overall_avg'] ?? 0);
                                         ?>
                                         <div class="list-group-item">
                                             <div class="recent-evaluation-row">

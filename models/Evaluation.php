@@ -345,34 +345,39 @@ class Evaluation {
     // Calculate averages for an evaluation
     public function calculateAverages($evaluation_id) {
         // Calculate communications average
-        $comm_query = "SELECT AVG(rating) as avg_rating 
+        $comm_query = "SELECT AVG(rating) as avg_rating, COUNT(*) as cnt
                       FROM evaluation_details 
                       WHERE evaluation_id = :evaluation_id AND category = 'communications'";
         $comm_stmt = $this->conn->prepare($comm_query);
         $comm_stmt->bindParam(':evaluation_id', $evaluation_id);
         $comm_stmt->execute();
-        $comm_avg = $comm_stmt->fetch(PDO::FETCH_ASSOC)['avg_rating'] ?? 0;
+        $comm_row = $comm_stmt->fetch(PDO::FETCH_ASSOC);
+        $comm_avg = ($comm_row['cnt'] > 0) ? ($comm_row['avg_rating'] ?? 0) : null;
 
         // Calculate management average
-        $mgmt_query = "SELECT AVG(rating) as avg_rating 
+        $mgmt_query = "SELECT AVG(rating) as avg_rating, COUNT(*) as cnt
                       FROM evaluation_details 
                       WHERE evaluation_id = :evaluation_id AND category = 'management'";
         $mgmt_stmt = $this->conn->prepare($mgmt_query);
         $mgmt_stmt->bindParam(':evaluation_id', $evaluation_id);
         $mgmt_stmt->execute();
-        $mgmt_avg = $mgmt_stmt->fetch(PDO::FETCH_ASSOC)['avg_rating'] ?? 0;
+        $mgmt_row = $mgmt_stmt->fetch(PDO::FETCH_ASSOC);
+        $mgmt_avg = ($mgmt_row['cnt'] > 0) ? ($mgmt_row['avg_rating'] ?? 0) : null;
 
         // Calculate assessment average
-        $assess_query = "SELECT AVG(rating) as avg_rating 
+        $assess_query = "SELECT AVG(rating) as avg_rating, COUNT(*) as cnt
                         FROM evaluation_details 
                         WHERE evaluation_id = :evaluation_id AND category = 'assessment'";
         $assess_stmt = $this->conn->prepare($assess_query);
         $assess_stmt->bindParam(':evaluation_id', $evaluation_id);
         $assess_stmt->execute();
-        $assess_avg = $assess_stmt->fetch(PDO::FETCH_ASSOC)['avg_rating'] ?? 0;
+        $assess_row = $assess_stmt->fetch(PDO::FETCH_ASSOC);
+        $assess_avg = ($assess_row['cnt'] > 0) ? ($assess_row['avg_rating'] ?? 0) : null;
 
-        // Calculate overall average
-        $overall_avg = ($comm_avg + $mgmt_avg + $assess_avg) / 3;
+        // Calculate overall average — only from categories that have ratings
+        // (focused evaluations may only cover 1 or 2 categories)
+        $active_avgs = array_filter([$comm_avg, $mgmt_avg, $assess_avg], function($v) { return $v !== null; });
+        $overall_avg = count($active_avgs) > 0 ? array_sum($active_avgs) / count($active_avgs) : 0;
 
         // Update evaluation with calculated averages
         $update_query = "UPDATE " . $this->table_name . " 

@@ -31,10 +31,10 @@ if (!empty($_POST)) {
     ];
 
     $context = stream_context_create($options);
-    $result = file_get_contents($verifyUrl, false, $context);
-    $captchaSuccess = json_decode($result, true);
+    $result = @file_get_contents($verifyUrl, false, $context);
+    $captchaSuccess = $result ? json_decode($result, true) : null;
 
-    if (empty($captchaSuccess['success'])) {
+    if (!is_array($captchaSuccess) || empty($captchaSuccess['success'])) {
         $_SESSION['error'] = 'CAPTCHA verification failed. Try again.';
         header('Location: ../login.php');
         exit();
