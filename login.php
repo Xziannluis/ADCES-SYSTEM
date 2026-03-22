@@ -1,0 +1,331 @@
+<?php
+session_start();
+require_once 'config/constants.php';
+
+// Redirect if already logged in
+if(isset($_SESSION['user_id'])) {
+    if($_SESSION['role'] == 'superadmin') {
+        header("Location: superadmin/dashboard.php");
+    } else {
+        header("Location: evaluators/dashboard.php");
+    }
+    exit();
+}
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - AI Classroom Evaluation System</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --secondary: #3498db;
+            --success: #27ae60;
+            --warning: #f39c12;
+            --danger: #e74c3c;
+        }
+        
+        .login-body {
+            background: url('smccnasipit_cover.jpg') no-repeat center center fixed;
+            background-size: cover;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: Arial, Helvetica, sans-serif;
+            position: relative;
+        }
+        
+        /* Add blur effect to the background */
+        .login-body::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('smccnasipit_cover.jpg') no-repeat center center fixed;
+            background-size: cover;
+            filter: blur(8px); /* Adjust blur intensity here */
+            z-index: 0;
+        }
+        
+        /* Add overlay for better readability */
+        .login-body::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4); /* Dark overlay for contrast */
+            z-index: 1;
+        }
+        
+        .login-container {
+            width: 100%;
+            max-width: 490px;
+            padding: 20px;
+            position: relative;
+            z-index: 2; /* Higher z-index to appear above blur and overlay */
+        }
+        
+        .login-card {
+            background: white;
+            padding: 40px 30px;
+            border-radius: 10px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.3);
+            border: none;
+            backdrop-filter: blur(2px); /* Additional subtle blur on card */
+        }
+        
+        .login-header {
+            text-align: center;
+            margin-bottom: 8px;
+        }
+        
+        .login-header h2 {
+            color: #ffffff;
+            font-weight: 800;
+            margin-bottom: 5px;
+            font-size: 1.8rem;
+            text-transform: uppercase;
+            text-shadow: -1px -1px 0 #003366, 1px -1px 0 #003366, -1px 1px 0 #003366, 1px 1px 0 #003366, 2px 2px 5px rgba(0,0,0,0.6);
+        }
+        
+        .login-header p {
+            color: #ffffff;
+            font-size: 1.2rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-shadow: -1px -1px 0 #003366, 1px -1px 0 #003366, -1px 1px 0 #003366, 1px 1px 0 #003366, 2px 2px 4px rgba(0,0,0,0.6);
+            margin-bottom: 0;
+        }
+        
+        .form-label {
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 8px;
+        }
+        
+        .form-control {
+            padding: 12px 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        
+        .form-control:focus {
+            border-color: var(--secondary);
+            box-shadow: 0 0 0 0.2rem rgba(52, 152, 219, 0.25);
+        }
+        
+        .btn-login {
+            background: #073b5eff;
+            border: none;
+            padding: 12px;
+            font-weight: 600;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px #0a436aff;
+        }
+        
+        .alert {
+            border-radius: 8px;
+            border: none;
+            padding: 12px 15px;
+        }
+        
+        .logo-container {
+            text-align: center;
+            margin-bottom: 8px;
+        }
+        
+        .logo-image {
+            max-width: 130px;
+            height: auto;
+            filter: drop-shadow(0 5px 10px rgba(0,0,0,0.2));
+        }
+
+        .forgot-link {
+            color: #3498db;
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        
+        .forgot-link:hover {
+            color: #2980b9;
+            box-shadow: 0 4px 10px rgba(52, 152, 219, 0.4);
+            transform: translateY(-2px);
+        }
+
+        /* Center the reCAPTCHA widget */
+        .recaptcha-container {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 1.5rem;
+        }
+        .recaptcha-privacy {
+            font-size: 0.75rem;
+            color: #6c757d;
+            text-align: center;
+            margin-top: 0.5rem;
+        }
+        .recaptcha-privacy a {
+            color: #6c757d;
+            text-decoration: none;
+        }
+        .recaptcha-privacy a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 500px) {
+            .login-container {
+                width: 90% !important;
+                max-width: 380px !important;
+                padding: 8px !important;
+            }
+            .login-card {
+                padding: 22px 20px !important;
+            }
+            .logo-image {
+                max-width: 80px !important;
+            }
+            .login-header h2 {
+                font-size: 1.3rem !important;
+            }
+            .login-header p {
+                font-size: 0.85rem !important;
+            }
+            .login-header {
+                margin-bottom: 12px !important;
+            }
+            .logo-container {
+                margin-bottom: 8px !important;
+            }
+            .form-control, .form-select {
+                padding: 8px 12px !important;
+                font-size: 0.9rem !important;
+            }
+            .btn-login {
+                padding: 10px !important;
+            }
+            .recaptcha-container {
+                transform: none !important;
+                margin-bottom: 1rem !important;
+            }
+        }
+    </style>
+    <!-- Include reCAPTCHA script -->
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+</head>
+<body class="login-body">
+    <div class="login-container">
+        <!-- SMCC Logo -->
+        <div class="logo-container">
+            <img src="assets/img/SMCC_LOGO.webp" alt="SMCC Logo" class="logo-image">
+        </div>
+        
+        <div class="login-header">
+            <h2><i class="fas fa-robot me-2"></i>ADCES</h2>
+            <p>SMCC Evaluation System</p>
+        </div>
+        
+        <div class="login-card">
+            
+            <?php if(isset($_SESSION['error'])): ?>
+            <div class="alert alert-danger alert-dismissible fade show">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <?php echo htmlspecialchars($_SESSION['error']); unset($_SESSION['error']); ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            <?php endif; ?>
+            
+            <?php if(isset($_SESSION['success'])): ?>
+            <div class="alert alert-success alert-dismissible fade show">
+                <i class="fas fa-check-circle me-2"></i>
+                <?php echo htmlspecialchars($_SESSION['success']); unset($_SESSION['success']); ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            <?php endif; ?>
+            
+            <form action="auth/login-process.php" method="POST">
+                <div class="mb-3">
+                    <label for="username" class="form-label">
+                        <i class="fas fa-user me-2"></i>Username
+                    </label>
+                    <input type="text" class="form-control" id="username" name="username" required 
+                           placeholder="Enter your username">
+                </div>
+                
+                <div class="mb-3">
+                    <label for="password" class="form-label">
+                        <i class="fas fa-lock me-2"></i>Password
+                    </label>
+                    <input type="password" class="form-control" id="password" name="password" required 
+                           placeholder="Enter your password">
+                </div>
+                
+                <div class="mb-4">
+                    <label for="role" class="form-label">
+                        <i class="fas fa-user-tag me-2"></i>Role
+                    </label>
+                    <select class="form-select" id="role" name="role" required>
+                        <option value="">Select Your Role</option>
+                        <option value="edp">EDP</option>
+                        <option value="president">President</option>
+                        <option value="vice_president">Vice President</option>
+                        <option value="dean">Dean</option>
+                        <option value="principal">Principal</option>
+                        <option value="chairperson">Chairperson</option>
+                        <option value="subject_coordinator">Subject Coordinator</option>
+                        <option value="grade_level_coordinator">Grade Level Coordinator </option>
+                        <option value="teacher">Teacher</option>
+                    </select>
+                </div>
+                
+                <div class="recaptcha-container">
+                    <!-- Google reCAPTCHA v2 Widget -->
+                    <div class="g-recaptcha" data-sitekey="<?php echo RECAPTCHA_SITE_KEY; ?>"></div>
+                </div>
+                
+                <div class="text-center mb-3">
+                    <a href="forgot-password.php" class="forgot-link">Forgot password?</a>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-login w-100 mb-4">
+                    <i class="fas fa-sign-in-alt me-2"></i>Login
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Simple form validation
+        document.querySelector('form').addEventListener('submit', function(e) {
+            const role = document.getElementById('role').value;
+            if (!role) {
+                e.preventDefault();
+                alert('Please select your role');
+                return false;
+            }
+        });
+    </script>
+</body>
+</html>
