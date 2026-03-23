@@ -1284,8 +1284,12 @@ function getAssignedCoordinators($db, $supervisor_id) {
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="../assets/js/main.js"></script>
     <script>
-        // Grade levels
-        const gradeLevels = ['7', '8', '9', '10', '11', '12'];
+        // Grade levels per department
+        const gradeLevelsByDept = {
+            'ELEM': ['Nursery', 'Kinder', '1', '2', '3', '4', '5', '6'],
+            'JHS': ['7', '8', '9', '10'],
+            'SHS': ['11', '12']
+        };
 
         document.addEventListener('DOMContentLoaded', function() {
             const departmentFilter = document.querySelector('.filter-toolbar select[name="department"]');
@@ -1436,8 +1440,8 @@ function getAssignedCoordinators($db, $supervisor_id) {
                 if (subjectsContainer) subjectsContainer.style.display = 'none';
                 gradeLevelsContainer.style.display = 'none';
                 
-                // Show supervisor selection for coordinators
-                if (role === 'subject_coordinator' || role === 'chairperson' || role === 'grade_level_coordinator') {
+                // Show supervisor selection for coordinators (not for grade level coordinators)
+                if (role === 'subject_coordinator' || role === 'chairperson') {
                     supervisorContainer.style.display = 'block';
                 }
                 
@@ -1454,14 +1458,17 @@ function getAssignedCoordinators($db, $supervisor_id) {
 
             function populateGradeLevels() {
                 gradeLevelsList.innerHTML = '';
+                const department = departmentSelect.value;
+                const grades = gradeLevelsByDept[department] || [];
                 
-                gradeLevels.forEach(grade => {
+                grades.forEach(grade => {
                     const gradeDiv = document.createElement('div');
                     gradeDiv.className = 'form-check grade-item';
+                    const label = isNaN(grade) ? grade : `Grade ${grade}`;
                     gradeDiv.innerHTML = `
                         <input class="form-check-input grade-checkbox" type="checkbox" name="grade_levels[]" value="${grade}" id="grade_${grade}">
                         <label class="form-check-label" for="grade_${grade}">
-                            Grade ${grade}
+                            ${label}
                         </label>
                     `;
                     gradeLevelsList.appendChild(gradeDiv);

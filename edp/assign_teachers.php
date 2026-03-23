@@ -223,7 +223,8 @@ $assigned_teachers = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
                         // Group assignments by subject/grade level
                         $grouped_assignments = [];
                         foreach ($assigned_teachers as $assignment) {
-                            $key = $assignment['subject'] ?: 'Grade ' . $assignment['grade_level'];
+                            $gl = $assignment['grade_level'];
+                            $key = $assignment['subject'] ?: (is_numeric($gl) ? 'Grade ' . $gl : $gl);
                             $grouped_assignments[$key][] = $assignment;
                         }
                         ?>

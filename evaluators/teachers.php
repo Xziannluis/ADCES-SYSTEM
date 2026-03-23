@@ -749,7 +749,8 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                             foreach($assigned_teachers as $assigned) {
                                 if ($assigned['teacher_id'] == $teacher_row['id']) {
                                     $is_assigned = true;
-                                    $assignment_info = $assigned['subject'] ?: 'Grade ' . $assigned['grade_level'];
+                                    $gl = $assigned['grade_level'];
+                                    $assignment_info = $assigned['subject'] ?: (is_numeric($gl) ? 'Grade ' . $gl : $gl);
                                     break;
                                 }
                             }

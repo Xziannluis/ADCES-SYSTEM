@@ -288,8 +288,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <script>
 
-        // Grade levels
-        const gradeLevels = ['7', '8', '9', '10', '11', '12'];
+        // Grade levels per department
+        const gradeLevelsByDept = {
+            'ELEM': ['Nursery', 'Kinder', '1', '2', '3', '4', '5', '6'],
+            'JHS': ['7', '8', '9', '10'],
+            'SHS': ['11', '12']
+        };
 
         document.addEventListener('DOMContentLoaded', function() {
             const roleSelect = document.getElementById('roleSelect');
@@ -343,15 +347,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             function populateGradeLevels() {
                 gradeLevelsList.innerHTML = '';
+                const department = departmentSelect.value;
+                const grades = gradeLevelsByDept[department] || [];
                 
-                gradeLevels.forEach(grade => {
+                grades.forEach(grade => {
                     const isChecked = currentGradeLevels.includes(grade);
                     const gradeDiv = document.createElement('div');
                     gradeDiv.className = 'form-check grade-item';
+                    const label = isNaN(grade) ? grade : `Grade ${grade}`;
                     gradeDiv.innerHTML = `
                         <input class="form-check-input grade-checkbox" type="checkbox" name="grade_levels[]" value="${grade}" id="grade_${grade}" ${isChecked ? 'checked' : ''}>
                         <label class="form-check-label" for="grade_${grade}">
-                            Grade ${grade}
+                            ${label}
                         </label>
                     `;
                     gradeLevelsList.appendChild(gradeDiv);
