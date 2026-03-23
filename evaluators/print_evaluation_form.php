@@ -113,14 +113,16 @@ $autoPrint = !empty($_GET['auto_print']);
         body { font-family: 'Times New Roman', Times, serif; font-size: 11px; color: #000; margin: 0; padding: 10px; background: #fff; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
 
         /* Header */
-        .print-header { text-align: center; margin-bottom: 6px; }
-        .print-header .header-row { display: flex; align-items: center; justify-content: center; gap: 12px; }
-        .print-header img { width: 60px; height: 60px; }
+        .print-header { text-align: center; margin-bottom: 10px; }
+        .print-header table.header-layout { margin: 0 auto; border-collapse: collapse; }
+        .print-header table.header-layout td { border: none; vertical-align: middle; padding: 0; }
+        .print-header table.header-layout td.logo-cell { padding-right: 14px; }
+        .print-header img { width: 68px; height: 68px; }
         .print-header .header-text { text-align: center; }
-        .print-header h4 { margin: 0; font-size: 15px; font-weight: 700; }
+        .print-header h4 { margin: 0; font-size: 16px; font-weight: 700; }
         .print-header p { margin: 1px 0; font-size: 9px; }
-        .print-header a { color: #000; text-decoration: none; font-size: 9px; }
-        .eval-title { text-align: center; font-weight: 700; font-size: 13px; margin: 10px 0 8px; letter-spacing: 0.5px; }
+        .print-header a { color: #000; text-decoration: underline; font-size: 9px; }
+        .eval-title { text-align: center !important; font-weight: 700; font-size: 13px; margin: 10px auto 8px; letter-spacing: 0.5px; clear: both; }
 
         /* Section titles */
         .section-title { font-weight: 700; font-size: 11px; margin: 8px 0 4px; }
@@ -210,43 +212,53 @@ $autoPrint = !empty($_GET['auto_print']);
 </div>
 
 <!-- Print Header with Logo -->
-<div class="print-header">
-    <div class="header-row">
-        <img src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo">
-        <div class="header-text">
-            <h4>Saint Michael College of Caraga</h4>
-            <p>Brgy. 4, Nasipit, Agusan del Norte, Philippines</p>
-            <p>District 8, Brgy. Triangulo, Nasipit, Agusan del Norte, Philippines</p>
-            <p>Tel. Nos. +63 085 343-3251 / +63 085 283-3113</p>
-            <a href="#">www.smccnasipit.edu.ph</a>
-        </div>
-    </div>
+<div style="text-align:center; margin-bottom:10px;">
+    <table style="margin:0 auto; border-collapse:collapse; border:none;">
+        <tr>
+            <td style="border:none; vertical-align:middle; padding:0 14px 0 0;"><img src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo" style="width:68px; height:68px;"></td>
+            <td style="border:none; vertical-align:middle; padding:0; text-align:center;">
+                <div style="font-size:16px; font-weight:700; margin:0;">Saint Michael College of Caraga</div>
+                <div style="font-size:9px; margin:1px 0;">Brgy. 4, Nasipit, Agusan del Norte, Philippines</div>
+                <div style="font-size:9px; margin:1px 0;">District 8, Brgy. Triangulo, Nasipit, Agusan del Norte, Philippines</div>
+                <div style="font-size:9px; margin:1px 0;">Tel. Nos. +63 085 343-3251 / +63 085 283-3113</div>
+                <a href="http://www.smccnasipit.edu.ph" style="font-size:9px; color:#000; text-decoration:underline;">www.smccnasipit.edu.ph</a>
+            </td>
+        </tr>
+    </table>
 </div>
 
-<div class="eval-title">CLASSROOM EVALUATION FORM</div>
+<div style="text-align:center; font-weight:700; font-size:13px; margin:10px 0 8px; letter-spacing:0.5px;">CLASSROOM EVALUATION FORM</div>
 
 <!-- PART 1: Faculty Information -->
 <div class="section-title">PART 1: Faculty Information</div>
 <table class="info-table">
+    <colgroup>
+        <col style="width:14%;">
+        <col style="width:36%;">
+        <col style="width:18%;">
+        <col style="width:18%;">
+        <col style="width:14%;">
+    </colgroup>
     <tr>
         <td class="label">Name of Faculty:</td>
         <td><?php echo h($eval['teacher_name']); ?></td>
         <td class="label">Academic Year:</td>
         <td><?php echo h($eval['academic_year'] ?? ''); ?></td>
-        <td class="label">Semester:</td>
-        <td>( <?php echo ($eval['semester'] ?? '') === '1st' ? '✓' : '&nbsp;'; ?> ) 1st &nbsp; ( <?php echo ($eval['semester'] ?? '') === '2nd' ? '✓' : '&nbsp;'; ?> ) 2nd</td>
+        <td>Semester: ( <?php echo ($eval['semester'] ?? '') === '1st' ? '✓' : '&nbsp;'; ?> ) 1st &nbsp;( <?php echo ($eval['semester'] ?? '') === '2nd' ? '✓' : '&nbsp;'; ?> ) 2nd</td>
     </tr>
     <tr>
         <td class="label">Department:</td>
         <td><?php echo h($eval['teacher_department'] ?? ''); ?></td>
         <td class="label">Subject/Time of Observation:</td>
-        <td><?php echo h($eval['subject_observed'] ?? ''); ?></td>
-        <td class="label">Date of Observation:</td>
-        <td><?php echo h($eval['observation_date'] ?? ''); ?></td>
+        <td colspan="2"><?php echo h($eval['subject_observed'] ?? ''); ?></td>
     </tr>
     <tr>
-        <td class="label" colspan="2">Type of Classroom Observation:</td>
-        <td colspan="4">Please check the appropriate box. ( <?php echo ($eval['observation_type'] ?? '') === 'Formal' ? '✓' : '&nbsp;'; ?> ) Formal &nbsp; , &nbsp; ( <?php echo ($eval['observation_type'] ?? '') === 'Informal' ? '✓' : '&nbsp;'; ?> ) Informal</td>
+        <td colspan="2"></td>
+        <td class="label">Date of Observation:</td>
+        <td colspan="2"><?php echo h($eval['observation_date'] ?? ''); ?></td>
+    </tr>
+    <tr>
+        <td colspan="5">Type of Classroom Observation: &nbsp;Please check the appropriate box. ( <?php echo ($eval['observation_type'] ?? '') === 'Formal' ? '✓' : '&nbsp;'; ?> ) Formal &nbsp; , &nbsp; ( <?php echo ($eval['observation_type'] ?? '') === 'Informal' ? '✓' : '&nbsp;'; ?> ) Informal</td>
     </tr>
 </table>
 

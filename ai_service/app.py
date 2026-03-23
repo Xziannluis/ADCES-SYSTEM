@@ -171,6 +171,111 @@ DOMAIN_QUERY_KEYWORDS: Dict[str, str] = {
     ),
 }
 
+# Keywords used to detect which domain a retrieved seed text belongs to.
+_DOMAIN_FILTER_KEYWORDS: Dict[str, List[str]] = {
+    "communications": [
+        "audible voice", "audible", "voice projection", "voice clarity",
+        "non-verbal", "nonverbal", "non verbal",
+        "fluency in the language", "fluent speech", "fluently",
+        "language of instruction", "spoken language",
+        "verbal communication", "speech clarity", "speaks clearly",
+        "speech pacing", "speaks fluently",
+        "language suited", "language appropriate", "developmental level",
+        "facial expression", "gestures", "tone of voice",
+        "dynamic discussion", "discussion facilitation", "discussion dynamism",
+        "two-way interaction", "two-way exchange",
+        "vocabulary", "pronunciation", "articulation",
+        "communicates instructions", "communication competence",
+        "voice throughout", "heard by all", "heard at the back",
+    ],
+    "management": [
+        "classroom management", "classroom routines", "lesson organization",
+        "time management", "time allocation", "transition cues", "seating plan",
+        "teaching aids", "core values", "institutional core values",
+        "lesson introductions and closure", "lesson planning and learning outcomes",
+        "instructional strategies", "educational technology",
+        "collaborative learning", "collaborative task", "group work", "group task",
+        "lesson objective", "learning outcome", "TILO",
+        "instructional planning", "lesson planning", "lesson plan",
+        "participation routine", "engagement strateg",
+        "seating", "seat plan", "lesson pacing",
+        "activity shift", "transition",
+        "teaching aid", "instructional material",
+        "real-life example", "real-world",
+        "differentiation", "differentiated",
+        "scaffolding", "scaffold",
+        "lesson closure", "exit activity", "closure activity",
+        "student collaboration", "peer interaction",
+        "independent practice", "guided practice",
+        "learner engagement", "learner accountability",
+        "classroom climate", "learning environment", "learning climate",
+        "instructional delivery", "lesson delivery",
+        "think-pair-share", "random calling",
+        "task alignment", "lesson structure",
+        "board work", "board organization",
+        "connection to prior learning", "previously learned",
+        "motivational strateg", "positive reinforcement",
+        "learner support", "learner needs", "student support",
+        "instructional clarity", "instructional adjustment",
+        "questioning technique", "questioning routine",
+        "learner participation", "student participation",
+        "inclusive questioning", "participation more evenly",
+        "content mastery", "lesson content",
+        "task-aligned", "aligned to objective",
+        "use of resources", "instructional resource",
+        "organized and student-centered",
+        "learner-centered",
+        "responsive classroom", "classroom evidence",
+        "class discussion on key concepts",
+        "management practices", "consistent routines",
+        "productive classroom", "orderly routines",
+        "instructional momentum", "lesson segments",
+    ],
+    "assessment": [
+        "assessment", "formative", "summative", "rubric", "grading",
+        "criterion-referenced", "normative assessment", "comprehension check",
+        "exit ticket", "checking for understanding", "monitor understanding",
+        "feedback follow-through", "feedback practices for student",
+        "assessment alignment", "assessment data",
+        "higher-order thinking", "higher-order question",
+        "monitoring routine", "completion check",
+        "feedback quality", "feedback specificity", "corrective feedback",
+        "formative check", "content check",
+        "learner mastery", "checks for understanding",
+    ],
+}
+
+
+def _count_domain_keyword_matches(text: str, domain: str) -> int:
+    """Count how many keywords from a domain match in the text."""
+    lower = text.lower()
+    count = 0
+    for kw in _DOMAIN_FILTER_KEYWORDS.get(domain, []):
+        if kw.lower() in lower:
+            count += 1
+    return count
+
+
+def _filter_retrieved_by_focus(items: List[Dict[str, Any]], focus: List[str]) -> List[Dict[str, Any]]:
+    """Strict positive-match filter: ONLY keep items whose feedback_text
+    matches at least one keyword from an included (focused) domain AND has
+    MORE included-domain keyword hits than excluded-domain hits.
+    Checks feedback_text only (the actual output text), not evaluation_comment
+    (which contains observation-type metadata common to all templates).
+    Returns empty list when no items qualify."""
+    if not focus:
+        return items  # No focus set = all domains active
+    excluded = [d for d in ["communications", "management", "assessment"] if d not in focus]
+    if not excluded:
+        return items  # All domains are in focus
+    filtered = []
+    for item in items:
+        text = item.get('feedback_text', '') or item.get('text', '')
+        included_hits = sum(_count_domain_keyword_matches(text, d) for d in focus)
+        excluded_hits = sum(_count_domain_keyword_matches(text, d) for d in excluded)
+        if included_hits > 0 and included_hits >= excluded_hits:
+            filtered.append(item)
+    return filtered
 
 
 def _normalize_whitespace(text: str) -> str:
@@ -626,7 +731,13 @@ def _merge_comment_with_criterion(comment: str, criterion_phrase: str, field_nam
 
     lower_comment = summarized_comment.lower()
     lower_phrase = criterion_phrase.lower()
+    # Check if criterion phrase (or its root words) is already in the comment
     if lower_phrase in lower_comment:
+        return summarized_comment
+    # Also check overlap: if >60% of phrase words appear in comment, skip appending
+    phrase_words = set(re.findall(r'[a-z]{3,}', lower_phrase))
+    comment_words = set(re.findall(r'[a-z]{3,}', lower_comment))
+    if phrase_words and len(phrase_words & comment_words) / len(phrase_words) > 0.6:
         return summarized_comment
 
     if field_name == "strengths":
@@ -665,6 +776,18 @@ def _summarize_support_comment(comment: str, field_name: str) -> str:
         return _normalize_sentence(f"a positive instructional practice was noted where {clause}")
 
     if field_name == "areas_for_improvement":
+        # When the comment is actually a criterion text (starts with verb), frame as area to strengthen
+        if re.match(r"^(uses|speaks|facilitates|demonstrates|explains|adapts|encourages|integrates|focuses|recall|the)\b", clause, re.IGNORECASE):
+            verb_to_gerund = {
+                "uses": "using", "speaks": "speaking", "facilitates": "facilitating",
+                "demonstrates": "demonstrating", "explains": "explaining", "adapts": "adapting",
+                "encourages": "encouraging", "integrates": "integrating", "focuses": "focusing on",
+            }
+            first_word = clause.split()[0].lower()
+            if first_word in verb_to_gerund:
+                rest = clause[len(first_word):].strip()
+                clause = f"{verb_to_gerund[first_word]} {rest}"
+            return _normalize_sentence(f"the teacher could further strengthen {clause}")
         return _normalize_sentence(f"it is worth noting that {clause}")
 
     return _normalize_sentence(f"a recommended focus area is to address how {clause}")
@@ -1631,7 +1754,7 @@ def _paraphrase_dataset_feedback(req: GenerateRequest, field_name: str, retrieve
         candidates.append(text)
 
     if not candidates:
-        return _normalize_sentence(fallback_query)
+        return ""  # Empty string lets caller fall back to criterion-based text
 
     # Prefer unseen candidates
     unseen = [c for c in candidates if _comment_fingerprint(c) not in previously_shown]
@@ -1779,6 +1902,16 @@ def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]
         for field_name in queries
     }
 
+    # Filter retrieved seed items to exclude domains not in the evaluation focus
+    focus = _parse_evaluation_focus(req)
+    print(f"[RETRIEVE_FORM] focus={focus} fields={list(queries.keys())} pre_filter_counts={{fn: len(items) for fn, items in field_specific_matches.items()}}")
+    if focus:
+        field_specific_matches = {
+            field_name: _filter_retrieved_by_focus(items, focus)
+            for field_name, items in field_specific_matches.items()
+        }
+    print(f"[RETRIEVE_FORM] post_filter_counts={{fn: len(items) for fn, items in field_specific_matches.items()}}")
+
     feedback = {
         field_name: _paraphrase_dataset_feedback(
             req,
@@ -1920,6 +2053,11 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
     Each option uses a single feedback text trimmed to 2-3 sentences.
     The 3 options come from different indicators for variety.
     Sentence starters are varied to avoid repetitive patterns."""
+    # Filter retrieved items by evaluation focus before building options
+    focus = _parse_evaluation_focus(req)
+    if focus:
+        retrieved = _filter_retrieved_by_focus(retrieved, focus)
+
     rng = random.Random(
         _stable_seed(
             "options",
@@ -1958,12 +2096,38 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
     unseen = [c for c in candidates if _comment_fingerprint(c) not in previously_shown]
     pool = unseen if unseen else candidates
 
-    # Pick 3 distinct options
+    # Pick 3 distinct options, skipping near-duplicates via word overlap
     out: List[str] = []
     for text in pool:
         if len(out) >= 3:
             break
-        out.append(text)
+        # Check word overlap with already-selected options
+        text_words = set(re.sub(r"[^a-z0-9\s]", "", text.lower()).split())
+        is_too_similar = False
+        for existing in out:
+            existing_words = set(re.sub(r"[^a-z0-9\s]", "", existing.lower()).split())
+            if not text_words or not existing_words:
+                continue
+            overlap = len(text_words & existing_words) / max(len(text_words), len(existing_words))
+            if overlap > 0.7:
+                is_too_similar = True
+                break
+        if not is_too_similar:
+            out.append(text)
+
+    # When no retrieved seeds match (e.g. all filtered by focus),
+    # generate 3 variations from base_text which is criterion-based
+    if not out and base_text:
+        base_trimmed = _trim_to_sentences(base_text, 3)
+        out.append(base_trimmed)
+        # Create 2 additional variations by sentence reordering/rephrasing
+        base_sents = _split_sentences(base_trimmed)
+        if len(base_sents) >= 2:
+            variant2_sents = base_sents[1:] + base_sents[:1]
+            out.append(" ".join(variant2_sents))
+        if len(base_sents) >= 3:
+            variant3_sents = [base_sents[2]] + [base_sents[0]] + base_sents[1:2]
+            out.append(" ".join(variant3_sents))
 
     # Vary sentence starters across the 3 options
     out = _vary_sentence_starters(out)

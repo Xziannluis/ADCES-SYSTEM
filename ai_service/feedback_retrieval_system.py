@@ -485,6 +485,13 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
     observation_types = ["formal lesson review", "informal lesson review", "classroom walk-through", "scheduled class visit"]
 
     strengths_focuses = [
+        # Communications Competence domain (first so they appear even with small per_field)
+        ("voice clarity and audibility", "uses an audible voice that can be heard clearly by all learners throughout the room", "uses a clear and audible voice throughout the lesson, ensuring that instructions and explanations are heard by all learners including those at the back of the room"),
+        ("language fluency in instruction", "speaks fluently in the language of instruction with smooth and natural delivery", "speaks fluently and naturally in the language of instruction, maintaining a smooth delivery that helps learners follow explanations without unnecessary pauses"),
+        ("dynamic discussion facilitation", "facilitates a dynamic and engaging discussion that encourages two-way interaction", "facilitates dynamic discussion by encouraging two-way interaction where learners actively respond, build on ideas, and engage in meaningful verbal exchange"),
+        ("effective non-verbal communication", "uses engaging non-verbal cues including facial expressions and gestures to reinforce instruction", "uses purposeful non-verbal communication including facial expressions, gestures, and body movement to reinforce verbal messages and maintain learner attention"),
+        ("appropriate vocabulary use", "uses words and expressions suited to the developmental level and comprehension of the students", "uses vocabulary and expressions that are well-suited to the learners' developmental level, making explanations accessible and easy to understand for all students"),
+        # Management and general domains
         ("instructional clarity", "explains concepts clearly and connects examples to lesson goals", "demonstrates strong instructional clarity by presenting key concepts through clear explanations and relevant examples"),
         ("classroom management", "maintains orderly routines and respectful learner behavior throughout the class", "maintains a productive classroom climate through consistent routines and respectful management practices"),
         ("learner engagement", "encourages active participation and keeps learners focused during activities", "creates engaging learning opportunities that keep students attentive and involved in lesson tasks"),
@@ -520,6 +527,14 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
     ]
 
     improvement_focuses = [
+        # Communications Competence domain (first so they appear even with small per_field)
+        ("voice projection", "the teacher's voice is not consistently audible to all learners especially those seated at the back of the room", "voice projection could be strengthened so all learners, including those at the back, can hear instructions and explanations clearly throughout the lesson"),
+        ("language fluency", "the teacher occasionally hesitates or uses filler words that interrupt the flow of instruction in the language of instruction", "fluency in the language of instruction could be improved so explanations flow more naturally and learners can follow the lesson without unnecessary pauses"),
+        ("discussion facilitation", "discussions tend to be one-directional with limited dynamic exchange between the teacher and learners", "discussion facilitation could become more dynamic by encouraging two-way exchanges and inviting learners to build on each other's responses during dynamic discussion"),
+        ("non-verbal communication", "the teacher's use of non-verbal cues such as facial expressions and gestures is limited and does not reinforce verbal instructions", "non-verbal communication such as purposeful gestures and facial expressions could be used more deliberately to reinforce verbal messages and maintain learner attention"),
+        ("vocabulary appropriateness", "some words and expressions used during instruction are above the comprehension level of the learners", "the vocabulary and expressions used during instruction could be better suited to the learners' developmental level so all students can follow the discussion clearly"),
+        ("speech clarity", "the teacher speaks too quickly at times making it difficult for learners to process instructions and explanations", "speech pacing and clarity could be improved so learners have enough time to process verbal instructions and follow the lesson comfortably"),
+        # Management and general domains
         ("student participation", "student participation remains limited and only a few learners respond during questioning", "student participation remains uneven and would benefit from broader engagement strategies during class interaction"),
         ("formative assessment", "checks for understanding are not yet frequent enough to confirm learner mastery", "formative assessment routines could be used more consistently to verify learner understanding before moving forward"),
         ("lesson pacing", "lesson pacing slows during task transitions and affects instructional momentum", "lesson pacing during transitions could be strengthened to maintain momentum and maximize instructional time"),
@@ -555,6 +570,14 @@ def generate_seed_templates(per_field: int = 100) -> List[Dict[str, str]]:
     ]
 
     recommendation_focuses = [
+        # Communications Competence domain (first so they appear even with small per_field)
+        ("voice projection", "practice consistent voice projection techniques so all learners hear instructions clearly from any seat in the room", "Practice deliberate voice projection and vary vocal volume so instructions and explanations reach all learners clearly, including those seated at the back of the room."),
+        ("language fluency", "rehearse lesson explanations beforehand to improve fluency and reduce filler words in the language of instruction", "Rehearse lesson explanations and key vocabulary before class to improve fluency in the language of instruction, reducing pauses and filler words that interrupt lesson flow."),
+        ("discussion dynamism", "plan open-ended prompts and follow-up questions that encourage dynamic two-way discussion", "Plan open-ended discussion prompts and follow-up questions that encourage dynamic discussion where learners respond to each other and build on shared ideas."),
+        ("non-verbal cues", "use purposeful gestures and facial expressions to reinforce verbal messages and maintain learner attention", "Use purposeful gestures, facial expressions, and movement to reinforce verbal instructions and sustain learner attention throughout the discussion."),
+        ("vocabulary adjustment", "simplify vocabulary and rephrase complex terms to match the developmental level of the learners", "Adjust vocabulary and rephrase complex terms using simpler language suited to the learners' developmental level so all students can follow the lesson clearly."),
+        ("speech pacing", "slow down speech during key explanations and pause briefly to let learners process information", "Slow down speech during key explanations and insert brief pauses so learners have time to process verbal instructions before the lesson moves forward."),
+        # Management and general domains
         ("participation", "use think-pair-share, random calling, and brief collaborative tasks to increase learner participation", "Use structured participation routines such as think-pair-share, random calling, and brief collaborative tasks to involve more learners during the lesson."),
         ("assessment", "embed short formative checks and targeted follow-up questions throughout instruction", "Integrate short formative checks and targeted follow-up questions throughout instruction to monitor learner understanding in real time."),
         ("transitions", "prepare clear transition cues and concise directions before each activity shift", "Use clear transition cues and concise directions before each activity shift to maintain pacing and reduce downtime."),
