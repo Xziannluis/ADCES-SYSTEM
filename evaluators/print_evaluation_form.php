@@ -108,12 +108,12 @@ $autoPrint = !empty($_GET['auto_print']);
     <meta charset="UTF-8">
     <title>Evaluation Form - <?php echo h($eval['teacher_name']); ?></title>
     <style>
-        @page { size: A4 portrait; margin: 8mm 10mm; }
+        @page { size: A4 portrait; margin: 6mm 10mm 8mm; }
         * { box-sizing: border-box; }
         body { font-family: 'Times New Roman', Times, serif; font-size: 11px; color: #000; margin: 0; padding: 10px; background: #fff; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
 
         /* Header */
-        .print-header { text-align: center; margin-bottom: 10px; }
+        .print-header { text-align: center; margin-bottom: 6px; }
         .print-header table.header-layout { margin: 0 auto; border-collapse: collapse; }
         .print-header table.header-layout td { border: none; vertical-align: middle; padding: 0; }
         .print-header table.header-layout td.logo-cell { padding-right: 14px; }
@@ -122,10 +122,10 @@ $autoPrint = !empty($_GET['auto_print']);
         .print-header h4 { margin: 0; font-size: 16px; font-weight: 700; }
         .print-header p { margin: 1px 0; font-size: 9px; }
         .print-header a { color: #000; text-decoration: underline; font-size: 9px; }
-        .eval-title { text-align: center !important; font-weight: 700; font-size: 13px; margin: 10px auto 8px; letter-spacing: 0.5px; clear: both; }
+        .eval-title { text-align: center !important; font-weight: 700; font-size: 13px; margin: 6px auto 4px; letter-spacing: 0.5px; clear: both; }
 
         /* Section titles */
-        .section-title { font-weight: 700; font-size: 11px; margin: 8px 0 4px; }
+        .section-title { font-weight: 700; font-size: 11px; margin: 5px 0 2px; }
 
         /* PART 1 info table */
         .info-table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 10px; }
@@ -137,7 +137,7 @@ $autoPrint = !empty($_GET['auto_print']);
         .mandatory-box p { margin: 2px 0; }
 
         /* Rating scale detailed */
-        .rating-scale-box { border: 1px solid #000; padding: 6px 8px; margin-bottom: 6px; font-size: 9.5px; }
+        .rating-scale-box { border: 1px solid #000; padding: 4px 8px; margin-bottom: 4px; font-size: 9.5px; }
         .rating-scale-box table { width: 100%; }
         .rating-scale-box td { padding: 1px 4px; vertical-align: top; }
         .rating-scale-box td:first-child { font-weight: 700; white-space: nowrap; width: 165px; }
@@ -151,25 +151,25 @@ $autoPrint = !empty($_GET['auto_print']);
         .eval-table td.rating-cell { text-align: center; width: 22px; }
         .eval-table td.comments-cell { width: 16%; font-size: 9px; }
         .eval-table .cat-header td { font-weight: 700; background: #f5f5f5; }
-        .avg-row { text-align: center; font-weight: 700; font-size: 10px; margin: 2px 0 8px; }
+        .avg-row { text-align: center; font-weight: 700; font-size: 10px; margin: 1px 0 4px; }
         .avg-row .avg-line { display: inline-block; width: 100px; border-bottom: 1px solid #000; text-align: center; margin-left: 4px; }
 
         /* Total average + interpretation */
-        .total-avg-row { font-weight: 700; font-size: 10px; margin: 4px 0 2px; border-top: 1px solid #000; padding-top: 4px; }
+        .total-avg-row { font-weight: 700; font-size: 10px; margin: 2px 0 1px; border-top: 1px solid #000; padding-top: 2px; }
         .total-avg-row .avg-line { display: inline-block; width: 100px; border-bottom: 1px solid #000; text-align: center; margin-left: 4px; }
-        .interpretation-box { font-size: 9.5px; margin-bottom: 8px; }
+        .interpretation-box { font-size: 9.5px; margin-bottom: 4px; }
         .interpretation-box table td { padding: 0 6px; }
         .interpretation-box td:first-child { font-weight: 600; white-space: nowrap; }
 
         /* Narrative table */
-        .narrative-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; table-layout: fixed; }
-        .narrative-table td { border: 1.5px solid #000; padding: 8px 10px; font-size: 10px; vertical-align: top; width: 50%; }
+        .narrative-table { width: 100%; border-collapse: collapse; margin-bottom: 4px; table-layout: fixed; }
+        .narrative-table td { border: 1.5px solid #000; padding: 5px 8px; font-size: 10px; vertical-align: top; width: 50%; }
         .narrative-table td[colspan="2"] { width: 100%; }
         .narrative-table .n-label { font-weight: 700; font-size: 11px; margin-bottom: 4px; }
-        .narrative-table .n-content { min-height: 50px; font-size: 10px; line-height: 1.55; text-align: justify; overflow-wrap: break-word; word-break: normal; white-space: normal; }
+        .narrative-table .n-content { min-height: 30px; font-size: 10px; line-height: 1.45; text-align: justify; overflow-wrap: break-word; word-break: normal; white-space: normal; }
 
         /* Signature section */
-        .sig-section { margin-top: 10px; page-break-inside: avoid; font-size: 10px; }
+        .sig-section { margin-top: 6px; page-break-inside: avoid; font-size: 10px; }
         .sig-section h6 { font-size: 11px; font-weight: 700; margin: 0 0 2px; }
         .sig-section p.cert { margin: 0 0 6px; font-size: 9px; font-style: italic; }
         .sig-row { display: flex; gap: 30px; margin-bottom: 4px; }
@@ -182,18 +182,19 @@ $autoPrint = !empty($_GET['auto_print']);
         .sig-date-col { flex: 1; font-size: 10px; }
 
         /* Footer */
-        .page-footer { margin-top: 12px; }
+        .page-footer { margin-top: 6px; }
         .page-footer img { width: 100%; height: auto; }
 
         /* Print controls */
         .no-print { }
         @media print {
             .no-print { display: none !important; }
-            body { padding: 0; margin: 0; padding-bottom: 60px; }
-            .page-footer { position: fixed; bottom: 0; left: 0; right: 0; margin: 0; padding: 0; }
-            .page-footer img { width: 100%; height: auto; }
+            body { padding: 0 0 35px 0; margin: 0; }
+            .eval-table { page-break-inside: avoid; }
             .narrative-table { page-break-inside: avoid; }
             .sig-section { page-break-inside: avoid; }
+            .page-footer { position: fixed; bottom: 0; left: 0; right: 0; margin: 0; padding: 0; z-index: 9999; }
+            .page-footer img { width: 100%; height: auto; }
         }
         .print-btn-bar { text-align: center; margin-bottom: 12px; }
         input[type="radio"] { pointer-events: none; margin: 0; width: 12px; height: 12px; }
@@ -212,39 +213,35 @@ $autoPrint = !empty($_GET['auto_print']);
 </div>
 
 <!-- Print Header with Logo -->
-<div style="text-align:center; margin-bottom:10px;">
-    <table style="margin:0 auto; border-collapse:collapse; border:none;">
-        <tr>
-            <td style="border:none; vertical-align:middle; padding:0 14px 0 0;"><img src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo" style="width:68px; height:68px;"></td>
-            <td style="border:none; vertical-align:middle; padding:0; text-align:center;">
-                <div style="font-size:16px; font-weight:700; margin:0;">Saint Michael College of Caraga</div>
-                <div style="font-size:9px; margin:1px 0;">Brgy. 4, Nasipit, Agusan del Norte, Philippines</div>
-                <div style="font-size:9px; margin:1px 0;">District 8, Brgy. Triangulo, Nasipit, Agusan del Norte, Philippines</div>
-                <div style="font-size:9px; margin:1px 0;">Tel. Nos. +63 085 343-3251 / +63 085 283-3113</div>
-                <a href="http://www.smccnasipit.edu.ph" style="font-size:9px; color:#000; text-decoration:underline;">www.smccnasipit.edu.ph</a>
-            </td>
-        </tr>
-    </table>
+<div style="position:relative; margin-bottom:6px; min-height:68px;">
+    <img src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo" style="width:68px; height:68px; position:absolute; left:60px; top:0;">
+    <div style="text-align:center; padding-top:2px;">
+        <div style="font-size:16px; font-weight:700; margin:0;">Saint Michael College of Caraga</div>
+        <div style="font-size:9px; margin:1px 0;">Brgy. 4, Nasipit, Agusan del Norte, Philippines</div>
+        <div style="font-size:9px; margin:1px 0;">District 8, Brgy. Triangulo, Nasipit, Agusan del Norte, Philippines</div>
+        <div style="font-size:9px; margin:1px 0;">Tel. Nos. +63 085 343-3251 / +63 085 283-3113</div>
+        <a href="http://www.smccnasipit.edu.ph" style="font-size:9px; color:#000; text-decoration:underline;">www.smccnasipit.edu.ph</a>
+    </div>
 </div>
 
-<div style="text-align:center; font-weight:700; font-size:13px; margin:10px 0 8px; letter-spacing:0.5px;">CLASSROOM EVALUATION FORM</div>
+<div style="text-align:center; font-weight:700; font-size:13px; margin:6px 0 4px; letter-spacing:0.5px;">CLASSROOM EVALUATION FORM</div>
 
 <!-- PART 1: Faculty Information -->
 <div class="section-title">PART 1: Faculty Information</div>
 <table class="info-table">
     <colgroup>
-        <col style="width:14%;">
-        <col style="width:36%;">
-        <col style="width:18%;">
-        <col style="width:18%;">
-        <col style="width:14%;">
+        <col style="width:12%;">
+        <col style="width:22%;">
+        <col style="width:16%;">
+        <col style="width:22%;">
+        <col style="width:28%;">
     </colgroup>
     <tr>
         <td class="label">Name of Faculty:</td>
         <td><?php echo h($eval['teacher_name']); ?></td>
         <td class="label">Academic Year:</td>
         <td><?php echo h($eval['academic_year'] ?? ''); ?></td>
-        <td>Semester: ( <?php echo ($eval['semester'] ?? '') === '1st' ? '✓' : '&nbsp;'; ?> ) 1st &nbsp;( <?php echo ($eval['semester'] ?? '') === '2nd' ? '✓' : '&nbsp;'; ?> ) 2nd</td>
+        <td style="font-size:9px; white-space:nowrap;">Semester: ( <?php echo ($eval['semester'] ?? '') === '1st' ? '✓' : '&nbsp;'; ?> ) 1st ( <?php echo ($eval['semester'] ?? '') === '2nd' ? '✓' : '&nbsp;'; ?> ) 2nd</td>
     </tr>
     <tr>
         <td class="label">Department:</td>
@@ -448,27 +445,27 @@ foreach ($domains as $domain):
 </div>
 
 <!-- Form Code Box -->
-<div style="border: 2px solid #000; border-radius: 6px; padding: 0; margin-top: 12px; margin-bottom: 12px; max-width: 340px; font-size: 9.5px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
+<div style="border: 1.5px solid #1a237e; border-radius: 4px; padding: 0; margin-top: 12px; margin-bottom: 12px; max-width: 300px; font-size: 8.5px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
     <table style="width: 100%; border-collapse: collapse;">
         <tr>
-            <td style="background-color: #1976d2 !important; color: #fff !important; font-weight: bold; width: 38%; padding: 4px 8px; -webkit-print-color-adjust: exact; print-color-adjust: exact;">Form Code No.</td>
-            <td style="padding: 4px 8px;">: <?php echo $_fs['form_code_no']; ?></td>
+            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; width: 40%; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Form Code No.</td>
+            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['form_code_no']; ?></td>
         </tr>
         <tr>
-            <td style="background-color: #1976d2 !important; color: #fff !important; font-weight: bold; padding: 4px 8px; -webkit-print-color-adjust: exact; print-color-adjust: exact;">Issue Status</td>
-            <td style="padding: 4px 8px;">: <?php echo $_fs['issue_status']; ?></td>
+            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Issue Status</td>
+            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['issue_status']; ?></td>
         </tr>
         <tr>
-            <td style="background-color: #1976d2 !important; color: #fff !important; font-weight: bold; padding: 4px 8px; -webkit-print-color-adjust: exact; print-color-adjust: exact;">Revision No.</td>
-            <td style="padding: 4px 8px;">: <?php echo $_fs['revision_no']; ?></td>
+            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Revision No.</td>
+            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['revision_no']; ?></td>
         </tr>
         <tr>
-            <td style="background-color: #1976d2 !important; color: #fff !important; font-weight: bold; padding: 4px 8px; -webkit-print-color-adjust: exact; print-color-adjust: exact;">Date Effective</td>
-            <td style="padding: 4px 8px;">: <?php echo $_fs['date_effective']; ?></td>
+            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Date Effective</td>
+            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['date_effective']; ?></td>
         </tr>
         <tr>
-            <td style="background-color: #1976d2 !important; color: #fff !important; font-weight: bold; padding: 4px 8px; -webkit-print-color-adjust: exact; print-color-adjust: exact;">Approved By</td>
-            <td style="padding: 4px 8px;">: <?php echo $_fs['approved_by']; ?></td>
+            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Approved By</td>
+            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['approved_by']; ?></td>
         </tr>
     </table>
 </div>

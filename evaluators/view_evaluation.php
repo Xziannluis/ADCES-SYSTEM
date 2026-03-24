@@ -581,27 +581,27 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
                     </div>
 
                     <!-- Form code bar -->
-                    <div style="border: 2px solid #000000ff; border-radius: 8px; padding: 16px; margin-top: 24px; background: #f8faff; max-width: 500px;">
+                    <div style="border: 1.5px solid #1a237e; border-radius: 4px; padding: 0; margin-top: 24px; background: #fff; max-width: 340px; overflow: hidden;">
                         <table style="width: 100%; border-collapse: collapse;">
                             <tr>
-                                <td style="background: #1976d2; color: #fff; font-weight: bold; width: 48%; padding: 6px 12px; border-top-left-radius: 4px;">Form Code No.</td>
-                                <td style="padding: 6px 12px; color: #222; border-top-right-radius: 4px;">: <?php echo $_fs['form_code_no']; ?></td>
+                                <td style="background: #1a237e; color: #fff; font-weight: bold; width: 40%; padding: 4px 10px; font-size: 12px; border: none;">Form Code No.</td>
+                                <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['form_code_no']; ?></td>
                             </tr>
                             <tr>
-                                <td style="background: #1976d2; color: #fff; font-weight: bold; padding: 6px 12px;">Issue Status</td>
-                                <td style="padding: 6px 12px; color: #222;">: <?php echo $_fs['issue_status']; ?></td>
+                                <td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 12px; border: none;">Issue Status</td>
+                                <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['issue_status']; ?></td>
                             </tr>
                             <tr>
-                                <td style="background: #1976d2; color: #fff; font-weight: bold; padding: 6px 12px;">Revision No.</td>
-                                <td style="padding: 6px 12px; color: #222;">: <?php echo $_fs['revision_no']; ?></td>
+                                <td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 12px; border: none;">Revision No.</td>
+                                <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['revision_no']; ?></td>
                             </tr>
                             <tr>
-                                <td style="background: #1976d2; color: #fff; font-weight: bold; padding: 6px 12px;">Date Effective</td>
-                                <td style="padding: 6px 12px; color: #222;">: <?php echo $_fs['date_effective']; ?></td>
+                                <td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 12px; border: none;">Date Effective</td>
+                                <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['date_effective']; ?></td>
                             </tr>
                             <tr>
-                                <td style="background: #1976d2; color: #fff; font-weight: bold; padding: 6px 12px; border-bottom-left-radius: 4px;">Approved By</td>
-                                <td style="padding: 6px 12px; color: #222; border-bottom-right-radius: 4px;">: <?php echo $_fs['approved_by']; ?></td>
+                                <td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 12px; border: none;">Approved By</td>
+                                <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['approved_by']; ?></td>
                             </tr>
                         </table>
                     </div>

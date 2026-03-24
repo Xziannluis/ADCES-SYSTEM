@@ -855,27 +855,27 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 
                                 <!-- Form Details -->
                                 <!-- New Form Code Bar (horizontal, wide, above form actions) -->
-                                 <div style="border: 2px solid #000000ff; border-radius: 8px; padding: 16px; margin-bottom: 24px; background: #f8faff; max-width: 500px;">
+                                 <div style="border: 1.5px solid #1a237e; border-radius: 4px; padding: 0; margin-bottom: 24px; background: #fff; max-width: 340px; overflow: hidden;">
                     <table style="width: 100%; border-collapse: collapse;">
                         <tr>
-                            <td style="background: #1976d2; color: #fff; font-weight: bold; width: 48%; padding: 6px 12px; border-top-left-radius: 4px;">Form Code No.</td>
-                            <td style="padding: 6px 12px; color: #222; border-top-right-radius: 4px;">: <?php echo $_fs['form_code_no']; ?></td>
+                            <td style="background: #1a237e; color: #fff; font-weight: bold; width: 40%; padding: 4px 10px; font-size: 12px; border: none;">Form Code No.</td>
+                            <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['form_code_no']; ?></td>
                         </tr>
                         <tr>
-                            <td style="background: #1976d2; color: #fff; font-weight: bold; padding: 6px 12px;">Issue Status</td>
-                            <td style="padding: 6px 12px; color: #222;">: <?php echo $_fs['issue_status']; ?></td>
+                            <td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 12px; border: none;">Issue Status</td>
+                            <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['issue_status']; ?></td>
                         </tr>
                         <tr>
-                            <td style="background: #1976d2; color: #fff; font-weight: bold; padding: 6px 12px;">Revision No.</td>
-                            <td style="padding: 6px 12px; color: #222;">: <?php echo $_fs['revision_no']; ?></td>
+                            <td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 12px; border: none;">Revision No.</td>
+                            <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['revision_no']; ?></td>
                         </tr>
                         <tr>
-                            <td style="background: #1976d2; color: #fff; font-weight: bold; padding: 6px 12px;">Date Effective</td>
-                            <td style="padding: 6px 12px; color: #222;">: <?php echo $_fs['date_effective']; ?></td>
+                            <td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 12px; border: none;">Date Effective</td>
+                            <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['date_effective']; ?></td>
                         </tr>
                         <tr>
-                            <td style="background: #1976d2; color: #fff; font-weight: bold; padding: 6px 12px; border-bottom-left-radius: 4px;">Approved By</td>
-                            <td style="padding: 6px 12px; color: #222; border-bottom-right-radius: 4px;">: <?php echo $_fs['approved_by']; ?></td>
+                            <td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 12px; border: none;">Approved By</td>
+                            <td style="padding: 4px 10px; font-size: 12px; border: none;">: <?php echo $_fs['approved_by']; ?></td>
                         </tr>
                     </table>
                 </div>
@@ -1471,21 +1471,23 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                         // Form Code Box (styled)
                         const formCodeBox = document.createElement('div');
                         formCodeBox.style.display = 'inline-block';
-                        formCodeBox.style.border = '1px solid #1976d2';
-                        formCodeBox.style.borderLeft = '8px solid #1976d2';
-                        formCodeBox.style.background = '#f8fafd';
-                        formCodeBox.style.padding = '10px 18px 10px 14px';
+                        formCodeBox.style.border = '1.5px solid #1a237e';
+                        formCodeBox.style.borderRadius = '4px';
+                        formCodeBox.style.background = '#fff';
+                        formCodeBox.style.padding = '0';
                         formCodeBox.style.marginBottom = '18px';
                         formCodeBox.style.marginTop = '8px';
-                        formCodeBox.style.fontSize = '15px';
+                        formCodeBox.style.fontSize = '12px';
                         formCodeBox.style.width = 'auto';
+                        formCodeBox.style.maxWidth = '340px';
+                        formCodeBox.style.overflow = 'hidden';
                         formCodeBox.innerHTML = `
-                                <table style="border:none;border-collapse:collapse;font-size:15px;">
-                                    <tr><td style="padding:2px 12px 2px 0;"><b>Form Code No.</b></td><td>: <?php echo $_fs['form_code_no']; ?></td></tr>
-                                    <tr><td style="padding:2px 12px 2px 0;"><b>Issue Status</b></td><td>: <?php echo $_fs['issue_status']; ?></td></tr>
-                                    <tr><td style="padding:2px 12px 2px 0;"><b>Revision No.</b></td><td>: <?php echo $_fs['revision_no']; ?></td></tr>
-                                    <tr><td style="padding:2px 12px 2px 0;"><b>Date Effective</b></td><td>: <?php echo $_fs['date_effective']; ?></td></tr>
-                                    <tr><td style="padding:2px 12px 2px 0;"><b>Approved By</b></td><td>: <?php echo $_fs['approved_by']; ?></td></tr>
+                                <table style="border:none;border-collapse:collapse;width:100%;">
+                                    <tr><td style="background:#1a237e;color:#fff;font-weight:bold;padding:4px 10px;font-size:12px;border:none;">Form Code No.</td><td style="padding:4px 10px;font-size:12px;border:none;">: <?php echo $_fs['form_code_no']; ?></td></tr>
+                                    <tr><td style="background:#1a237e;color:#fff;font-weight:bold;padding:4px 10px;font-size:12px;border:none;">Issue Status</td><td style="padding:4px 10px;font-size:12px;border:none;">: <?php echo $_fs['issue_status']; ?></td></tr>
+                                    <tr><td style="background:#1a237e;color:#fff;font-weight:bold;padding:4px 10px;font-size:12px;border:none;">Revision No.</td><td style="padding:4px 10px;font-size:12px;border:none;">: <?php echo $_fs['revision_no']; ?></td></tr>
+                                    <tr><td style="background:#1a237e;color:#fff;font-weight:bold;padding:4px 10px;font-size:12px;border:none;">Date Effective</td><td style="padding:4px 10px;font-size:12px;border:none;">: <?php echo $_fs['date_effective']; ?></td></tr>
+                                    <tr><td style="background:#1a237e;color:#fff;font-weight:bold;padding:4px 10px;font-size:12px;border:none;">Approved By</td><td style="padding:4px 10px;font-size:12px;border:none;">: <?php echo $_fs['approved_by']; ?></td></tr>
                                 </table>
                         `;
                         container.appendChild(formCodeBox);

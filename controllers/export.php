@@ -15,6 +15,20 @@ $db = $database->getConnection();
 $evaluation = new Evaluation($db);
 $teacher = new Teacher($db);
 
+// Load form settings
+$_formSettings = [];
+try {
+    $fsStmt = $db->query("SELECT setting_key, setting_value FROM form_settings");
+    while ($r = $fsStmt->fetch(PDO::FETCH_ASSOC)) { $_formSettings[$r['setting_key']] = $r['setting_value']; }
+} catch (PDOException $e) {}
+$_fs = [
+    'form_code_no'   => htmlspecialchars($_formSettings['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04'),
+    'issue_status'   => htmlspecialchars($_formSettings['issue_status'] ?? '02'),
+    'revision_no'    => htmlspecialchars($_formSettings['revision_no'] ?? '02'),
+    'date_effective' => htmlspecialchars($_formSettings['date_effective'] ?? '13 September 2023'),
+    'approved_by'    => htmlspecialchars($_formSettings['approved_by'] ?? 'President'),
+];
+
 // Get parameters - validate and sanitize
 $allowed_types = ['pdf', 'csv', 'form'];
 $export_type = in_array($_GET['type'] ?? '', $allowed_types) ? $_GET['type'] : 'pdf';
@@ -517,18 +531,14 @@ function exportEvaluationForm($evaluation_id, $academic_year, $semester) {
             </div>
 
             <!-- Form Metadata -->
-            <div class="bg-blue-800 text-white p-2 text-xs mb-4">
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <div><strong>Form Code No.</strong> : FM-DPM-SMCC-CMI-02</div>
-                        <div><strong>Issue Status</strong> : 02</div>
-                    </div>
-                    <div>
-                        <div><strong>Revision No.</strong> : 01</div>
-                        <div><strong>Date Effective</strong> : 21 September 2023</div>
-                        <div><strong>Approved By</strong> : President</div>
-                    </div>
-                </div>
+            <div style="border: 1.5px solid #1a237e; border-radius: 4px; max-width: 340px; overflow: hidden; margin-bottom: 16px;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr><td style="background: #1a237e; color: #fff; font-weight: bold; width: 40%; padding: 4px 10px; font-size: 10px; border: none;">Form Code No.</td><td style="padding: 4px 10px; font-size: 10px; border: none;">: <?php echo $_fs['form_code_no']; ?></td></tr>
+                    <tr><td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 10px; border: none;">Issue Status</td><td style="padding: 4px 10px; font-size: 10px; border: none;">: <?php echo $_fs['issue_status']; ?></td></tr>
+                    <tr><td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 10px; border: none;">Revision No.</td><td style="padding: 4px 10px; font-size: 10px; border: none;">: <?php echo $_fs['revision_no']; ?></td></tr>
+                    <tr><td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 10px; border: none;">Date Effective</td><td style="padding: 4px 10px; font-size: 10px; border: none;">: <?php echo $_fs['date_effective']; ?></td></tr>
+                    <tr><td style="background: #1a237e; color: #fff; font-weight: bold; padding: 4px 10px; font-size: 10px; border: none;">Approved By</td><td style="padding: 4px 10px; font-size: 10px; border: none;">: <?php echo $_fs['approved_by']; ?></td></tr>
+                </table>
             </div>
 
             <!-- Footer -->
