@@ -389,6 +389,7 @@ try {
             width: 100%;
             border-collapse: collapse;
             margin-top: 8px;
+            border: 1px solid #000;
         }
         .plan-table th {
             background: #fff;
