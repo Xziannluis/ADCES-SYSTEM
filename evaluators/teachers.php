@@ -16,9 +16,10 @@ $db = $database->getConnection();
 
 $teacher = new Teacher($db);
 
-// Clear schedules that are more than 24 hours past their scheduled time
+// Clear schedules that are more than 7 days past their scheduled time
+// (previously 24 hours — too aggressive, caused schedules to disappear)
 try {
-    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 7 DAY");
 } catch (Exception $e) {
     error_log('Error clearing expired schedules: ' . $e->getMessage());
 }
