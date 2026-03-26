@@ -1,6 +1,9 @@
 <?php
 session_start();
 
+// --- Auto-start AI service if not running ---
+require_once __DIR__ . '/includes/ai_autostart.php';
+
 // Redirect to login if not authenticated, otherwise to appropriate dashboard
     if(isset($_SESSION['user_id']) && isset($_SESSION['role'])) {
     	$role = $_SESSION['role'];

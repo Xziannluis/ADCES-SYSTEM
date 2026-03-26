@@ -63,6 +63,30 @@ class AIController {
                 }
             }
             
+            // Analyze PEAC: Teacher Actions (only if in focus or no focus set)
+            if (!$hasFocus || in_array('teacher_actions', $focusArr)) {
+                $taAnalysis = $this->analyzeTeacherActions($evaluation['details']['teacher_actions'] ?? []);
+                if ($taAnalysis['needs_improvement']) {
+                    $recommendations[] = [
+                        'area' => 'Teacher Actions',
+                        'suggestion' => $taAnalysis['suggestion'],
+                        'priority' => $taAnalysis['priority']
+                    ];
+                }
+            }
+            
+            // Analyze PEAC: Student Learning Actions (only if in focus or no focus set)
+            if (!$hasFocus || in_array('student_learning_actions', $focusArr)) {
+                $slaAnalysis = $this->analyzeStudentLearningActions($evaluation['details']['student_learning_actions'] ?? []);
+                if ($slaAnalysis['needs_improvement']) {
+                    $recommendations[] = [
+                        'area' => 'Student Learning Actions',
+                        'suggestion' => $slaAnalysis['suggestion'],
+                        'priority' => $slaAnalysis['priority']
+                    ];
+                }
+            }
+            
             // Overall recommendation
             $overallAnalysis = $this->analyzeOverall($evaluation['overall_avg']);
             if ($overallAnalysis['needs_improvement']) {
@@ -101,15 +125,19 @@ class AIController {
         $detailsStmt->execute();
         $details = $detailsStmt->fetchAll(PDO::FETCH_ASSOC);
         
-        // Organize details by category
+        // Organize details by category (ISO + PEAC)
         $organizedDetails = [
             'communications' => [],
             'management' => [],
-            'assessment' => []
+            'assessment' => [],
+            'teacher_actions' => [],
+            'student_learning_actions' => []
         ];
         
         foreach ($details as $detail) {
-            $organizedDetails[$detail['category']][] = $detail;
+            if (isset($organizedDetails[$detail['category']])) {
+                $organizedDetails[$detail['category']][] = $detail;
+            }
         }
         
         $evaluation['details'] = $organizedDetails;
@@ -169,6 +197,46 @@ class AIController {
             return [
                 'needs_improvement' => true,
                 'suggestion' => 'Diversify assessment methods to include more project-based and practical evaluations that align with different learning styles.',
+                'priority' => 'medium'
+            ];
+        }
+        
+        return ['needs_improvement' => false];
+    }
+    
+    private function analyzeTeacherActions($teacherActions) {
+        $avgScore = $this->calculateAverageScore($teacherActions);
+        
+        if ($avgScore < 1.5) {
+            return [
+                'needs_improvement' => true,
+                'suggestion' => 'Focus on communicating clearer expectations of student performance aligned with unit standards. Utilize varied learning materials and assessment strategies to improve student achievement.',
+                'priority' => 'high'
+            ];
+        } elseif ($avgScore < 2.5) {
+            return [
+                'needs_improvement' => true,
+                'suggestion' => 'Continue developing classroom management techniques and providing more targeted feedback. Consider using more varied assessment methods during class discussions to monitor student learning.',
+                'priority' => 'medium'
+            ];
+        }
+        
+        return ['needs_improvement' => false];
+    }
+    
+    private function analyzeStudentLearningActions($studentActions) {
+        $avgScore = $this->calculateAverageScore($studentActions);
+        
+        if ($avgScore < 1.5) {
+            return [
+                'needs_improvement' => true,
+                'suggestion' => 'Implement strategies to increase student engagement and active participation. Encourage students to ask questions, relate learning to real-world situations, and integrate 21st century skills.',
+                'priority' => 'high'
+            ];
+        } elseif ($avgScore < 2.5) {
+            return [
+                'needs_improvement' => true,
+                'suggestion' => 'Enhance activities that encourage students to explain their ideas and connect learning with the school\'s PVMGO. Provide more opportunities for students to demonstrate achievement of unit standards.',
                 'priority' => 'medium'
             ];
         }

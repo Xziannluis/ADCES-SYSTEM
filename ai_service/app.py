@@ -146,6 +146,9 @@ DOMAIN_ALIASES = {
     "assessment": "Assessment & feedback practices",
     "assessment_feedback": "Assessment & feedback practices",
     "feedback": "Assessment & feedback practices",
+    # PEAC form categories
+    "teacher_actions": "Teacher actions & instructional practice",
+    "student_learning_actions": "Student learning actions & engagement",
 }
 
 # Keywords matching seed evaluation_comment text for each domain — used to
@@ -168,6 +171,19 @@ DOMAIN_QUERY_KEYWORDS: Dict[str, str] = {
         "formative assessment data and instruction, assessment alignment with competencies, "
         "rubrics and criteria, normative assessments before grading, "
         "feedback practices for student growth"
+    ),
+    # PEAC form domains
+    "Teacher actions & instructional practice": (
+        "lesson structure and delivery, content explanation and accuracy, "
+        "instructional strategies and pedagogy, questioning and discussion, "
+        "classroom management and discipline, use of teaching resources"
+    ),
+    "Student learning actions & engagement": (
+        "student participation and involvement, collaborative learning and group work, "
+        "critical thinking and problem solving, student responses and interaction, "
+        "self-directed learning, application of concepts, "
+        "student engagement and attentiveness, learning outcomes demonstration, "
+        "peer learning and support"
     ),
 }
 
@@ -243,6 +259,20 @@ _DOMAIN_FILTER_KEYWORDS: Dict[str, List[str]] = {
         "formative check", "content check",
         "learner mastery", "checks for understanding",
     ],
+    "teacher_actions": [
+        "lesson structure", "content explanation", "instructional strateg",
+        "pedagogy", "questioning and discussion", "classroom management",
+        "discipline", "teaching resources", "lesson delivery",
+        "teacher demonstration", "instructional practice",
+        "teacher facilitation", "teacher guidance",
+    ],
+    "student_learning_actions": [
+        "student participation", "collaborative learning", "group work",
+        "critical thinking", "problem solving", "student response",
+        "self-directed", "application of concepts", "student engagement",
+        "peer learning", "learner involvement", "student interaction",
+        "learning demonstration", "student attentiveness",
+    ],
 }
 
 
@@ -254,6 +284,198 @@ def _count_domain_keyword_matches(text: str, domain: str) -> int:
         if kw.lower() in lower:
             count += 1
     return count
+
+
+def _indicator_rating_map(comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build a list of {criterion_text, rating, domain} from flattened comments.
+    Used to check if retrieved templates contradict actual ratings."""
+    indicators = []
+    for item in comments:
+        criterion = _normalize_whitespace(item.get("criterion_text") or "")
+        rating = float(item.get("rating") or 0)
+        if criterion and rating > 0:
+            indicators.append({
+                "criterion_text": criterion,
+                "criterion_words": set(re.findall(r'[a-z]{4,}', criterion.lower())),
+                "rating": rating,
+                "domain": item.get("domain", ""),
+            })
+    return indicators
+
+
+def _template_contradicts_ratings(
+    template_text: str,
+    indicators: List[Dict[str, Any]],
+    field_name: str,
+    max_scale: float = 5.0,
+) -> bool:
+    """Check if a retrieved template contradicts the actual indicator ratings.
+    For improvements/recommendations: reject templates whose topic matches a HIGH-rated indicator.
+    For strengths: reject templates whose topic matches a LOW-rated indicator."""
+    if not indicators or not template_text:
+        return False
+    text_words = set(re.findall(r'[a-z]{4,}', template_text.lower()))
+    if not text_words:
+        return False
+
+    # Thresholds depend on scale
+    if max_scale <= 4.0:
+        high_threshold = 3.5  # PEAC: 4 out of 4 is clearly high
+        low_threshold = 1.5
+    else:
+        high_threshold = 4.0  # ISO: 4+ out of 5 is high
+        low_threshold = 2.5
+
+    best_overlap = 0.0
+    best_rating = 0.0
+    for ind in indicators:
+        crit_words = ind["criterion_words"]
+        if not crit_words:
+            continue
+        overlap = len(text_words & crit_words) / len(crit_words)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_rating = ind["rating"]
+
+    # Only apply contradiction check when there's meaningful overlap
+    if best_overlap < 0.25:
+        return False
+
+    if field_name in ("areas_for_improvement", "recommendations"):
+        # Template matches a high-rated indicator -> contradiction
+        return best_rating >= high_threshold
+    elif field_name == "strengths":
+        # Template matches a low-rated indicator -> contradiction
+        return best_rating <= low_threshold
+    return False
+
+
+def _filter_by_rating_relevance(
+    items: List[Dict[str, Any]],
+    comments: List[Dict[str, Any]],
+    field_name: str,
+    max_scale: float = 5.0,
+) -> List[Dict[str, Any]]:
+    """Filter retrieved templates that contradict actual indicator ratings.
+    Falls back to original list if filtering removes everything."""
+    indicators = _indicator_rating_map(comments)
+    if not indicators:
+        return items
+    filtered = [
+        item for item in items
+        if not _template_contradicts_ratings(
+            item.get("feedback_text") or item.get("text") or "",
+            indicators,
+            field_name,
+            max_scale,
+        )
+    ]
+    return filtered if filtered else items
+
+
+def _find_critical_indicators(
+    comments: List[Dict[str, Any]],
+    field_name: str,
+    max_scale: float = 5.0,
+) -> List[Dict[str, Any]]:
+    """Find indicators that stand out as clearly highest or lowest rated.
+    For strengths: indicators with the max rating.
+    For improvements/recommendations: indicators with the min rating.
+    Only returns indicators that are clearly separated from the median."""
+    rated = [
+        c for c in comments
+        if c.get("criterion_text") and float(c.get("rating") or 0) > 0
+    ]
+    if not rated:
+        return []
+
+    ratings = [float(c.get("rating") or 0) for c in rated]
+    if not ratings:
+        return []
+
+    if field_name == "strengths":
+        target_rating = max(ratings)
+        median_rating = sorted(ratings)[len(ratings) // 2]
+        # Only consider it "critical" if the top rating is above the median
+        if target_rating <= median_rating:
+            return []
+        critical = [c for c in rated if float(c.get("rating") or 0) == target_rating]
+    else:
+        target_rating = min(ratings)
+        median_rating = sorted(ratings)[len(ratings) // 2]
+        # Only consider it "critical" if the bottom rating is below the median
+        if target_rating >= median_rating:
+            return []
+        critical = [c for c in rated if float(c.get("rating") or 0) == target_rating]
+
+    return critical
+
+
+def _ensure_critical_indicator_mentioned(
+    options: List[str],
+    comments: List[Dict[str, Any]],
+    field_name: str,
+    max_scale: float = 5.0,
+) -> List[str]:
+    """Ensure at least one option explicitly mentions the most critical indicator.
+    If no option does, replace the last option with a criterion-specific one."""
+    critical = _find_critical_indicators(comments, field_name, max_scale)
+    if not critical or not options:
+        return options
+
+    # Pick the single most critical item (lowest/highest rated)
+    target = critical[0]
+    criterion = _normalize_whitespace(target.get("criterion_text") or "")
+    rating = float(target.get("rating") or 0)
+    if not criterion:
+        return options
+
+    # Convert criterion text to a readable phrase
+    phrase = _natural_criterion_reference(criterion)
+    if not phrase:
+        return options
+
+    # Check if any option already mentions this indicator's key words
+    # Exclude common words that appear in almost every PEAC/ISO template
+    _COMMON_INDICATOR_WORDS = {
+        "students", "student", "teacher", "unit", "standards", "competencies",
+        "learning", "lesson", "class", "classroom", "instruction", "instructional",
+        "performance", "practice", "teaching", "actions", "towards", "achieve",
+        "achieving", "achievement", "support", "effective", "effectively",
+    }
+    phrase_words = set(re.findall(r'[a-z]{4,}', phrase.lower())) - _COMMON_INDICATOR_WORDS
+    if not phrase_words:
+        return options  # Phrase is all common words, can't meaningfully check
+
+    for opt in options:
+        opt_words = set(re.findall(r'[a-z]{4,}', opt.lower())) - _COMMON_INDICATOR_WORDS
+        if phrase_words and opt_words and len(phrase_words & opt_words) / len(phrase_words) > 0.35:
+            return options  # Already covered
+
+    # Build a targeted replacement for the last option
+    if field_name == "strengths":
+        replacement = (
+            f"A clear strength in the lesson was {phrase}. "
+            f"This indicator received one of the highest ratings, reflecting consistent and effective practice. "
+            f"Sustaining this approach will continue to enhance the overall quality of instruction."
+        )
+    elif field_name == "areas_for_improvement":
+        replacement = (
+            f"An area that would benefit from focused attention is {phrase}. "
+            f"This indicator received a rating of {rating:.0f}, making it the area with the most room for growth. "
+            f"Consistent attention to this aspect can lead to noticeable improvement in upcoming lessons."
+        )
+    else:  # recommendations
+        replacement = (
+            f"It is recommended to prioritize {phrase} in future lessons, "
+            f"as this indicator received one of the lowest ratings at {rating:.0f}. "
+            f"Small, consistently applied changes in this area tend to produce more lasting improvement than broad adjustments."
+        )
+
+    # Replace the last option (least relevant) with the targeted one
+    result = list(options)
+    result[-1] = _normalize_sentence(replacement)
+    return result
 
 
 def _filter_retrieved_by_focus(items: List[Dict[str, Any]], focus: List[str]) -> List[Dict[str, Any]]:
@@ -310,8 +532,20 @@ def _stable_seed(*parts: Any) -> int:
     return int(digest[:16], 16)
 
 
-def _score_band(x: float) -> str:
+def _score_band(x: float, max_scale: float = 5.0) -> str:
     x = float(x or 0)
+    if max_scale <= 4.0:
+        # PEAC 0-4 scale thresholds
+        if x >= 3.5:
+            return "Excellent"
+        if x >= 2.5:
+            return "Very satisfactory"
+        if x >= 1.5:
+            return "Satisfactory"
+        if x >= 0.5:
+            return "Below satisfactory"
+        return "Needs improvement"
+    # ISO 1-5 scale thresholds
     if x >= 4.6:
         return "Excellent"
     if x >= 3.6:
@@ -324,7 +558,7 @@ def _score_band(x: float) -> str:
 
 
 class RatingItem(BaseModel):
-    rating: float = Field(..., ge=1, le=5)
+    rating: float = Field(..., ge=0, le=5)
     comment: Optional[str] = ""
     criterion_text: Optional[str] = ""
 
@@ -488,16 +722,29 @@ def _parse_evaluation_focus(req: GenerateRequest) -> List[str]:
     return []
 
 
+def _is_peac_request(req: GenerateRequest) -> bool:
+    ratings_keys = set((req.ratings or {}).keys())
+    return "teacher_actions" in ratings_keys or "student_learning_actions" in ratings_keys
+
+
 def _domain_scores(req: GenerateRequest) -> Dict[str, float]:
     avg = req.averages
     focus = _parse_evaluation_focus(req)
+    is_peac = _is_peac_request(req)
     scores: Dict[str, float] = {}
-    if not focus or "communications" in focus:
-        scores["Communication & instruction"] = float(avg.communications or 0)
-    if not focus or "management" in focus:
-        scores["Classroom management & learning environment"] = float(avg.management or 0)
-    if not focus or "assessment" in focus:
-        scores["Assessment & feedback practices"] = float(avg.assessment or 0)
+    if is_peac:
+        # PEAC form: averages arrive as communications=teacher_actions avg, management=student_learning_actions avg
+        if not focus or "teacher_actions" in focus:
+            scores["Teacher actions & instructional practice"] = float(avg.communications or 0)
+        if not focus or "student_learning_actions" in focus:
+            scores["Student learning actions & engagement"] = float(avg.management or 0)
+    else:
+        if not focus or "communications" in focus:
+            scores["Communication & instruction"] = float(avg.communications or 0)
+        if not focus or "management" in focus:
+            scores["Classroom management & learning environment"] = float(avg.management or 0)
+        if not focus or "assessment" in focus:
+            scores["Assessment & feedback practices"] = float(avg.assessment or 0)
     return scores
 
 
@@ -505,7 +752,8 @@ def _evaluation_signature(req: GenerateRequest) -> Dict[str, Any]:
     domains = _domain_scores(req)
     weakest = min(domains, key=domains.get) if domains else "Instructional practice"
     strongest = max(domains, key=domains.get) if domains else "Professional practice"
-    overall_level = _score_band(req.averages.overall)
+    max_scale = 4.0 if _is_peac_request(req) else 5.0
+    overall_level = _score_band(req.averages.overall, max_scale)
     return {
         "teacher": _normalize_whitespace(req.faculty_name or "") or "The teacher",
         "subject": _normalize_whitespace(req.subject_observed or "") or "the lesson",
@@ -516,6 +764,7 @@ def _evaluation_signature(req: GenerateRequest) -> Dict[str, Any]:
         "weakest": weakest,
         "strongest": strongest,
         "domains": domains,
+        "max_scale": max_scale,
     }
 
 
@@ -666,8 +915,12 @@ def _natural_criterion_reference(text: str) -> str:
     if not cleaned:
         return ""
 
+    # Strip subject prefixes (ISO: "The teacher", PEAC: "The teacher"/"The students")
     cleaned = re.sub(r"^[Tt]he teacher\s+", "", cleaned)
+    cleaned = re.sub(r"^[Tt]he students?\s+", "students ", cleaned)
+    # Convert leading verbs to gerund form
     cleaned = re.sub(r"^[Uu]ses\s+", "using ", cleaned)
+    cleaned = re.sub(r"^[Uu]tilizes\s+", "utilizing ", cleaned)
     cleaned = re.sub(r"^[Dd]emonstrates\s+", "demonstrating ", cleaned)
     cleaned = re.sub(r"^[Ee]xplains\s+", "explaining ", cleaned)
     cleaned = re.sub(r"^[Aa]dapts\s+", "adapting ", cleaned)
@@ -677,6 +930,11 @@ def _natural_criterion_reference(text: str) -> str:
     cleaned = re.sub(r"^[Ii]ntegrates\s+", "integrating ", cleaned)
     cleaned = re.sub(r"^[Ff]ocuses\s+", "focusing on ", cleaned)
     cleaned = re.sub(r"^[Rr]ecall and connects\s+", "connecting ", cleaned)
+    cleaned = re.sub(r"^[Cc]ommunicates\s+", "communicating ", cleaned)
+    cleaned = re.sub(r"^[Mm]onitors\s+", "monitoring ", cleaned)
+    cleaned = re.sub(r"^[Pp]rovides\s+", "providing ", cleaned)
+    cleaned = re.sub(r"^[Mm]anages\s+", "managing ", cleaned)
+    cleaned = re.sub(r"^[Pp]rocesses\s+", "processing ", cleaned)
     cleaned = re.sub(r"^[Tt]he\s+", "", cleaned)
     cleaned = cleaned.strip(" .;,:-")
     return _normalize_clause_fragment(cleaned)
@@ -1139,42 +1397,51 @@ def _relevant_comments_for_field(req: GenerateRequest, comments: List[Dict[str, 
 
 
 def _compose_field_query(req: GenerateRequest, comments: List[Dict[str, Any]], field_name: str) -> str:
-    """Build a clean, domain-focused SBERT query for semantic matching against seed evaluation_comments."""
+    """Build a clean, domain-focused SBERT query for semantic matching against seed evaluation_comments.
+    Prioritizes the actual highest/lowest-rated indicator criterion texts for better retrieval accuracy."""
     sig = _evaluation_signature(req)
     relevant = _relevant_comments_for_field(req, comments, field_name)
     strongest = sig["strongest"]
     weakest = sig["weakest"]
 
-    # Pick the target domain and get matching keywords
+    # Pick the target domain
     if field_name == "strengths":
-        domain = strongest
+        target_domain = strongest
     else:
-        domain = weakest
+        target_domain = weakest
 
-    keywords = DOMAIN_QUERY_KEYWORDS.get(domain, domain.lower())
-
+    # Get the actual highest/lowest-rated indicator criterion texts
+    domain_items = [c for c in comments if c.get("criterion_text") and c.get("domain") == target_domain]
     if field_name == "strengths":
-        prompt = f"Teacher demonstrates strong {keywords}."
-    elif field_name == "areas_for_improvement":
-        prompt = f"Teacher needs improvement in {keywords}."
+        domain_items.sort(key=lambda c: (-float(c.get("rating") or 0), c.get("index", 0)))
     else:
-        prompt = f"Recommendations to improve {keywords}."
+        domain_items.sort(key=lambda c: (float(c.get("rating") or 0), c.get("index", 0)))
 
-    # Add evaluator comments as evidence for better matching
+    # Build query from the actual top/bottom-rated criterion texts first
+    top_criteria = [c["criterion_text"] for c in domain_items[:2] if c.get("criterion_text")]
+
+    if top_criteria:
+        # Use actual indicator texts as the primary query — much more accurate than generic keywords
+        if field_name == "strengths":
+            prompt = f"Teacher demonstrates strong performance in: {'; '.join(top_criteria)}."
+        elif field_name == "areas_for_improvement":
+            prompt = f"Teacher needs improvement in: {'; '.join(top_criteria)}."
+        else:
+            prompt = f"Recommendations to improve: {'; '.join(top_criteria)}."
+    else:
+        # Fall back to generic domain keywords only when no criterion texts exist
+        keywords = DOMAIN_QUERY_KEYWORDS.get(target_domain, target_domain.lower())
+        if field_name == "strengths":
+            prompt = f"Teacher demonstrates strong {keywords}."
+        elif field_name == "areas_for_improvement":
+            prompt = f"Teacher needs improvement in {keywords}."
+        else:
+            prompt = f"Recommendations to improve {keywords}."
+
+    # Add evaluator-typed comments as additional evidence
     if relevant:
         evidence = "; ".join(relevant[:3])
         prompt = f"{prompt} {evidence}"
-    else:
-        # Use criterion texts with low ratings as evidence when no typed comments exist
-        target_domain = strongest if field_name == "strengths" else weakest
-        domain_items = [c for c in comments if c.get("criterion_text") and c.get("domain") == target_domain]
-        if field_name == "strengths":
-            domain_items.sort(key=lambda c: -float(c.get("rating") or 0))
-        else:
-            domain_items.sort(key=lambda c: float(c.get("rating") or 0))
-        criterion_evidence = [c["criterion_text"] for c in domain_items[:3] if c.get("criterion_text")]
-        if criterion_evidence:
-            prompt = f"{prompt} {'; '.join(criterion_evidence)}"
 
     return _normalize_whitespace(prompt)
 
@@ -1912,6 +2179,17 @@ def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]
         }
     print(f"[RETRIEVE_FORM] post_filter_counts={{fn: len(items) for fn, items in field_specific_matches.items()}}")
 
+    # Filter out templates that contradict actual indicator ratings
+    all_comments = _flatten_comments(req)
+    max_scale = 4.0 if _is_peac_request(req) else 5.0
+    pre_contradiction_counts = {fn: len(items) for fn, items in field_specific_matches.items()}
+    field_specific_matches = {
+        field_name: _filter_by_rating_relevance(items, all_comments, field_name, max_scale)
+        for field_name, items in field_specific_matches.items()
+    }
+    post_contradiction_counts = {fn: len(items) for fn, items in field_specific_matches.items()}
+    print(f"[RETRIEVE_FORM] rating_contradiction_filter: before={pre_contradiction_counts} after={post_contradiction_counts}")
+
     feedback = {
         field_name: _paraphrase_dataset_feedback(
             req,
@@ -2058,6 +2336,11 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
     if focus:
         retrieved = _filter_retrieved_by_focus(retrieved, focus)
 
+    # Filter out templates that contradict actual indicator ratings
+    all_comments = _flatten_comments(req)
+    max_scale = 4.0 if _is_peac_request(req) else 5.0
+    retrieved = _filter_by_rating_relevance(retrieved, all_comments, field_name, max_scale)
+
     rng = random.Random(
         _stable_seed(
             "options",
@@ -2096,24 +2379,74 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
     unseen = [c for c in candidates if _comment_fingerprint(c) not in previously_shown]
     pool = unseen if unseen else candidates
 
+    # Build indicator signatures from the request's ratings for indicator-level dedup
+    all_comments = _flatten_comments(req)
+    _INDICATOR_STOP_WORDS = {
+        "students", "student", "teacher", "unit", "standards", "competencies",
+        "learning", "lesson", "class", "classroom", "instruction", "instructional",
+        "performance", "practice", "teaching", "actions", "towards", "achieve",
+        "achieving", "achievement", "support", "effective", "effectively",
+        "with", "that", "this", "from", "their", "they", "able", "during",
+    }
+    indicator_sigs = []
+    for c in all_comments:
+        crit = _normalize_whitespace(c.get("criterion_text") or "")
+        if crit:
+            sig_words = set(re.findall(r'[a-z]{4,}', crit.lower())) - _INDICATOR_STOP_WORDS
+            indicator_sigs.append(sig_words)
+
+    def _best_indicator_match(text_str: str) -> int:
+        """Return the index of the indicator whose criterion best matches this text, or -1."""
+        text_w = set(re.findall(r'[a-z]{4,}', text_str.lower())) - _INDICATOR_STOP_WORDS
+        best_idx, best_score = -1, 0.0
+        for i, sig_w in enumerate(indicator_sigs):
+            if not sig_w:
+                continue
+            score = len(text_w & sig_w) / len(sig_w)
+            if score > best_score and score > 0.25:
+                best_score = score
+                best_idx = i
+        return best_idx
+
     # Pick 3 distinct options, skipping near-duplicates via word overlap
     out: List[str] = []
+    out_indicator_matches: List[int] = []  # Track which indicator each option matches
     for text in pool:
         if len(out) >= 3:
             break
         # Check word overlap with already-selected options
         text_words = set(re.sub(r"[^a-z0-9\s]", "", text.lower()).split())
+        # Also check first-sentence overlap to catch paraphrases with different tails
+        text_first_sent = _split_sentences(text)[0] if _split_sentences(text) else text
+        text_first_words = set(re.sub(r"[^a-z0-9\s]", "", text_first_sent.lower()).split())
         is_too_similar = False
         for existing in out:
             existing_words = set(re.sub(r"[^a-z0-9\s]", "", existing.lower()).split())
             if not text_words or not existing_words:
                 continue
+            # Full-text overlap check
             overlap = len(text_words & existing_words) / max(len(text_words), len(existing_words))
-            if overlap > 0.7:
+            if overlap > 0.55:
                 is_too_similar = True
                 break
+            # First-sentence overlap check (catches same opening with different elaboration)
+            existing_first_sent = _split_sentences(existing)[0] if _split_sentences(existing) else existing
+            existing_first_words = set(re.sub(r"[^a-z0-9\s]", "", existing_first_sent.lower()).split())
+            if text_first_words and existing_first_words:
+                first_overlap = len(text_first_words & existing_first_words) / max(len(text_first_words), len(existing_first_words))
+                if first_overlap > 0.6:
+                    is_too_similar = True
+                    break
+
+        # Indicator-level dedup: skip if this text matches the same indicator as an existing option
+        if not is_too_similar and indicator_sigs:
+            text_indicator = _best_indicator_match(text)
+            if text_indicator >= 0 and text_indicator in out_indicator_matches:
+                is_too_similar = True
+
         if not is_too_similar:
             out.append(text)
+            out_indicator_matches.append(_best_indicator_match(text))
 
     # When no retrieved seeds match (e.g. all filtered by focus),
     # generate 3 variations from base_text which is criterion-based
@@ -2153,9 +2486,30 @@ def generate(req: GenerateRequest):
     sig = _evaluation_signature(req)
 
     # Build 3 options per field — the primary text becomes the first option
+    max_scale = 4.0 if _is_peac_request(req) else 5.0
     strengths_options = _make_three_options(strengths_primary, req, "strengths", field_retrieved.get("strengths", []))
     improvement_options = _make_three_options(improvement_primary, req, "areas_for_improvement", field_retrieved.get("areas_for_improvement", []))
     recommendation_options = _make_three_options(recommendations_primary, req, "recommendations", field_retrieved.get("recommendations", []))
+
+    # Ensure at least one option in each category targets the most critical indicator
+    strengths_options = _ensure_critical_indicator_mentioned(strengths_options, comments, "strengths", max_scale)
+    improvement_options = _ensure_critical_indicator_mentioned(improvement_options, comments, "areas_for_improvement", max_scale)
+    recommendation_options = _ensure_critical_indicator_mentioned(recommendation_options, comments, "recommendations", max_scale)
+
+    # Final dedup safety net: remove any exact duplicate options
+    def _final_dedup(options: List[str]) -> List[str]:
+        seen = set()
+        result = []
+        for opt in options:
+            fp = _comment_fingerprint(opt)
+            if fp not in seen:
+                seen.add(fp)
+                result.append(opt)
+        return result
+
+    strengths_options = _final_dedup(strengths_options)
+    improvement_options = _final_dedup(improvement_options)
+    recommendation_options = _final_dedup(recommendation_options)
 
     # Use first option as the primary output
     strengths = strengths_options[0] if strengths_options else strengths_primary
@@ -2190,7 +2544,7 @@ def generate(req: GenerateRequest):
             "model": os.getenv("SBERT_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
             "generator": "mysql-only-retrieval",
             "overall_band": sig["overall_level"],
-            "domain_bands": {domain: _band_label(score) for domain, score in sig["domains"].items()},
+            "domain_bands": {domain: _score_band(score, sig.get("max_scale", 5.0)).lower() for domain, score in sig["domains"].items()},
             "feedback_queries": {
                 "strengths": _normalize_whitespace(req.strengths or "") or _summarize_comments_for_field(req, comments, "strengths"),
                 "areas_for_improvement": _normalize_whitespace(req.improvement_areas or "") or _summarize_comments_for_field(req, comments, "areas_for_improvement"),

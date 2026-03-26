@@ -7,10 +7,128 @@ if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_co
 
 require_once '../config/database.php';
 require_once '../models/Teacher.php';
+require_once '../includes/mailer.php';
 
 $database = new Database();
 $db = $database->getConnection();
 $teacher = new Teacher($db);
+
+// Clear expired schedules (24h past)
+try {
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
+} catch (Exception $e) {
+    error_log('Error clearing expired schedules: ' . $e->getMessage());
+}
+
+$success_message = '';
+$error_message = '';
+
+// Handle schedule setting
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_schedule') {
+    $teacher_id = $_POST['teacher_id'] ?? ($_POST['reschedule_teacher_id'] ?? '');
+    $schedule = $_POST['evaluation_schedule'] ?? '';
+    $room = $_POST['evaluation_room'] ?? '';
+    $focus = isset($_POST['evaluation_focus']) && is_array($_POST['evaluation_focus']) ? $_POST['evaluation_focus'] : [];
+    $subject_area = trim($_POST['evaluation_subject_area'] ?? '');
+    $subject = trim($_POST['evaluation_subject'] ?? '');
+    $post_semester = trim($_POST['evaluation_semester'] ?? '');
+    $post_semester = in_array($post_semester, ['1st', '2nd']) ? $post_semester : null;
+    $form_type = trim($_POST['evaluation_form_type'] ?? 'iso');
+    $form_type = in_array($form_type, ['iso', 'peac', 'both']) ? $form_type : 'iso';
+
+    $valid_focus = ['communications', 'management', 'assessment', 'teacher_actions', 'student_learning_actions'];
+    $focus = array_values(array_intersect($focus, $valid_focus));
+    $focus_json = !empty($focus) ? json_encode($focus) : null;
+
+    if (!empty($teacher_id)) {
+        $query = "UPDATE teachers SET evaluation_schedule = :schedule, evaluation_room = :room, evaluation_focus = :focus, evaluation_subject_area = :subject_area, evaluation_subject = :subject, evaluation_semester = :semester, evaluation_form_type = :form_type, updated_at = NOW() WHERE id = :id";
+        $stmt = $db->prepare($query);
+        $stmt->bindParam(':schedule', $schedule);
+        $stmt->bindParam(':room', $room);
+        $stmt->bindParam(':focus', $focus_json);
+        $stmt->bindParam(':subject_area', $subject_area);
+        $stmt->bindParam(':subject', $subject);
+        $stmt->bindParam(':semester', $post_semester);
+        $stmt->bindParam(':form_type', $form_type);
+        $stmt->bindParam(':id', $teacher_id);
+
+        if ($stmt->execute()) {
+            // Always clear signatures when schedule is set/updated — teacher must re-sign
+            $del_sem = $_POST['filter_semester'] ?? ($_GET['semester'] ?? '1st');
+            $del_ay = $_POST['filter_academic_year'] ?? ($_GET['academic_year'] ?? '');
+            if (!empty($del_ay)) {
+                $del_ack = $db->prepare("DELETE FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem");
+                $del_ack->execute([':tid' => $teacher_id, ':ay' => $del_ay, ':sem' => $del_sem]);
+            }
+            $is_reschedule = !empty($_POST['is_reschedule']);
+            $success_message = $is_reschedule ? "Schedule updated. Teacher will need to sign again." : "Evaluation schedule set successfully!";
+            notifyScheduleParticipants($db, $teacher_id, $schedule, $room, $_SESSION['user_id'], $_SESSION['name'] ?? 'Evaluator');
+        } else {
+            $error_message = "Failed to set schedule.";
+        }
+    } else {
+        $error_message = "Teacher ID is required.";
+    }
+
+    // Redirect to avoid resubmission, preserving filters
+    $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
+    if ($success_message) $_SESSION['success'] = $success_message;
+    if ($error_message) $_SESSION['error'] = $error_message;
+    header("Location: $redirect");
+    exit();
+}
+
+// Flash messages from redirect
+if (!empty($_SESSION['success'])) { $success_message = $_SESSION['success']; unset($_SESSION['success']); }
+if (!empty($_SESSION['error'])) { $error_message = $_SESSION['error']; unset($_SESSION['error']); }
+
+// View toggle: "plan" (default) or "my_observation"
+$view_mode = $_GET['view'] ?? 'plan';
+$my_teacher_id = $_SESSION['teacher_id'] ?? null;
+$has_teacher_record = !empty($my_teacher_id);
+
+// "My Observation" data
+$my_teacher_data = null;
+$my_evaluations = [];
+$my_acknowledgment = null;
+$my_observer_names = [];
+
+if ($view_mode === 'my_observation' && $has_teacher_record) {
+    // Handle signature POST — per-schedule signing
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'sign_plan') {
+        $ack_semester = trim($_POST['semester'] ?? '');
+        $ack_academic_year = trim($_POST['academic_year'] ?? '');
+        $signed_items = $_POST['signed_items'] ?? [];
+        if (in_array($ack_semester, ['1st', '2nd']) && !empty($ack_academic_year) && is_array($signed_items) && count($signed_items) > 0) {
+            $sig_data = $_POST['signature_data'] ?? null;
+            if ($sig_data && !preg_match('/^data:image\/png;base64,[A-Za-z0-9+\/=]+$/', $sig_data)) {
+                $sig_data = null;
+            }
+            $signed_count = 0;
+            foreach ($signed_items as $item) {
+                $eval_id = ($item === 'upcoming') ? null : (int)$item;
+                // Check if already signed
+                if ($eval_id === null) {
+                    $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL LIMIT 1");
+                    $check->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester]);
+                } else {
+                    $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id = :eid LIMIT 1");
+                    $check->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id]);
+                }
+                if ($check->rowCount() === 0) {
+                    $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :eid, NOW(), :sig)");
+                    $ins->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id, ':sig' => $sig_data]);
+                    $signed_count++;
+                }
+            }
+            if ($signed_count > 0) {
+                $success_message = "Successfully signed {$signed_count} observation schedule(s).";
+            } else {
+                $success_message = "Selected schedules were already signed.";
+            }
+        }
+    }
+}
 
 // AJAX handler: update evaluation subject_area or observation_room
 if (isset($_GET['ajax_update']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -63,6 +181,70 @@ if (empty($academic_year)) {
         $academic_year = $year . '-' . ($year + 1);
     } else {
         $academic_year = ($year - 1) . '-' . $year;
+    }
+}
+
+// Load "My Observation" data if in that view mode
+if ($view_mode === 'my_observation' && $has_teacher_record) {
+    $focus_labels_my = [
+        'communications' => 'Communication Competence',
+        'management' => 'Management and Presentation of the Lesson',
+        'assessment' => "Assessment of Students' Learning",
+        'teacher_actions' => 'Teacher Actions',
+        'student_learning_actions' => 'Student Learning Actions'
+    ];
+
+    $t_stmt = $db->prepare("SELECT t.* FROM teachers t WHERE t.id = :id LIMIT 1");
+    $t_stmt->execute([':id' => $my_teacher_id]);
+    $my_teacher_data = $t_stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($my_teacher_data) {
+        // Get evaluators assigned to this teacher
+        $obs_query = "SELECT DISTINCT u.name, u.role FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :tid ORDER BY u.name";
+        $obs_stmt = $db->prepare($obs_query);
+        $obs_stmt->execute([':tid' => $my_teacher_id]);
+        $my_observers = $obs_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Get the dean/principal of this teacher's department
+        $dean_query = "SELECT name, role FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY FIELD(role,'dean','principal') LIMIT 1";
+        $dean_stmt = $db->prepare($dean_query);
+        $dean_stmt->execute([':dept' => $my_teacher_data['department']]);
+        $dean_info_my = $dean_stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($dean_info_my) $my_observer_names[] = $dean_info_my['name'];
+        foreach ($my_observers as $obs) {
+            if (!in_array($obs['name'], $my_observer_names)) $my_observer_names[] = $obs['name'];
+        }
+
+        // Get completed evaluations
+        $eval_query = "SELECT e.id, e.observation_date, e.status, e.subject_area, e.subject_observed, e.observation_room, e.semester, e.evaluation_focus, u.name as evaluator_name
+                       FROM evaluations e JOIN users u ON e.evaluator_id = u.id
+                       WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem
+                       ORDER BY e.observation_date ASC";
+        $eval_stmt = $db->prepare($eval_query);
+        $eval_stmt->execute([':tid' => $my_teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
+        $my_evaluations = $eval_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Check acknowledgment/signature status — per-item
+        $ack_stmt = $db->prepare("SELECT * FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem");
+        $ack_stmt->execute([':tid' => $my_teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
+        $my_acknowledgments_raw = $ack_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Build lookup: evaluation_id => acknowledgment row (null key for upcoming)
+        $my_signed_map = [];
+        foreach ($my_acknowledgments_raw as $ack) {
+            $key = $ack['evaluation_id'] === null ? 'upcoming' : (int)$ack['evaluation_id'];
+            $my_signed_map[$key] = $ack;
+        }
+        // Legacy: if there's an old blanket signature (no evaluation_id column value), treat as all signed
+        $my_has_legacy_signature = false;
+        if (count($my_acknowledgments_raw) === 1 && $my_acknowledgments_raw[0]['evaluation_id'] === null && count($my_evaluations) > 0) {
+            // Could be a legacy blanket signature — check if it was created before this feature
+            $my_has_legacy_signature = true;
+            $my_acknowledgment = $my_acknowledgments_raw[0]; // keep for legacy display
+        } else {
+            $my_acknowledgment = null;
+        }
     }
 }
 
@@ -186,7 +368,9 @@ $teachers_list = [];
 $focus_labels = [
     'communications' => 'Communication Competence',
     'management' => 'Management and Presentation of the Lesson',
-    'assessment' => "Assessment of Students' Learning"
+    'assessment' => "Assessment of Students' Learning",
+    'teacher_actions' => 'Teacher Actions',
+    'student_learning_actions' => 'Student Learning Actions'
 ];
 
 // Process teachers with evaluations
@@ -308,6 +492,57 @@ try {
 } catch (Exception $e) {
     // ignore
 }
+
+// Get all assigned teachers who don't have a schedule yet (for "Set Schedule" button)
+$schedulable_teachers = [];
+if ($is_coordinator) {
+    $st_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
+                        t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
+                        t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                        t.evaluation_form_type
+                 FROM teachers t
+                 JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id
+                 WHERE t.status = 'active'
+                   AND (t.user_id IS NULL OR t.user_id != :current_user_id)
+                 ORDER BY t.name ASC";
+    $st_stmt = $db->prepare($st_query);
+    $st_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    $st_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
+} else {
+    $st_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
+                        t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
+                        t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                        t.evaluation_form_type
+                 FROM teachers t
+                 LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                 WHERE (t.department = :department OR td.department = :department2)
+                   AND t.status = 'active'
+                   AND (t.user_id IS NULL OR t.user_id != :current_user_id)
+                 ORDER BY t.name ASC";
+    $st_stmt = $db->prepare($st_query);
+    $st_stmt->bindParam(':department', $raw_department);
+    $st_stmt->bindParam(':department2', $raw_department);
+    $st_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
+}
+$st_stmt->execute();
+$schedulable_teachers = $st_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Unscheduled teachers are only shown in the modal dropdown, not in the table
+
+// Load acknowledgment data for current semester/year
+$ack_map = [];
+try {
+    $ack_query = "SELECT teacher_id, acknowledged_at, signature FROM observation_plan_acknowledgments WHERE academic_year = :ay AND semester = :sem";
+    $ack_stmt = $db->prepare($ack_query);
+    $ack_stmt->bindParam(':ay', $academic_year);
+    $ack_stmt->bindParam(':sem', $semester);
+    $ack_stmt->execute();
+    while ($ack_row = $ack_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $ack_map[$ack_row['teacher_id']] = $ack_row;
+    }
+} catch (Exception $e) {
+    // table may not exist yet
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -419,11 +654,13 @@ try {
         <div class="dashboard-topbar">
             <h2>Saint Michael College of Caraga</h2>
             <div class="ms-auto d-flex align-items-center gap-3">
+                <?php if ($view_mode === 'plan'): ?>
                 <div class="no-print">
                     <button class="btn btn-primary" onclick="openPrintPlan()">
                         <i class="fas fa-print me-2"></i>Print
                     </button>
                 </div>
+                <?php endif; ?>
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
                         <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $_SESSION['role'])); ?>)
@@ -442,7 +679,16 @@ try {
             <div class="card mb-3 no-print">
                 <div class="card-body">
                     <form method="GET" class="row g-2 align-items-end">
-                        <div class="col-md-3">
+                        <?php if ($has_teacher_record): ?>
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">View</label>
+                            <select name="view" class="form-select">
+                                <option value="plan" <?php echo $view_mode === 'plan' ? 'selected' : ''; ?>>Observation Plan</option>
+                                <option value="my_observation" <?php echo $view_mode === 'my_observation' ? 'selected' : ''; ?>>My Observation</option>
+                            </select>
+                        </div>
+                        <?php endif; ?>
+                        <div class="col-md-<?php echo $has_teacher_record ? '2' : '3'; ?>">
                             <label class="form-label fw-bold">Academic Year</label>
                             <select name="academic_year" class="form-select">
                                 <option value="2025-2026" <?php echo $academic_year === '2025-2026' ? 'selected' : ''; ?>>2025-2026</option>
@@ -477,6 +723,192 @@ try {
             </div>
 
             <!-- Printable Observation Plan -->
+            <?php if ($success_message): ?>
+            <div class="alert alert-success alert-dismissible fade show no-print" role="alert">
+                <i class="fas fa-check-circle me-2"></i><?php echo htmlspecialchars($success_message); ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            <?php endif; ?>
+            <?php if ($error_message): ?>
+            <div class="alert alert-danger alert-dismissible fade show no-print" role="alert">
+                <i class="fas fa-exclamation-circle me-2"></i><?php echo htmlspecialchars($error_message); ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            <?php endif; ?>
+
+            <?php if ($view_mode === 'my_observation' && $has_teacher_record): ?>
+            <!-- My Observation View -->
+            <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
+                <div class="text-center mb-3">
+                    <h5 class="fw-bold">My Observation Plan</h5>
+                    <p class="text-muted mb-1"><?php echo htmlspecialchars($department_display); ?></p>
+                    <p class="text-muted"><?php echo htmlspecialchars($semester); ?> Semester SY <?php echo htmlspecialchars($academic_year); ?></p>
+                </div>
+
+                <?php
+                $my_has_schedule = !empty($my_teacher_data['evaluation_schedule']);
+                $my_has_matching = $my_has_schedule && ($my_teacher_data['evaluation_semester'] === $semester || empty($my_teacher_data['evaluation_semester']));
+
+                // Apply month filter to My Observation view
+                $my_show_upcoming = $my_has_matching;
+                if (!empty($filter_month) && $my_has_matching) {
+                    $sched_month = (int)date('n', strtotime($my_teacher_data['evaluation_schedule']));
+                    if ($sched_month != (int)$filter_month) $my_show_upcoming = false;
+                }
+                if (!empty($filter_month)) {
+                    $my_evaluations = array_filter($my_evaluations, function($ev) use ($filter_month) {
+                        $date = $ev['observation_date'] ?? '';
+                        if (empty($date)) return false;
+                        return (int)date('n', strtotime($date)) == (int)$filter_month;
+                    });
+                    $my_evaluations = array_values($my_evaluations);
+                }
+
+                // Count unsigned items
+                $unsigned_count = 0;
+                if ($my_show_upcoming && !isset($my_signed_map['upcoming'])) $unsigned_count++;
+                foreach ($my_evaluations as $ev) {
+                    if (!isset($my_signed_map[(int)$ev['id']])) $unsigned_count++;
+                }
+                $all_signed = ($unsigned_count === 0) && ($my_show_upcoming || count($my_evaluations) > 0);
+                ?>
+
+                <?php if ($my_show_upcoming || count($my_evaluations) > 0): ?>
+
+                <div class="mb-3 d-flex justify-content-end no-print">
+                    <button class="btn btn-primary" id="myObsSignToggleBtn" disabled onclick="toggleMyObsSignPanel()">
+                        <i class="fas fa-signature me-1"></i>Sign <span id="myObsSignBadge" class="badge bg-light text-dark ms-1" style="display:none;">0</span>
+                    </button>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="plan-table" style="width:100%; border-collapse:collapse;">
+                        <thead>
+                            <tr>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:50px;">
+                                    <i class="fas fa-check-square"></i>
+                                </th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Semester</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Focus of Observation</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Date</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Day &amp; Time</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Subject Area</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Subject</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Room</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Observers</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if ($my_show_upcoming): ?>
+                            <?php
+                                $focus_raw = $my_teacher_data['evaluation_focus'] ?? '';
+                                $focus_arr = [];
+                                if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
+                                $focus_display = array_map(function($f) use ($focus_labels_my) { return $focus_labels_my[$f] ?? $f; }, $focus_arr);
+                                $ts = strtotime($my_teacher_data['evaluation_schedule']);
+                                $upcoming_signed = isset($my_signed_map['upcoming']);
+                            ?>
+                            <tr>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
+                                    <?php if ($upcoming_signed): ?>
+                                        <i class="fas fa-check-circle text-success" title="Signed on <?php echo date('M d, Y g:i A', strtotime($my_signed_map['upcoming']['acknowledged_at'])); ?>"></i>
+                                    <?php else: ?>
+                                        <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" style="width:20px;height:20px;">
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($my_teacher_data['evaluation_semester'] ?? '') . ' Semester'); ?></td>
+                                <td style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo date('M d, Y', $ts); ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo date('D', $ts) . '<br>' . date('g:i A', $ts); ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_subject_area'] ?? ''); ?></td>
+                                <td style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_subject'] ?? ''); ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_room'] ?? ''); ?></td>
+                                <td style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $my_observer_names)); ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
+                                    <?php if ($upcoming_signed): ?>
+                                        <span class="badge bg-success">Signed</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-info">Upcoming</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                            <?php endif; ?>
+
+                            <?php foreach ($my_evaluations as $ev): ?>
+                            <?php
+                                $ev_focus_raw = $ev['evaluation_focus'] ?? '';
+                                $ev_focus_arr = [];
+                                if ($ev_focus_raw) { try { $ev_focus_arr = json_decode($ev_focus_raw, true) ?: []; } catch (\Exception $e) {} }
+                                $ev_focus_display = array_map(function($f) use ($focus_labels_my) { return $focus_labels_my[$f] ?? $f; }, $ev_focus_arr);
+                                $ev_signed = isset($my_signed_map[(int)$ev['id']]);
+                            ?>
+                            <tr>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
+                                    <?php if ($ev_signed): ?>
+                                        <i class="fas fa-check-circle text-success" title="Signed on <?php echo date('M d, Y g:i A', strtotime($my_signed_map[(int)$ev['id']]['acknowledged_at'])); ?>"></i>
+                                    <?php else: ?>
+                                        <input type="checkbox" class="form-check-input sign-item-check" value="<?php echo (int)$ev['id']; ?>" style="width:20px;height:20px;">
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($ev['semester'] ?? '') . ' Semester'); ?></td>
+                                <td style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $ev_focus_display)); ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo !empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''; ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo !empty($ev['observation_date']) ? date('D', strtotime($ev['observation_date'])) : ''; ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($ev['subject_area'] ?? ''); ?></td>
+                                <td style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($ev['subject_observed'] ?? ''); ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($ev['observation_room'] ?? ''); ?></td>
+                                <td style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars($ev['evaluator_name'] ?? ''); ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
+                                    <?php if ($ev_signed): ?>
+                                        <span class="badge bg-success">Signed</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-warning text-dark">Completed</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Teacher Signature Section (hidden until Sign button clicked) -->
+                <?php if ($unsigned_count > 0): ?>
+                <div id="myObsSignPanel" style="display:none;" class="mt-3">
+                    <div style="background:#fff3e0;border:2px solid #ff9800;border-radius:10px;padding:20px;text-align:center;">
+                        <h5>Draw Your Signature</h5>
+                        <p class="text-muted small" id="myObsSelectedCount">0 schedule(s) selected</p>
+                        <div class="mb-3" style="display:inline-block;">
+                            <canvas id="myObsSigCanvas" width="400" height="150" style="border: 2px solid #333; border-radius: 8px; background: #fff; cursor: crosshair;"></canvas>
+                            <div class="mt-1">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearMyObsSig()"><i class="fas fa-eraser me-1"></i>Clear</button>
+                            </div>
+                        </div>
+                        <form method="POST" id="myObsSigForm">
+                            <input type="hidden" name="action" value="sign_plan">
+                            <input type="hidden" name="semester" value="<?php echo htmlspecialchars($semester); ?>">
+                            <input type="hidden" name="academic_year" value="<?php echo htmlspecialchars($academic_year); ?>">
+                            <input type="hidden" name="signature_data" id="myObsSigData">
+                            <div id="myObsSignedItemsContainer"></div>
+                            <button type="submit" class="btn btn-success btn-lg" id="myObsSignBtn" onclick="return submitMyObsSig();">
+                                <i class="fas fa-signature me-2"></i>Sign Selected Schedules
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                <?php endif; ?>
+
+                <?php else: ?>
+                <div class="text-center py-5">
+                    <i class="fas fa-clipboard fa-3x text-muted mb-3"></i>
+                    <h5 class="text-muted">No Observation Plan Yet</h5>
+                    <p class="text-muted">No observation schedule has been set for you this <?php echo htmlspecialchars($semester); ?> Semester.</p>
+                </div>
+                <?php endif; ?>
+            </div>
+
+            <?php else: ?>
+            <!-- Normal Observation Plan View -->
             <div style="background: white; padding: 30px;">
                 
                 <!-- Print Header -->
@@ -514,29 +946,45 @@ try {
                     <p class="no-print"><?php echo htmlspecialchars($semester); ?> Semester SY <?php echo htmlspecialchars($academic_year); ?></p>
                 </div>
 
+                <!-- Action Buttons -->
+                <div class="mb-3 d-flex justify-content-end align-items-center gap-2 no-print">
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="openScheduleModal()">
+                        <i class="fas fa-calendar-plus me-1"></i>Set Schedule
+                    </button>
+                    <button class="btn btn-primary" id="bulkRescheduleBtn" disabled onclick="openRescheduleModal()">
+                        <i class="fas fa-redo me-1"></i>Reschedule
+                    </button>
+                </div>
+
                 <!-- Observation Plan Table -->
                 <div class="table-responsive">
                     <table class="plan-table">
                         <thead>
                             <tr>
-                                <th style="width: 12%;">Teacher</th>
-                                <th style="width: 7%;">Semester</th>
-                                <th style="width: 13%;">Focus of Observation</th>
-                                <th style="width: 9%;">Date</th>
-                                <th style="width: 8%;">Day &amp; Time</th>
-                                <th style="width: 9%;">Subject Area</th>
-                                <th style="width: 10%;">Subject</th>
-                                <th style="width: 6%;">Room</th>
-                                <th style="width: 13%;">Name of Observers</th>
-                                <th style="width: 6%;">Teacher's Signature</th>
+                                <th style="width: 3%;" class="no-print"><input type="checkbox" class="form-check-input" id="checkAllTeachers" title="Select All"></th>
+                                <th style="width: 11%;">Teacher</th>
+                                <th style="width: 6%;">Semester</th>
+                                <th style="width: 12%;">Focus of Observation</th>
+                                <th style="width: 8%;">Date</th>
+                                <th style="width: 7%;">Day &amp; Time</th>
+                                <th style="width: 8%;">Subject Area</th>
+                                <th style="width: 9%;">Subject</th>
+                                <th style="width: 5%;">Room</th>
+                                <th style="width: 10%;">Name of Observers</th>
+                                <th style="width: 6%;">Teacher Signature</th>
                                 <th style="width: 7%; min-width: 60px;">Remarks</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php if (count($teachers_list) > 0): ?>
                                 <?php $counter = 1; foreach ($teachers_list as $t): ?>
-                                <?php $tid = $t['id']; $sd = $schedule_data[$tid] ?? []; ?>
+                                <?php $tid = $t['id']; $sd = $schedule_data[$tid] ?? []; $has_schedule = !empty($t['evaluation_schedule']); $is_done = $eval_data[$tid]['done'] ?? false; ?>
                                 <tr>
+                                    <td class="text-center no-print">
+                                        <?php if ($has_schedule && !$is_done): ?>
+                                            <input type="checkbox" class="form-check-input reschedule-check" value="<?php echo (int)$tid; ?>" style="width:18px;height:18px;">
+                                        <?php endif; ?>
+                                    </td>
                                     <td><?php echo $counter++ . '. ' . htmlspecialchars($t['name']); ?></td>
                                     <td class="text-center"><?php $sem = $sd['semester'] ?? ''; echo htmlspecialchars($sem ? $sem . ' Semester' : ''); ?></td>
                                     <td style="font-size:0.8rem;"><?php echo htmlspecialchars($sd['focus'] ?? ''); ?></td>
@@ -577,21 +1025,35 @@ try {
                                         echo htmlspecialchars(implode(', ', $observers));
                                         ?>
                                     </td>
-                                    <td class="text-center">
+                                    <td class="text-center" style="font-size:0.8rem;">
                                         <?php 
-                                        $faculty_sig = $eval_data[$tid]['faculty_signature'] ?? '';
-                                        if (!empty($faculty_sig)): ?>
-                                            <img src="<?php echo $faculty_sig; ?>" alt="Teacher Signature" style="max-height: 40px; max-width: 80px;">
+                                        $ack = $ack_map[$tid] ?? null;
+                                        if ($ack && !empty($ack['signature'])): ?>
+                                            <img src="<?php echo $ack['signature']; ?>" alt="Signature" style="max-height: 30px; max-width: 60px;" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
+                                        <?php elseif ($ack): ?>
+                                            <span class="text-success" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
+                                                <i class="fas fa-check-circle"></i>
+                                            </span>
+                                        <?php elseif ($has_schedule): ?>
+                                            <span class="text-warning"><i class="fas fa-clock"></i> Pending</span>
                                         <?php endif; ?>
                                     </td>
                                     <td class="text-center" style="font-size:0.8rem;">
-                                        <?php echo ($eval_data[$tid]['done'] ?? false) ? '<em>done</em>' : ''; ?>
+                                        <?php 
+                                        if ($eval_data[$tid]['done'] ?? false) {
+                                            echo '<span class="badge bg-success">Done</span>';
+                                        } elseif ($has_schedule) {
+                                            echo '<span class="badge bg-info">Scheduled</span>';
+                                        } else {
+                                            echo '<span class="badge bg-secondary">Not set</span>';
+                                        }
+                                        ?>
                                     </td>
                                 </tr>
                                 <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="11" class="text-center text-muted">No active teachers found in this department.</td>
+                                    <td colspan="12" class="text-center text-muted">No teachers found for this semester.</td>
                                 </tr>
                             <?php endif; ?>
                         </tbody>
@@ -608,18 +1070,431 @@ try {
                     <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
                 </div>
             </div>
+            <?php endif; ?>
 
         </div>
         </div>
     </div>
 
     <?php include '../includes/footer.php'; ?>
+
+    <!-- Schedule Modal -->
+    <div class="modal fade" id="scheduleModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title"><i class="fas fa-calendar-check me-2"></i>Set Evaluation Schedule</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <form method="POST">
+                    <div class="modal-body">
+                        <input type="hidden" name="action" value="update_schedule">
+                        <input type="hidden" name="is_reschedule" id="modal_is_reschedule" value="">
+                        <input type="hidden" name="reschedule_teacher_id" id="reschedule_teacher_id" value="">
+                        <!-- Hidden mirror inputs for disabled fields in reschedule mode -->
+                        <input type="hidden" id="mirror_semester" name="" value="">
+                        <input type="hidden" id="mirror_form_type" name="" value="">
+                        <div id="mirror_focus_container"></div>
+                        <input type="hidden" name="filter_semester" value="<?php echo htmlspecialchars($semester); ?>">
+                        <input type="hidden" name="filter_academic_year" value="<?php echo htmlspecialchars($academic_year); ?>">
+
+
+                        <!-- Teacher Selection -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Select Teacher <span class="text-danger">*</span></label>
+                            <select class="form-select" name="teacher_id" id="schedule_teacher_id" required>
+                                <option value="">-- Choose a teacher --</option>
+                                <?php foreach ($schedulable_teachers as $st): ?>
+                                <option value="<?php echo (int)$st['id']; ?>"
+                                    data-schedule="<?php echo htmlspecialchars($st['evaluation_schedule'] ?? '', ENT_QUOTES); ?>"
+                                    data-room="<?php echo htmlspecialchars($st['evaluation_room'] ?? '', ENT_QUOTES); ?>"
+                                    data-focus="<?php echo htmlspecialchars($st['evaluation_focus'] ?? '', ENT_QUOTES); ?>"
+                                    data-subject-area="<?php echo htmlspecialchars($st['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>"
+                                    data-subject="<?php echo htmlspecialchars($st['evaluation_subject'] ?? '', ENT_QUOTES); ?>"
+                                    data-semester="<?php echo htmlspecialchars($st['evaluation_semester'] ?? '', ENT_QUOTES); ?>"
+                                    data-form-type="<?php echo htmlspecialchars($st['evaluation_form_type'] ?? 'iso', ENT_QUOTES); ?>"
+                                    <?php echo !empty($st['evaluation_schedule']) ? 'data-has-schedule="1"' : ''; ?>
+                                >
+                                    <?php echo htmlspecialchars($st['name']); ?>
+                                    <?php echo !empty($st['evaluation_schedule']) ? ' (Scheduled)' : ''; ?>
+                                </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="alert alert-info py-2">
+                            <i class="fas fa-circle-info me-1"></i>
+                            <strong>This schedule unlocks evaluation access.</strong>
+                            <small class="d-block">All fields are required so evaluators can plan the observation.</small>
+                        </div>
+
+                        <!-- Form Type -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Evaluation Form <span class="text-danger">*</span></label>
+                            <div class="d-flex gap-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="evaluation_form_type" value="iso" id="modal_form_iso" required checked>
+                                    <label class="form-check-label" for="modal_form_iso"><i class="fas fa-file-alt me-1"></i>ISO</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="evaluation_form_type" value="peac" id="modal_form_peac">
+                                    <label class="form-check-label" for="modal_form_peac"><i class="fas fa-clipboard-check me-1"></i>PEAC</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="evaluation_form_type" value="both" id="modal_form_both">
+                                    <label class="form-check-label" for="modal_form_both"><i class="fas fa-layer-group me-1"></i>Both</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Semester -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Semester <span class="text-danger">*</span></label>
+                            <div class="d-flex gap-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="evaluation_semester" value="1st" id="modal_semester_1st" required>
+                                    <label class="form-check-label" for="modal_semester_1st">1st Semester</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="evaluation_semester" value="2nd" id="modal_semester_2nd">
+                                    <label class="form-check-label" for="modal_semester_2nd">2nd Semester</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Focus of Observation (ISO) -->
+                        <div class="mb-3" id="focusObservationGroup">
+                            <label class="form-label fw-bold">Focus of Observation <span class="text-danger">*</span></label>
+                            <div class="d-flex flex-column gap-1" id="isoFocusCheckboxes">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="communications" id="modal_focus_communications">
+                                    <label class="form-check-label" for="modal_focus_communications">Communication Competence</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="management" id="modal_focus_management">
+                                    <label class="form-check-label" for="modal_focus_management">Management and Presentation of the Lesson</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="assessment" id="modal_focus_assessment">
+                                    <label class="form-check-label" for="modal_focus_assessment">Assessment of Students' Learning</label>
+                                </div>
+                            </div>
+                            <div class="d-flex flex-column gap-1" id="peacFocusCheckboxes" style="display:none;">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="teacher_actions" id="modal_focus_teacher_actions">
+                                    <label class="form-check-label" for="modal_focus_teacher_actions">Teacher Actions</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="student_learning_actions" id="modal_focus_student_learning">
+                                    <label class="form-check-label" for="modal_focus_student_learning">Student Learning Actions</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Date & Time -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Evaluation Schedule <span class="text-danger">*</span></label>
+                            <input type="hidden" id="modal_evaluation_schedule" name="evaluation_schedule" required>
+                            <div class="row g-2">
+                                <div class="col-7">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-calendar"></i></span>
+                                        <input type="date" class="form-control" id="modal_evaluation_date" required>
+                                    </div>
+                                </div>
+                                <div class="col-5">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fas fa-clock"></i></span>
+                                        <input type="time" class="form-control" id="modal_evaluation_time" step="900" required>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Subject Area & Subject -->
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Subject Area <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="modal_evaluation_subject_area" name="evaluation_subject_area" required placeholder="e.g., Social Sciences, English">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Subject <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="modal_evaluation_subject" name="evaluation_subject" required placeholder="e.g., GEC 9 – Ethics">
+                            </div>
+                        </div>
+
+                        <!-- Room -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Classroom/Room <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="modal_evaluation_room" name="evaluation_room" required placeholder="e.g., Room 101, Laboratory B">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary"><i class="fas fa-save me-1"></i>Save Schedule</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
 <script>
 function openPrintPlan() {
     const params = new URLSearchParams(window.location.search);
     params.set('auto_print', '1');
     window.open('observation_plan_print.php?' + params.toString(), '_blank');
 }
+
+function setModalRescheduleMode(enabled) {
+    // Hidden flag
+    document.getElementById('modal_is_reschedule').value = enabled ? '1' : '';
+    document.getElementById('reschedule_teacher_id').value = enabled ? (document.getElementById('schedule_teacher_id').value || '') : '';
+
+    // Update modal title and submit button
+    var titleEl = document.querySelector('#scheduleModal .modal-title');
+    var submitBtn = document.querySelector('#scheduleModal .modal-footer .btn-primary');
+    if (enabled) {
+        if (titleEl) titleEl.innerHTML = '<i class="fas fa-redo me-2"></i>Reschedule Evaluation';
+        if (submitBtn) submitBtn.innerHTML = '<i class="fas fa-save me-1"></i>Save New Schedule';
+    } else {
+        if (titleEl) titleEl.innerHTML = '<i class="fas fa-calendar-check me-2"></i>Set Evaluation Schedule';
+        if (submitBtn) submitBtn.innerHTML = '<i class="fas fa-save me-1"></i>Save Schedule';
+    }
+}
+
+function openScheduleModal() {
+    // Reset form
+    const select = document.getElementById('schedule_teacher_id');
+    select.value = '';
+    document.getElementById('modal_evaluation_room').value = '';
+    document.getElementById('modal_evaluation_subject_area').value = '';
+    document.getElementById('modal_evaluation_subject').value = '';
+    document.getElementById('modal_evaluation_date').value = '';
+    document.getElementById('modal_evaluation_time').value = '';
+    document.getElementById('modal_focus_communications').checked = false;
+    document.getElementById('modal_focus_management').checked = false;
+    document.getElementById('modal_focus_assessment').checked = false;
+    document.getElementById('modal_focus_teacher_actions').checked = false;
+    document.getElementById('modal_focus_student_learning').checked = false;
+    document.getElementById('modal_form_iso').checked = true;
+    document.getElementById('modal_form_peac').checked = false;
+    document.getElementById('modal_form_both').checked = false;
+    // Show ISO focus by default
+    document.getElementById('focusObservationGroup').style.display = '';
+    document.getElementById('isoFocusCheckboxes').style.display = '';
+    document.getElementById('peacFocusCheckboxes').style.display = 'none';
+
+    // Default semester to filter
+    const filterSem = '<?php echo htmlspecialchars($semester, ENT_QUOTES); ?>';
+    document.getElementById('modal_semester_1st').checked = (filterSem === '1st');
+    document.getElementById('modal_semester_2nd').checked = (filterSem === '2nd');
+
+    // Ensure normal mode (not reschedule)
+    setModalRescheduleMode(false);
+}
+
+function openRescheduleModal() {
+    var checked = document.querySelectorAll('.reschedule-check:checked');
+    if (checked.length === 0) return;
+    if (checked.length > 1) {
+        alert('Please select only one teacher at a time to reschedule.');
+        return;
+    }
+    var teacherId = checked[0].value;
+    var select = document.getElementById('schedule_teacher_id');
+
+    // Select the teacher in dropdown
+    select.value = teacherId;
+
+    // Trigger change to fill in existing data
+    select.dispatchEvent(new Event('change'));
+
+    // Set reschedule mode (read-only except date/time)
+    setModalRescheduleMode(true);
+
+    // Clear only date/time so evaluator must pick new ones
+    document.getElementById('modal_evaluation_date').value = '';
+    document.getElementById('modal_evaluation_time').value = '';
+
+    // Open the modal
+    var modal = new bootstrap.Modal(document.getElementById('scheduleModal'));
+    modal.show();
+}
+
+// When a teacher is selected from dropdown, populate their existing schedule data
+document.addEventListener('DOMContentLoaded', () => {
+    const select = document.getElementById('schedule_teacher_id');
+    if (select) {
+        select.addEventListener('change', function() {
+            const opt = this.options[this.selectedIndex];
+            if (!opt || !opt.value) return;
+
+            const schedule = opt.dataset.schedule || '';
+            const room = opt.dataset.room || '';
+            const focus = opt.dataset.focus || '';
+            const subjectArea = opt.dataset.subjectArea || '';
+            const subject = opt.dataset.subject || '';
+            const semester = opt.dataset.semester || '';
+            const formType = opt.dataset.formType || 'iso';
+
+            document.getElementById('modal_evaluation_room').value = room;
+            document.getElementById('modal_evaluation_subject_area').value = subjectArea;
+            document.getElementById('modal_evaluation_subject').value = subject;
+
+            // Set form type radio
+            document.getElementById('modal_form_iso').checked = (formType === 'iso');
+            document.getElementById('modal_form_peac').checked = (formType === 'peac');
+            document.getElementById('modal_form_both').checked = (formType === 'both');
+            // Toggle focus visibility
+            document.getElementById('focusObservationGroup').style.display = '';
+            document.getElementById('isoFocusCheckboxes').style.display = (formType === 'peac') ? 'none' : '';
+            document.getElementById('peacFocusCheckboxes').style.display = (formType === 'iso') ? 'none' : (formType === 'peac' || formType === 'both') ? '' : 'none';
+
+            // Set semester radio
+            if (semester) {
+                document.getElementById('modal_semester_1st').checked = (semester === '1st');
+                document.getElementById('modal_semester_2nd').checked = (semester === '2nd');
+            }
+
+            // Set focus checkboxes
+            document.getElementById('modal_focus_communications').checked = false;
+            document.getElementById('modal_focus_management').checked = false;
+            document.getElementById('modal_focus_assessment').checked = false;
+            document.getElementById('modal_focus_teacher_actions').checked = false;
+            document.getElementById('modal_focus_student_learning').checked = false;
+            if (focus) {
+                try {
+                    const focusArr = JSON.parse(focus);
+                    if (Array.isArray(focusArr)) {
+                        focusArr.forEach(f => {
+                            const el = document.getElementById('modal_focus_' + f);
+                            if (el) el.checked = true;
+                        });
+                    }
+                } catch(e) {}
+            }
+
+            // Set date & time
+            const dateInput = document.getElementById('modal_evaluation_date');
+            const timeInput = document.getElementById('modal_evaluation_time');
+            if (schedule) {
+                const normalized = schedule.replace(' ', 'T');
+                const parsed = new Date(normalized);
+                if (!isNaN(parsed.getTime())) {
+                    dateInput.value = parsed.toISOString().slice(0, 10);
+                    timeInput.value = parsed.toTimeString().slice(0, 5);
+                } else if (normalized.includes('T')) {
+                    const parts = normalized.split('T');
+                    dateInput.value = parts[0] || '';
+                    timeInput.value = (parts[1] || '').slice(0, 5);
+                }
+            } else {
+                dateInput.value = '';
+                timeInput.value = '';
+            }
+        });
+    }
+});
+
+// Combine date + time into hidden field on submit
+document.addEventListener('DOMContentLoaded', () => {
+    // Toggle Focus of Observation based on form type selection
+    document.querySelectorAll('input[name="evaluation_form_type"]').forEach(radio => {
+        radio.addEventListener('change', function() {
+            const isoFocus = document.getElementById('isoFocusCheckboxes');
+            const peacFocus = document.getElementById('peacFocusCheckboxes');
+            const focusGroup = document.getElementById('focusObservationGroup');
+            focusGroup.style.display = '';
+            if (this.value === 'peac') {
+                isoFocus.style.display = 'none';
+                peacFocus.style.display = '';
+                // Uncheck ISO focus
+                document.getElementById('modal_focus_communications').checked = false;
+                document.getElementById('modal_focus_management').checked = false;
+                document.getElementById('modal_focus_assessment').checked = false;
+            } else if (this.value === 'iso') {
+                isoFocus.style.display = '';
+                peacFocus.style.display = 'none';
+                // Uncheck PEAC focus
+                document.getElementById('modal_focus_teacher_actions').checked = false;
+                document.getElementById('modal_focus_student_learning').checked = false;
+            } else {
+                // Both - show both sets
+                isoFocus.style.display = '';
+                peacFocus.style.display = '';
+            }
+        });
+    });
+
+    const scheduleForm = document.querySelector('#scheduleModal form');
+    if (scheduleForm) {
+        scheduleForm.addEventListener('submit', (e) => {
+            // Only require focus for ISO and Both
+            const selectedFormType = document.querySelector('input[name="evaluation_form_type"]:checked')?.value || 'iso';
+            const isoChecked = document.querySelectorAll('#isoFocusCheckboxes input[type="checkbox"]:checked');
+            const peacChecked = document.querySelectorAll('#peacFocusCheckboxes input[type="checkbox"]:checked');
+            if (selectedFormType === 'iso' && isoChecked.length === 0) {
+                e.preventDefault();
+                alert('Please select at least one Focus of Observation.');
+                return false;
+            }
+            if (selectedFormType === 'peac' && peacChecked.length === 0) {
+                e.preventDefault();
+                alert('Please select at least one Focus of Observation.');
+                return false;
+            }
+            if (selectedFormType === 'both' && isoChecked.length === 0 && peacChecked.length === 0) {
+                e.preventDefault();
+                alert('Please select at least one Focus of Observation.');
+                return false;
+            }
+            const dateVal = document.getElementById('modal_evaluation_date')?.value || '';
+            const timeVal = document.getElementById('modal_evaluation_time')?.value || '';
+            document.getElementById('modal_evaluation_schedule').value = (dateVal && timeVal) ? `${dateVal} ${timeVal}:00` : '';
+        });
+    }
+});
+
+// Reschedule checkboxes
+(function() {
+    var checkAll = document.getElementById('checkAllTeachers');
+    var rescheduleBtn = document.getElementById('bulkRescheduleBtn');
+    var countBadge = document.getElementById('rescheduleCount');
+
+    function updateRescheduleState() {
+        var checked = document.querySelectorAll('.reschedule-check:checked');
+        var count = checked.length;
+        if (rescheduleBtn) rescheduleBtn.disabled = (count === 0);
+        if (countBadge) {
+            countBadge.textContent = count;
+            countBadge.style.display = count > 0 ? 'inline' : 'none';
+        }
+    }
+
+    document.querySelectorAll('.reschedule-check').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            updateRescheduleState();
+            // Update "check all" state
+            if (checkAll) {
+                var total = document.querySelectorAll('.reschedule-check').length;
+                var checked = document.querySelectorAll('.reschedule-check:checked').length;
+                checkAll.checked = (total > 0 && checked === total);
+                checkAll.indeterminate = (checked > 0 && checked < total);
+            }
+        });
+    });
+
+    if (checkAll) {
+        checkAll.addEventListener('change', function() {
+            document.querySelectorAll('.reschedule-check').forEach(function(cb) {
+                cb.checked = checkAll.checked;
+            });
+            updateRescheduleState();
+        });
+    }
+})();
+
+
 
 // Inline edit: save on blur or Enter
 document.querySelectorAll('.inline-edit').forEach(input => {
@@ -643,6 +1518,113 @@ document.querySelectorAll('.inline-edit').forEach(input => {
     input.addEventListener('blur', save);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
 });
+
+// My Observation Signature Canvas + Checklist
+(function() {
+    var canvas = null;
+    var ctx = null;
+    var drawing = false;
+    var hasDrawn = false;
+    var countEl = null;
+    var container = null;
+    var canvasInited = false;
+    var toggleBtn = document.getElementById('myObsSignToggleBtn');
+    var badgeEl = document.getElementById('myObsSignBadge');
+    var panelEl = document.getElementById('myObsSignPanel');
+
+    window.toggleMyObsSignPanel = function() {
+        if (!panelEl) return;
+        if (panelEl.style.display === 'none') {
+            panelEl.style.display = '';
+            initCanvas();
+        } else {
+            panelEl.style.display = 'none';
+        }
+    };
+
+    function initCanvas() {
+        if (canvasInited) return;
+        canvas = document.getElementById('myObsSigCanvas');
+        if (!canvas) return;
+        canvasInited = true;
+        ctx = canvas.getContext('2d');
+        countEl = document.getElementById('myObsSelectedCount');
+        container = document.getElementById('myObsSignedItemsContainer');
+
+        canvas.addEventListener('mousedown', function(e) {
+            drawing = true; ctx.beginPath(); ctx.moveTo(e.offsetX, e.offsetY);
+        });
+        canvas.addEventListener('mousemove', function(e) {
+            if (!drawing) return; hasDrawn = true;
+            ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = '#000';
+            ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke();
+        });
+        canvas.addEventListener('mouseup', function() { drawing = false; });
+        canvas.addEventListener('mouseleave', function() { drawing = false; });
+        canvas.addEventListener('touchstart', function(e) {
+            e.preventDefault(); var rect = canvas.getBoundingClientRect(); var touch = e.touches[0];
+            drawing = true; ctx.beginPath(); ctx.moveTo(touch.clientX - rect.left, touch.clientY - rect.top);
+        });
+        canvas.addEventListener('touchmove', function(e) {
+            e.preventDefault(); if (!drawing) return; hasDrawn = true;
+            var rect = canvas.getBoundingClientRect(); var touch = e.touches[0];
+            ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = '#000';
+            ctx.lineTo(touch.clientX - rect.left, touch.clientY - rect.top); ctx.stroke();
+        });
+        canvas.addEventListener('touchend', function() { drawing = false; });
+        // Update hidden inputs now that container exists
+        updateMyObsCheckboxState();
+    }
+
+    function updateMyObsCheckboxState() {
+        var checks = document.querySelectorAll('.sign-item-check:checked');
+        var count = checks.length;
+        if (countEl) countEl.textContent = count + ' schedule(s) selected';
+        if (container) {
+            container.innerHTML = '';
+            checks.forEach(function(cb) {
+                var input = document.createElement('input');
+                input.type = 'hidden'; input.name = 'signed_items[]'; input.value = cb.value;
+                container.appendChild(input);
+            });
+        }
+        // Update top Sign button
+        if (toggleBtn) {
+            toggleBtn.disabled = (count === 0);
+            if (count > 0) {
+                badgeEl.textContent = count;
+                badgeEl.style.display = '';
+            } else {
+                badgeEl.style.display = 'none';
+                if (panelEl) panelEl.style.display = 'none';
+            }
+        }
+    }
+
+    document.querySelectorAll('.sign-item-check').forEach(function(cb) {
+        cb.addEventListener('change', updateMyObsCheckboxState);
+    });
+
+    window.clearMyObsSig = function() {
+        if (!canvas || !ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        hasDrawn = false;
+    };
+
+    window.submitMyObsSig = function() {
+        var checks = document.querySelectorAll('.sign-item-check:checked');
+        if (checks.length === 0) {
+            alert('Please select at least one schedule to sign.');
+            return false;
+        }
+        if (!hasDrawn) {
+            alert('Please draw your signature before submitting.');
+            return false;
+        }
+        document.getElementById('myObsSigData').value = canvas.toDataURL('image/png');
+        return true;
+    };
+})();
 </script>
 </body>
 </html>

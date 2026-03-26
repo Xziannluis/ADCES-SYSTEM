@@ -317,6 +317,7 @@ class EvaluationController {
         $others_requirements = isset($data['others_requirements']) ? $data['others_requirements'] : 0;
         $others_specify = $data['others_specify'] ?? '';
         $evaluation_focus = $data['evaluation_focus'] ?? null;
+        $evaluation_form_type = $data['evaluation_form_type'] ?? 'iso';
 
         // Fetch teacher's schedule details (room, subject_area) before they are cleared
         $observation_room = $data['observation_room'] ?? null;
@@ -337,11 +338,11 @@ class EvaluationController {
     $query = "INSERT INTO evaluations 
           (teacher_id, faculty_name, department, evaluator_id, academic_year, semester, 
                    subject_observed, observation_time, observation_date, 
-                   observation_type, observation_room, subject_area, evaluation_focus, seat_plan, course_syllabi, 
+                   observation_type, observation_room, subject_area, evaluation_focus, evaluation_form_type, seat_plan, course_syllabi, 
                    others_requirements, others_specify, status) 
           VALUES (:teacher_id, :faculty_name, :department, :evaluator_id, :academic_year, :semester, 
                           :subject_observed, :observation_time, :observation_date, 
-                          :observation_type, :observation_room, :subject_area, :evaluation_focus, :seat_plan, :course_syllabi, 
+                          :observation_type, :observation_room, :subject_area, :evaluation_focus, :evaluation_form_type, :seat_plan, :course_syllabi, 
               :others_requirements, :others_specify, 'completed')";
 
         $stmt = $this->db->prepare($query);
@@ -359,6 +360,7 @@ class EvaluationController {
         $stmt->bindValue(':observation_room', $observation_room);
         $stmt->bindValue(':subject_area', $subject_area);
         $stmt->bindValue(':evaluation_focus', $evaluation_focus);
+        $stmt->bindValue(':evaluation_form_type', $evaluation_form_type);
         $stmt->bindValue(':seat_plan', $seat_plan);
         $stmt->bindValue(':course_syllabi', $course_syllabi);
         $stmt->bindValue(':others_requirements', $others_requirements);
@@ -367,9 +369,19 @@ class EvaluationController {
         if ($stmt->execute()) {
             // clear any existing schedule for this teacher since evaluation has been completed
             if (!empty($teacher_id)) {
-                $clearStmt = $this->db->prepare("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, updated_at = NOW() WHERE id = :id");
-                $clearStmt->bindValue(':id', $teacher_id);
-                $clearStmt->execute();
+                // For "both" form type: only clear schedule after PEAC is done (ISO must be done first)
+                $teacherFormStmt = $this->db->prepare("SELECT evaluation_form_type FROM teachers WHERE id = :id LIMIT 1");
+                $teacherFormStmt->bindValue(':id', $teacher_id);
+                $teacherFormStmt->execute();
+                $teacherFormType = $teacherFormStmt->fetchColumn();
+
+                if ($teacherFormType === 'both' && $evaluation_form_type === 'iso') {
+                    // ISO part done, keep schedule so evaluator can still do PEAC
+                } else {
+                    $clearStmt = $this->db->prepare("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', updated_at = NOW() WHERE id = :id");
+                    $clearStmt->bindValue(':id', $teacher_id);
+                    $clearStmt->execute();
+                }
             }
             $lastId = $this->resolveInsertedEvaluationId($teacher_id, $evaluatorId);
             error_log("Evaluation create stmt executed. lastInsertId=" . var_export($lastId, true));
@@ -410,8 +422,13 @@ class EvaluationController {
         // 1) flat fields: communications0=5, communications_comment0=...
         // 2) nested fields: ratings[communications][0][rating]=5, ratings[communications][0][comment]=...
         // Normalize nested => flat so the loops below always work.
+        // ISO categories + PEAC categories
+        $allCategories = [
+            'communications' => 5, 'management' => 12, 'assessment' => 6,
+            'teacher_actions' => 6, 'student_learning_actions' => 9
+        ];
         if (isset($data['ratings']) && is_array($data['ratings'])) {
-            foreach (['communications' => 5, 'management' => 12, 'assessment' => 6] as $cat => $count) {
+            foreach ($allCategories as $cat => $count) {
                 if (!isset($data['ratings'][$cat]) || !is_array($data['ratings'][$cat])) continue;
                 for ($i = 0; $i < $count; $i++) {
                     if (!isset($data["{$cat}{$i}"]) && isset($data['ratings'][$cat][$i]['rating'])) {
@@ -426,6 +443,7 @@ class EvaluationController {
 
         $savedCount = 0;
 
+        // Save ISO criteria
         // Save communications criteria
         for ($i = 0; $i < 5; $i++) {
             if (isset($data["communications{$i}"])) {
@@ -446,6 +464,23 @@ class EvaluationController {
         for ($i = 0; $i < 6; $i++) {
             if (isset($data["assessment{$i}"])) {
                 $this->saveCriterion($evaluationId, 'assessment', $i, $data["assessment{$i}"], $data["assessment_comment{$i}"] ?? '');
+                $savedCount++;
+            }
+        }
+
+        // Save PEAC criteria
+        // Save teacher_actions criteria (6 items)
+        for ($i = 0; $i < 6; $i++) {
+            if (isset($data["teacher_actions{$i}"])) {
+                $this->saveCriterion($evaluationId, 'teacher_actions', $i, $data["teacher_actions{$i}"], $data["teacher_actions_comment{$i}"] ?? '');
+                $savedCount++;
+            }
+        }
+
+        // Save student_learning_actions criteria (9 items)
+        for ($i = 0; $i < 9; $i++) {
+            if (isset($data["student_learning_actions{$i}"])) {
+                $this->saveCriterion($evaluationId, 'student_learning_actions', $i, $data["student_learning_actions{$i}"], $data["student_learning_actions_comment{$i}"] ?? '');
                 $savedCount++;
             }
         }

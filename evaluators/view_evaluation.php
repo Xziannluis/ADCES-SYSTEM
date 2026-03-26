@@ -52,6 +52,12 @@ if (!$eval) {
     exit();
 }
 
+// If this is a PEAC evaluation, redirect to the PEAC view page
+if (($eval['evaluation_form_type'] ?? 'iso') === 'peac') {
+    header('Location: view_evaluation_peac.php?id=' . $evaluationId);
+    exit();
+}
+
 // Coordinators can only view their own evaluations within assigned programs
 if (in_array($_SESSION['role'] ?? '', ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
     if ((int)$eval['evaluator_id'] !== (int)($_SESSION['user_id'] ?? 0)) {

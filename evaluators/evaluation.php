@@ -90,6 +90,27 @@ if (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_le
     $teachers = $stmt;
 }
 
+// For "both" form type: check which teachers already have a completed ISO evaluation by this evaluator
+$completedIsoTeachers = [];
+try {
+    $isoCheckStmt = $db->prepare("SELECT DISTINCT teacher_id FROM evaluations WHERE evaluator_id = :evaluator_id AND evaluation_form_type = 'iso' AND status = 'completed'");
+    $isoCheckStmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    $isoCheckStmt->execute();
+    while ($row = $isoCheckStmt->fetch(PDO::FETCH_ASSOC)) {
+        $completedIsoTeachers[(int)$row['teacher_id']] = true;
+    }
+} catch (PDOException $e) {}
+
+// Load observation plan acknowledgments to check if teachers have signed
+$teacher_signed_map = [];
+try {
+    $ack_stmt = $db->prepare("SELECT DISTINCT teacher_id FROM observation_plan_acknowledgments");
+    $ack_stmt->execute();
+    while ($ack_row = $ack_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $teacher_signed_map[(int)$ack_row['teacher_id']] = true;
+    }
+} catch (PDOException $e) {}
+
 // Handle form submission
 if($_POST && isset($_POST['submit_evaluation'])) {
     $evalController = new EvaluationController($db);
@@ -199,6 +220,15 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         $schedule_badge_class = 'bg-success';
                                         $schedule_badge_text = 'Evaluate this teacher';
                                         $schedule_block_message = '';
+
+                                        // Block if teacher hasn't signed the observation plan
+                                        $teacher_has_signed = isset($teacher_signed_map[(int)$teacher_row['id']]);
+                                        if (!$teacher_has_signed) {
+                                            $can_evaluate_now = false;
+                                            $schedule_badge_class = 'bg-warning text-dark';
+                                            $schedule_badge_text = 'Awaiting signature';
+                                            $schedule_block_message = 'This teacher has not yet signed the observation plan. Evaluation is blocked until they sign.';
+                                        }
                                     } else {
                                         $schedule_badge_class = 'bg-warning text-dark';
                                         $schedule_badge_text = 'Not yet time';
@@ -217,7 +247,11 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 $schedule_block_message = 'A room is assigned, but the evaluation date and time are still missing.';
                             }
                         ?>
-                        <div class="list-group-item teacher-item <?php echo $can_evaluate_now ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-has-schedule="<?php echo $has_schedule ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo $can_evaluate_now ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>">
+                        <?php
+                            $teacher_form_type = $teacher_row['evaluation_form_type'] ?? 'iso';
+                            $iso_done = isset($completedIsoTeachers[(int)$teacher_row['id']]);
+                        ?>
+                        <div class="list-group-item teacher-item <?php echo $can_evaluate_now ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-has-schedule="<?php echo $has_schedule ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo $can_evaluate_now ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_row['name']); ?></h6>
@@ -234,9 +268,25 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         <?php endif; ?>
                                     </small>
                                 </div>
-                                <div>
-                                    <span class="badge <?php echo $schedule_badge_class; ?> p-2"><?php echo htmlspecialchars($schedule_badge_text); ?></span>
-                                    <i class="fas fa-chevron-right ms-2"></i>
+                                <div class="d-flex align-items-center gap-2">
+                                    <?php if ($teacher_form_type === 'both' && $can_evaluate_now): ?>
+                                        <?php if ($iso_done): ?>
+                                            <span class="badge bg-success p-2"><i class="fas fa-check me-1"></i>ISO Done</span>
+                                            <button type="button" class="btn btn-sm btn-primary btn-peac-eval" data-teacher-id="<?php echo $teacher_row['id']; ?>">
+                                                <i class="fas fa-clipboard-check me-1"></i>PEAC
+                                            </button>
+                                        <?php else: ?>
+                                            <button type="button" class="btn btn-sm btn-primary btn-iso-eval" data-teacher-id="<?php echo $teacher_row['id']; ?>">
+                                                <i class="fas fa-file-alt me-1"></i>ISO
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-secondary btn-peac-locked" disabled title="Complete the ISO evaluation first">
+                                                <i class="fas fa-lock me-1"></i>PEAC
+                                            </button>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <span class="badge <?php echo $schedule_badge_class; ?> p-2"><?php echo htmlspecialchars($schedule_badge_text); ?></span>
+                                        <i class="fas fa-chevron-right ms-2"></i>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
@@ -1124,7 +1174,11 @@ if($_POST && isset($_POST['submit_evaluation'])) {
         function initializeTeacherSelection() {
             // Teacher selection
             document.querySelectorAll('.teacher-item').forEach(item => {
-                item.addEventListener('click', function() {
+                item.addEventListener('click', function(e) {
+                    // If a "both" button was clicked, let the button handlers deal with it
+                    if (e.target.closest('.btn-iso-eval') || e.target.closest('.btn-peac-eval') || e.target.closest('.btn-peac-locked')) {
+                        return;
+                    }
                     const hasSchedule = this.getAttribute('data-has-schedule');
                     const canEvaluateNow = this.getAttribute('data-can-evaluate-now');
                     const blockReason = this.getAttribute('data-block-reason') || '';
@@ -1137,6 +1191,16 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                         return;
                     }
                     const teacherId = this.getAttribute('data-teacher-id');
+                    const formType = this.getAttribute('data-form-type') || 'iso';
+                    // For "both", don't auto-navigate — buttons handle it
+                    if (formType === 'both') {
+                        return;
+                    }
+                    // If PEAC form type, redirect to PEAC evaluation page
+                    if (formType === 'peac') {
+                        window.location.href = 'evaluation_peac.php?teacher_id=' + encodeURIComponent(teacherId);
+                        return;
+                    }
                     // Auto-fill the form fields from the clicked item
                     const nameElem = this.querySelector('h6');
                     const deptElem = this.querySelector('p');
@@ -1151,6 +1215,32 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     }
 
                     startEvaluation(teacherId);
+                });
+            });
+
+            // "Both" form type: ISO button handler
+            document.querySelectorAll('.btn-iso-eval').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const item = this.closest('.teacher-item');
+                    const teacherId = item.getAttribute('data-teacher-id');
+                    const nameElem = item.querySelector('h6');
+                    const deptElem = item.querySelector('p');
+                    const facultyNameInput = document.getElementById('facultyName');
+                    const departmentInput = document.getElementById('department');
+                    if (facultyNameInput && nameElem) facultyNameInput.value = nameElem.textContent.trim();
+                    if (departmentInput && deptElem) departmentInput.value = deptElem.textContent.trim();
+                    startEvaluation(teacherId);
+                });
+            });
+
+            // "Both" form type: PEAC button handler
+            document.querySelectorAll('.btn-peac-eval').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const item = this.closest('.teacher-item');
+                    const teacherId = item.getAttribute('data-teacher-id');
+                    window.location.href = 'evaluation_peac.php?teacher_id=' + encodeURIComponent(teacherId);
                 });
             });
 

@@ -53,14 +53,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $subject = trim($_POST['evaluation_subject'] ?? '');
     $semester = trim($_POST['evaluation_semester'] ?? '');
     $semester = in_array($semester, ['1st', '2nd']) ? $semester : null;
+    $form_type = trim($_POST['evaluation_form_type'] ?? 'iso');
+    if (!in_array($form_type, ['iso', 'peac', 'both'])) $form_type = 'iso';
 
     // Validate focus values
-    $valid_focus = ['communications', 'management', 'assessment'];
+    $valid_focus = ['communications', 'management', 'assessment', 'teacher_actions', 'student_learning_actions'];
     $focus = array_values(array_intersect($focus, $valid_focus));
     $focus_json = !empty($focus) ? json_encode($focus) : null;
 
     if (!empty($teacher_id)) {
-        $query = "UPDATE teachers SET evaluation_schedule = :schedule, evaluation_room = :room, evaluation_focus = :focus, evaluation_subject_area = :subject_area, evaluation_subject = :subject, evaluation_semester = :semester, updated_at = NOW() WHERE id = :id";
+        $query = "UPDATE teachers SET evaluation_schedule = :schedule, evaluation_room = :room, evaluation_focus = :focus, evaluation_subject_area = :subject_area, evaluation_subject = :subject, evaluation_semester = :semester, evaluation_form_type = :form_type, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':schedule', $schedule);
         $stmt->bindParam(':room', $room);
@@ -68,6 +70,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $stmt->bindParam(':subject_area', $subject_area);
         $stmt->bindParam(':subject', $subject);
         $stmt->bindParam(':semester', $semester);
+        $stmt->bindParam(':form_type', $form_type);
         $stmt->bindParam(':id', $teacher_id);
 
         if ($stmt->execute()) {
@@ -499,6 +502,25 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
                             </div>
                         </div>
 
+                        <!-- Evaluation Form Type -->
+                        <div class="form-group schedule-field">
+                            <label class="form-label">Evaluation Form <span class="text-danger">*</span></label>
+                            <div class="d-flex gap-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="evaluation_form_type" value="iso" id="form_iso" required checked>
+                                    <label class="form-check-label" for="form_iso"><i class="fas fa-file-alt me-1"></i>ISO</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="evaluation_form_type" value="peac" id="form_peac">
+                                    <label class="form-check-label" for="form_peac"><i class="fas fa-clipboard-check me-1"></i>PEAC</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="evaluation_form_type" value="both" id="form_both">
+                                    <label class="form-check-label" for="form_both"><i class="fas fa-layer-group me-1"></i>Both</label>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Semester -->
                         <div class="form-group schedule-field">
                             <label class="form-label">Semester <span class="text-danger">*</span></label>
@@ -516,9 +538,10 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
                         </div>
 
                         <!-- Focus of Observation -->
-                        <div class="form-group schedule-field">
+                        <div class="form-group schedule-field" id="focusObservationGroup">
                             <label class="form-label">Focus of Observation <span class="text-danger">*</span></label>
-                            <div class="d-flex flex-column gap-2" id="focusCheckboxes">
+                            <!-- ISO Focus Options -->
+                            <div class="d-flex flex-column gap-2" id="isoFocusCheckboxes">
                                 <div class="form-check">
                                     <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="communications" id="focus_communications">
                                     <label class="form-check-label" for="focus_communications">Communication Competence</label>
@@ -530,6 +553,17 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
                                 <div class="form-check">
                                     <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="assessment" id="focus_assessment">
                                     <label class="form-check-label" for="focus_assessment">Assessment of Students' Learning</label>
+                                </div>
+                            </div>
+                            <!-- PEAC Focus Options (Hidden by default) -->
+                            <div class="d-flex flex-column gap-2" id="peacFocusCheckboxes" style="display:none;">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="teacher_actions" id="focus_teacher_actions">
+                                    <label class="form-check-label" for="focus_teacher_actions">Teacher Actions</label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="student_learning_actions" id="focus_student_learning">
+                                    <label class="form-check-label" for="focus_student_learning">Student Learning Actions</label>
                                 </div>
                             </div>
                             <div class="schedule-help">Select at least one focus area for the observation.</div>
@@ -669,7 +703,7 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
             }
         }
 
-        function editSchedule(teacherId, schedule, room, focus, subjectArea, subject, semester) {
+        function editSchedule(teacherId, schedule, room, focus, subjectArea, subject, semester, formType) {
             document.getElementById('schedule_teacher_id').value = teacherId;
             const scheduleInput = document.getElementById('evaluation_schedule');
             const dateInput = document.getElementById('evaluation_date');
@@ -683,10 +717,22 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
             document.getElementById('semester_1st').checked = (semester === '1st');
             document.getElementById('semester_2nd').checked = (semester === '2nd');
 
+            // Set form type radio
+            formType = formType || 'iso';
+            document.getElementById('form_iso').checked = (formType === 'iso');
+            document.getElementById('form_peac').checked = (formType === 'peac');
+            document.getElementById('form_both').checked = (formType === 'both');
+
+            // Toggle focus visibility
+            document.getElementById('isoFocusCheckboxes').style.display = (formType === 'peac') ? 'none' : '';
+            document.getElementById('peacFocusCheckboxes').style.display = (formType === 'iso') ? 'none' : '';
+
             // Set focus checkboxes
             document.getElementById('focus_communications').checked = false;
             document.getElementById('focus_management').checked = false;
             document.getElementById('focus_assessment').checked = false;
+            document.getElementById('focus_teacher_actions').checked = false;
+            document.getElementById('focus_student_learning').checked = false;
             if (focus) {
                 try {
                     const focusArr = typeof focus === 'string' ? JSON.parse(focus) : focus;
@@ -726,11 +772,47 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
             if (timeInput) timeInput.addEventListener('input', updateSchedulePreview);
             if (roomInput) roomInput.addEventListener('input', updateSchedulePreview);
 
+            // Toggle Focus of Observation based on form type selection
+            document.querySelectorAll('input[name="evaluation_form_type"]').forEach(radio => {
+                radio.addEventListener('change', function() {
+                    const isoFocus = document.getElementById('isoFocusCheckboxes');
+                    const peacFocus = document.getElementById('peacFocusCheckboxes');
+                    if (this.value === 'peac') {
+                        isoFocus.style.display = 'none';
+                        peacFocus.style.display = '';
+                        document.getElementById('focus_communications').checked = false;
+                        document.getElementById('focus_management').checked = false;
+                        document.getElementById('focus_assessment').checked = false;
+                    } else if (this.value === 'iso') {
+                        isoFocus.style.display = '';
+                        peacFocus.style.display = 'none';
+                        document.getElementById('focus_teacher_actions').checked = false;
+                        document.getElementById('focus_student_learning').checked = false;
+                    } else {
+                        isoFocus.style.display = '';
+                        peacFocus.style.display = '';
+                    }
+                });
+            });
+
             const scheduleForm = document.querySelector('#scheduleModal form');
             if (scheduleForm) {
                 scheduleForm.addEventListener('submit', (e) => {
-                    const focusChecked = document.querySelectorAll('#focusCheckboxes input[type="checkbox"]:checked');
-                    if (focusChecked.length === 0) {
+                    const selectedFormType = document.querySelector('input[name="evaluation_form_type"]:checked')?.value || 'iso';
+                    const isoChecked = document.querySelectorAll('#isoFocusCheckboxes input[type="checkbox"]:checked');
+                    const peacChecked = document.querySelectorAll('#peacFocusCheckboxes input[type="checkbox"]:checked');
+
+                    if (selectedFormType === 'iso' && isoChecked.length === 0) {
+                        e.preventDefault();
+                        alert('Please select at least one Focus of Observation.');
+                        return false;
+                    }
+                    if (selectedFormType === 'peac' && peacChecked.length === 0) {
+                        e.preventDefault();
+                        alert('Please select at least one Focus of Observation.');
+                        return false;
+                    }
+                    if (selectedFormType === 'both' && isoChecked.length === 0 && peacChecked.length === 0) {
                         e.preventDefault();
                         alert('Please select at least one Focus of Observation.');
                         return false;
