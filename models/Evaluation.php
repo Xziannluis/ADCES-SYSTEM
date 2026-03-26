@@ -17,7 +17,7 @@ class Evaluation {
     }
 
     // Get evaluations for reporting
-    public function getEvaluationsForReport($evaluator_id = null, $academic_year = '', $semester = '', $teacher_id = '', $department = '', $cross_dept_user_id = null, $user_department = '') {
+    public function getEvaluationsForReport($evaluator_id = null, $academic_year = '', $semester = '', $teacher_id = '', $department = '', $cross_dept_user_id = null, $user_department = '', $form_type = '') {
         // Build base query
     $query = "SELECT e.*, t.name as teacher_name, u.name as evaluator_name, u.role as evaluator_role,
                          COUNT(ai.id) as ai_count
@@ -59,6 +59,11 @@ class Evaluation {
         if (!empty($teacher_id)) {
             $where[] = 'e.teacher_id = :teacher_id';
             $params[':teacher_id'] = $teacher_id;
+        }
+
+        if (!empty($form_type) && in_array($form_type, ['iso', 'peac'])) {
+            $where[] = 'e.evaluation_form_type = :form_type';
+            $params[':form_type'] = $form_type;
         }
 
         if (count($where) > 0) {

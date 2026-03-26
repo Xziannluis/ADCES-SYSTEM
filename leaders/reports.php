@@ -90,6 +90,7 @@ try {
 $academic_year = trim((string)($_GET['academic_year'] ?? ''));
 $semester = trim((string)($_GET['semester'] ?? ''));
 $teacher_id = trim((string)($_GET['teacher_id'] ?? ''));
+$form_type_filter = trim((string)($_GET['form_type'] ?? ''));
 
 $academic_year_label = ($academic_year !== '') ? $academic_year : 'All';
 $semester_label = ($semester !== '') ? $semester : 'All';
@@ -127,6 +128,10 @@ if (!empty($semester)) {
 if (!empty($teacher_id)) {
     $evalQuery .= " AND e.teacher_id = :teacher_id";
     $evalParams[':teacher_id'] = $teacher_id;
+}
+if (!empty($form_type_filter) && in_array($form_type_filter, ['iso', 'peac'])) {
+    $evalQuery .= " AND e.evaluation_form_type = :form_type";
+    $evalParams[':form_type'] = $form_type_filter;
 }
 $evalQuery .= " GROUP BY e.id ORDER BY e.observation_date DESC";
 $evalStmt = $db->prepare($evalQuery);
@@ -568,7 +573,7 @@ $stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $sem
                             <option value="2nd" <?php echo $semester == '2nd' ? 'selected' : ''; ?>>2nd Semester</option>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label for="teacher_id" class="form-label">Teacher</label>
                         <select class="form-select" id="teacher_id" name="teacher_id">
                             <option value="">All Teachers</option>
@@ -580,7 +585,17 @@ $stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $sem
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="col-md-2 d-flex align-items-end">
+                    <div class="col-md-2">
+                        <label for="form_type" class="form-label">Form Type</label>
+                        <select class="form-select" id="form_type" name="form_type">
+                            <option value="" <?php echo $form_type_filter === '' ? 'selected' : ''; ?>>All Forms</option>
+                            <option value="iso" <?php echo $form_type_filter === 'iso' ? 'selected' : ''; ?>>ISO</option>
+                            <?php if ($raw_department === 'JHS' || $raw_department === ''): ?>
+                            <option value="peac" <?php echo $form_type_filter === 'peac' ? 'selected' : ''; ?>>PEAC</option>
+                            <?php endif; ?>
+                        </select>
+                    </div>
+                    <div class="col-md-1 d-flex align-items-end">
                         <button type="submit" class="btn btn-primary w-100">
                             <i class="fas fa-search me-2"></i> Search
                         </button>
@@ -646,6 +661,7 @@ $stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $sem
                                 <th width="15%">Recommendation/s</th>
                                 <th width="10%">Agreement</th>
                                 <th width="10%">Ratings</th>
+                                <th width="8%" class="no-print">Form Type</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -718,7 +734,9 @@ $stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $sem
                                 ?>
                                 <tr>
                                     <td><?php echo date('F j, Y', strtotime($eval['observation_date'])); ?></td>
-                                    <td><?php echo htmlspecialchars($eval['teacher_name']); ?></td>
+                                    <td>
+                                        <?php echo htmlspecialchars($eval['teacher_name']); ?>
+                                    </td>
                                     <td>
                                         <?php echo htmlspecialchars($eval['subject_observed']); ?><br>
                                         <?php if (!empty($eval['observation_type']) && strtolower($eval['observation_type']) !== 'formal'): ?>
@@ -797,11 +815,15 @@ $stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $sem
                                             </span>
                                         </div>
                                     </td>
+                                    <td class="no-print text-center">
+                                        <?php $ft = $eval['evaluation_form_type'] ?? 'iso'; ?>
+                                        <span class="badge <?php echo $ft === 'peac' ? 'bg-success' : 'bg-primary'; ?>"><?php echo strtoupper($ft); ?></span>
+                                    </td>
                                 </tr>
                                 <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="8" class="text-center py-4">
+                                    <td colspan="9" class="text-center py-4">
                                         <i class="fas fa-clipboard-list fa-2x text-muted mb-3"></i>
                                         <h5>No Evaluation Data</h5>
                                         <p class="text-muted">No evaluations found for the selected academic year / semester / teacher.</p>
@@ -926,24 +948,47 @@ $stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $sem
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="evalFormTeacher" class="form-label fw-bold">Select a Teacher</label>
-                        <select class="form-select" id="evalFormTeacher">
-                            <option value="">-- Choose a teacher --</option>
-                            <?php foreach ($available_teachers as $t_row): ?>
-                                <option value="<?php echo (int)$t_row['id']; ?>"><?php echo htmlspecialchars($t_row['name']); ?></option>
-                            <?php endforeach; ?>
-                        </select>
+                    <!-- Step 1: Choose form type -->
+                    <?php $isJhsDept = ($raw_department === 'JHS' || $raw_department === ''); ?>
+                    <?php if ($isJhsDept): ?>
+                    <div id="evalFormStep1">
+                        <label class="form-label fw-bold mb-3">Select Form Type</label>
+                        <div class="d-flex justify-content-center gap-3">
+                            <button type="button" class="btn btn-outline-primary btn-lg px-5 py-3" onclick="selectFormType('iso')">
+                                <i class="fas fa-file-alt fa-2x d-block mb-2"></i>ISO Form
+                            </button>
+                            <button type="button" class="btn btn-outline-success btn-lg px-5 py-3" onclick="selectFormType('peac')">
+                                <i class="fas fa-clipboard-check fa-2x d-block mb-2"></i>PEAC Form
+                            </button>
+                        </div>
                     </div>
-                    <div id="evalFormList" style="display:none;">
-                        <label class="form-label fw-bold">Select an Evaluation</label>
-                        <div id="evalFormListBody"></div>
-                    </div>
-                    <div id="evalFormLoading" style="display:none;" class="text-center py-3">
-                        <div class="spinner-border spinner-border-sm text-primary" role="status"></div> Loading evaluations...
-                    </div>
-                    <div id="evalFormEmpty" style="display:none;" class="text-center py-3 text-muted">
-                        No evaluations found for this teacher.
+                    <?php endif; ?>
+                    <!-- Step 2: Select teacher -->
+                    <div id="evalFormStep2" style="<?php echo !$isJhsDept ? '' : 'display:none;'; ?>">
+                        <div class="d-flex align-items-center mb-3">
+                            <?php if ($isJhsDept): ?>
+                            <button type="button" class="btn btn-sm btn-outline-secondary me-2" onclick="backToStep1()">
+                                <i class="fas fa-arrow-left"></i>
+                            </button>
+                            <?php endif; ?>
+                            <span class="fw-bold" id="evalFormTypeLabel"><?php echo !$isJhsDept ? '<i class="fas fa-file-alt me-1"></i> ISO Form Evaluations' : ''; ?></span>
+                        </div>
+                        <div class="mb-3">
+                            <label for="evalFormTeacher" class="form-label fw-bold">Select a Teacher</label>
+                            <select class="form-select" id="evalFormTeacher">
+                                <option value="">-- Choose a teacher --</option>
+                            </select>
+                        </div>
+                        <div id="evalFormList" style="display:none;">
+                            <label class="form-label fw-bold">Select an Evaluation</label>
+                            <div id="evalFormListBody"></div>
+                        </div>
+                        <div id="evalFormLoading" style="display:none;" class="text-center py-3">
+                            <div class="spinner-border spinner-border-sm text-primary" role="status"></div> Loading...
+                        </div>
+                        <div id="evalFormEmpty" style="display:none;" class="text-center py-3 text-muted">
+                            No evaluations found.
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -959,6 +1004,78 @@ $stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $sem
         div.appendChild(document.createTextNode(str || ''));
         return div.innerHTML;
     }
+
+    var _selectedFormType = '';
+
+    function selectFormType(type) {
+        _selectedFormType = type;
+        document.getElementById('evalFormStep1').style.display = 'none';
+        document.getElementById('evalFormStep2').style.display = 'block';
+        document.getElementById('evalFormTypeLabel').innerHTML =
+            (type === 'iso' ? '<i class="fas fa-file-alt me-1"></i> ISO Form' : '<i class="fas fa-clipboard-check me-1"></i> PEAC Form') + ' Evaluations';
+
+        // Reset
+        var sel = document.getElementById('evalFormTeacher');
+        sel.innerHTML = '<option value="">-- Choose a teacher --</option>';
+        document.getElementById('evalFormList').style.display = 'none';
+        document.getElementById('evalFormListBody').innerHTML = '';
+        document.getElementById('evalFormEmpty').style.display = 'none';
+        document.getElementById('evalFormLoading').style.display = 'block';
+
+        fetch('../includes/get_teachers_by_form_type.php?form_type=' + encodeURIComponent(type))
+            .then(function(r) { return r.json(); })
+            .then(function(teachers) {
+                document.getElementById('evalFormLoading').style.display = 'none';
+                if (!teachers || teachers.length === 0) {
+                    document.getElementById('evalFormEmpty').style.display = 'block';
+                    document.getElementById('evalFormEmpty').textContent = 'No teachers with ' + type.toUpperCase() + ' evaluations found.';
+                    return;
+                }
+                teachers.forEach(function(t) {
+                    var opt = document.createElement('option');
+                    opt.value = t.id;
+                    opt.textContent = t.name;
+                    sel.appendChild(opt);
+                });
+            })
+            .catch(function() {
+                document.getElementById('evalFormLoading').style.display = 'none';
+                document.getElementById('evalFormEmpty').style.display = 'block';
+            });
+    }
+
+    function backToStep1() {
+        _selectedFormType = '';
+        var step1 = document.getElementById('evalFormStep1');
+        if (step1) {
+            step1.style.display = 'block';
+            document.getElementById('evalFormStep2').style.display = 'none';
+        }
+    }
+
+    // Reset modal on close
+    document.getElementById('evalFormModal').addEventListener('hidden.bs.modal', function() {
+        <?php if ($isJhsDept): ?>
+        backToStep1();
+        <?php else: ?>
+        // Non-JHS: reset the teacher list but stay on step 2
+        _selectedFormType = 'iso';
+        var sel = document.getElementById('evalFormTeacher');
+        sel.innerHTML = '<option value="">-- Choose a teacher --</option>';
+        document.getElementById('evalFormList').style.display = 'none';
+        document.getElementById('evalFormListBody').innerHTML = '';
+        document.getElementById('evalFormEmpty').style.display = 'none';
+        document.getElementById('evalFormLoading').style.display = 'none';
+        <?php endif; ?>
+    });
+
+    // For non-JHS departments, auto-select ISO when modal opens
+    <?php if ($raw_department !== 'JHS' && $raw_department !== ''): ?>
+    document.getElementById('evalFormModal').addEventListener('shown.bs.modal', function() {
+        selectFormType('iso');
+    });
+    <?php endif; ?>
+
     document.getElementById('evalFormTeacher').addEventListener('change', function() {
         var teacherId = this.value;
         var listDiv = document.getElementById('evalFormList');
@@ -974,12 +1091,13 @@ $stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $sem
 
         loading.style.display = 'block';
 
-        fetch('../includes/get_teacher_evaluations.php?teacher_id=' + encodeURIComponent(teacherId))
+        fetch('../includes/get_teacher_evaluations.php?teacher_id=' + encodeURIComponent(teacherId) + '&form_type=' + encodeURIComponent(_selectedFormType))
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 loading.style.display = 'none';
                 if (!data || data.length === 0) {
                     empty.style.display = 'block';
+                    empty.textContent = 'No evaluations found for this teacher.';
                     return;
                 }
                 var html = '<div class="table-responsive"><table class="table table-bordered table-hover table-sm">';
@@ -1006,7 +1124,8 @@ $stats = $evaluation->getDepartmentStats($stats_department, $academic_year, $sem
     });
 
     function openEvalForm(evalId) {
-        window.open('../evaluators/print_evaluation_form.php?id=' + evalId + '&auto_print=1', '_blank');
+        var page = (_selectedFormType === 'peac') ? '../evaluators/print_evaluation_form_peac.php' : '../evaluators/print_evaluation_form.php';
+        window.open(page + '?id=' + evalId + '&auto_print=1', '_blank');
     }
     </script>
     </div>

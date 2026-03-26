@@ -318,6 +318,10 @@ class EvaluationController {
         $others_specify = $data['others_specify'] ?? '';
         $evaluation_focus = $data['evaluation_focus'] ?? null;
         $evaluation_form_type = $data['evaluation_form_type'] ?? 'iso';
+        // PEAC is exclusive to JHS department
+        if ($evaluation_form_type === 'peac' && ($_SESSION['department'] ?? '') !== 'JHS') {
+            $evaluation_form_type = 'iso';
+        }
 
         // Fetch teacher's schedule details (room, subject_area) before they are cleared
         $observation_room = $data['observation_room'] ?? null;

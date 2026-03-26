@@ -106,9 +106,6 @@ foreach($eval_details as $detail) {
             <a href="my_evaluations.php" class="back-button no-print">
                 <i class="fas fa-arrow-left me-2"></i>Back to My Evaluations
             </a>
-            <a href="print_evaluation_form.php?id=<?php echo (int)$_GET['eval_id']; ?>&auto_print=1" target="_blank" class="btn btn-primary no-print ms-2" style="margin-bottom:20px;">
-                <i class="fas fa-print me-1"></i> Print
-            </a>
 
             <div class="eval-header">
                 <h3><?php echo htmlspecialchars($evaluation['teacher_name']); ?> - Classroom Evaluation</h3>
@@ -173,6 +170,7 @@ foreach($eval_details as $detail) {
                                 <th>Recommendation/s</th>
                                 <th>Agreement</th>
                                 <th>Ratings</th>
+                                <th class="no-print text-center">Action</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -184,7 +182,12 @@ foreach($eval_details as $detail) {
                                 <td><?php if(!empty($areas_for_improvement)): ?><ul><?php foreach($areas_for_improvement as $a){ ?><li><?php echo $a; ?></li><?php } ?></ul><?php else: ?><em>No specific areas for improvement identified.</em><?php endif; ?></td>
                                 <td><?php if(!empty($recommendations)): ?><ul><?php foreach($recommendations as $r){ ?><li><?php echo $r; ?></li><?php } ?></ul><?php else: ?><em>No specific recommendations provided.</em><?php endif; ?></td>
                                 <td><?php if(!empty($agreements)): ?><ul><?php foreach($agreements as $ag){ ?><li><?php echo $ag; ?></li><?php } ?></ul><?php else: ?><em>No specific agreements recorded.</em><?php endif; ?></td>
-                                <td><?php echo htmlspecialchars(number_format($evaluation['overall_avg'],1)) . ' ' . $rating_text; ?></td>
+                                <td style="white-space:nowrap;"><?php echo htmlspecialchars(number_format($evaluation['overall_avg'],1)) . ' ' . $rating_text; ?></td>
+                                <td class="no-print text-center" style="white-space:nowrap; vertical-align:top;">
+                                    <a href="<?php echo (($evaluation['evaluation_form_type'] ?? 'iso') === 'peac') ? 'print_evaluation_form_peac.php' : 'print_evaluation_form.php'; ?>?id=<?php echo (int)$_GET['eval_id']; ?>&auto_print=1" target="_blank" class="btn btn-sm btn-primary">
+                                        <i class="fas fa-print me-1"></i> Print
+                                    </a>
+                                </td>
                             </tr>
                         </tbody>
                     </table>

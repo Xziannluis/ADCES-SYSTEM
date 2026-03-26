@@ -189,7 +189,28 @@ if ($teacher_data) {
             <?php else: ?>
 
             <!-- Schedule Info -->
-            <?php if($teacher_data['evaluation_schedule']): ?>
+            <?php
+            // Only show upcoming schedule if:
+            // 1. A schedule exists
+            // 2. The schedule date hasn't passed OR there's no completed evaluation for that date
+            $showSchedule = false;
+            if (!empty($teacher_data['evaluation_schedule'])) {
+                $scheduleTime = strtotime($teacher_data['evaluation_schedule']);
+                $scheduleDate = date('Y-m-d', $scheduleTime);
+                // Check if a completed evaluation already exists on or after the scheduled date
+                $checkStmt = $db->prepare(
+                    "SELECT COUNT(*) FROM evaluations 
+                     WHERE teacher_id = :teacher_id AND status = 'completed' 
+                     AND observation_date >= :schedule_date"
+                );
+                $checkStmt->bindValue(':teacher_id', $teacher_data['id']);
+                $checkStmt->bindValue(':schedule_date', $scheduleDate);
+                $checkStmt->execute();
+                $completedCount = (int)$checkStmt->fetchColumn();
+                $showSchedule = ($completedCount === 0);
+            }
+            ?>
+            <?php if($showSchedule): ?>
             <div class="content-area">
                 <h5><i class="fas fa-calendar-alt me-2"></i>Upcoming Evaluation Schedule</h5>
                 <div class="alert alert-info mb-0 mt-3">

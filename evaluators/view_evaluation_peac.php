@@ -211,9 +211,9 @@ $dept_display = $department_map[$dept_raw] ?? $dept_raw;
                     <i class="bi bi-arrow-left"></i> Back
                 </a>
                 <h5 class="mb-0 text-center flex-grow-1 no-print">PEAC CLASSROOM OBSERVATION FORM</h5>
-                <button onclick="window.print()" class="btn btn-primary no-print">
+                <a href="print_evaluation_form_peac.php?id=<?php echo $evaluationId; ?>&auto_print=1" target="_blank" class="btn btn-primary no-print">
                     <i class="fas fa-print me-1"></i> Print
-                </button>
+                </a>
             </div>
 
             <div class="peac-header">

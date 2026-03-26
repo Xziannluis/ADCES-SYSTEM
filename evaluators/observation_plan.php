@@ -35,6 +35,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $post_semester = in_array($post_semester, ['1st', '2nd']) ? $post_semester : null;
     $form_type = trim($_POST['evaluation_form_type'] ?? 'iso');
     $form_type = in_array($form_type, ['iso', 'peac', 'both']) ? $form_type : 'iso';
+    // PEAC is exclusive to JHS department
+    if (($form_type === 'peac' || $form_type === 'both') && ($_SESSION['department'] ?? '') !== 'JHS') {
+        $form_type = 'iso';
+    }
 
     $valid_focus = ['communications', 'management', 'assessment', 'teacher_actions', 'student_learning_actions'];
     $focus = array_values(array_intersect($focus, $valid_focus));
@@ -1136,6 +1140,7 @@ try {
                                     <input class="form-check-input" type="radio" name="evaluation_form_type" value="iso" id="modal_form_iso" required checked>
                                     <label class="form-check-label" for="modal_form_iso"><i class="fas fa-file-alt me-1"></i>ISO</label>
                                 </div>
+                                <?php if (($_SESSION['department'] ?? '') === 'JHS'): ?>
                                 <div class="form-check">
                                     <input class="form-check-input" type="radio" name="evaluation_form_type" value="peac" id="modal_form_peac">
                                     <label class="form-check-label" for="modal_form_peac"><i class="fas fa-clipboard-check me-1"></i>PEAC</label>
@@ -1144,6 +1149,7 @@ try {
                                     <input class="form-check-input" type="radio" name="evaluation_form_type" value="both" id="modal_form_both">
                                     <label class="form-check-label" for="modal_form_both"><i class="fas fa-layer-group me-1"></i>Both</label>
                                 </div>
+                                <?php endif; ?>
                             </div>
                         </div>
 

@@ -36,7 +36,8 @@ function csrf_field() {
 $request_uri = $_SERVER['REQUEST_URI'] ?? '';
 $is_controller_endpoint = (strpos($request_uri, '/controllers/') !== false)
     || (strpos($request_uri, '/includes/notification_mark_read.php') !== false)
-    || (strpos($request_uri, '/includes/get_teacher_evaluations.php') !== false);
+    || (strpos($request_uri, '/includes/get_teacher_evaluations.php') !== false)
+    || (strpos($request_uri, '/includes/get_teachers_by_form_type.php') !== false);
 
 if(!isset($_SESSION['user_id'])) {
     if ($is_controller_endpoint) {

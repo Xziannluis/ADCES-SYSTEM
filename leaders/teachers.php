@@ -55,6 +55,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $semester = in_array($semester, ['1st', '2nd']) ? $semester : null;
     $form_type = trim($_POST['evaluation_form_type'] ?? 'iso');
     if (!in_array($form_type, ['iso', 'peac', 'both'])) $form_type = 'iso';
+    // PEAC is exclusive to JHS department — check the teacher's department
+    if ($form_type === 'peac' || $form_type === 'both') {
+        $tchkDept = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
+        $tchkDept->execute([':id' => $teacher_id]);
+        $tchkRow = $tchkDept->fetch(PDO::FETCH_ASSOC);
+        if (!$tchkRow || $tchkRow['department'] !== 'JHS') {
+            $form_type = 'iso';
+        }
+    }
 
     // Validate focus values
     $valid_focus = ['communications', 'management', 'assessment', 'teacher_actions', 'student_learning_actions'];
@@ -510,14 +519,16 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
                                     <input class="form-check-input" type="radio" name="evaluation_form_type" value="iso" id="form_iso" required checked>
                                     <label class="form-check-label" for="form_iso"><i class="fas fa-file-alt me-1"></i>ISO</label>
                                 </div>
-                                <div class="form-check">
+                                <?php if ($filter_department === 'JHS' || $filter_department === ''): ?>
+                                <div class="form-check" id="peac_radio_wrap">
                                     <input class="form-check-input" type="radio" name="evaluation_form_type" value="peac" id="form_peac">
                                     <label class="form-check-label" for="form_peac"><i class="fas fa-clipboard-check me-1"></i>PEAC</label>
                                 </div>
-                                <div class="form-check">
+                                <div class="form-check" id="both_radio_wrap">
                                     <input class="form-check-input" type="radio" name="evaluation_form_type" value="both" id="form_both">
                                     <label class="form-check-label" for="form_both"><i class="fas fa-layer-group me-1"></i>Both</label>
                                 </div>
+                                <?php endif; ?>
                             </div>
                         </div>
 

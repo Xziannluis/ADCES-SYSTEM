@@ -25,11 +25,18 @@ $department = $_SESSION['department'] ?? '';
 
 // Build query based on role
 $query = "SELECT e.id, e.observation_date, e.academic_year, e.semester, e.subject_observed,
-                 e.overall_avg, u.name AS evaluator_name
+                 e.overall_avg, e.evaluation_form_type, u.name AS evaluator_name
           FROM evaluations e
           JOIN users u ON u.id = e.evaluator_id
           WHERE e.teacher_id = :teacher_id";
 $params = [':teacher_id' => $teacher_id];
+
+// Optional form type filter
+$form_type_filter = isset($_GET['form_type']) ? trim($_GET['form_type']) : '';
+if (in_array($form_type_filter, ['iso', 'peac'], true)) {
+    $query .= " AND e.evaluation_form_type = :form_type";
+    $params[':form_type'] = $form_type_filter;
+}
 
 // Coordinators can only see their own evaluations
 if (in_array($role, ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
@@ -62,6 +69,7 @@ foreach ($results as $row) {
         'subject'     => $row['subject_observed'] ?? '',
         'evaluator'   => $row['evaluator_name'] ?? '',
         'overall_avg' => $avg,
+        'form_type'   => $row['evaluation_form_type'] ?? 'iso',
     ];
 }
 
