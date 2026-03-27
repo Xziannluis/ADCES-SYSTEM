@@ -323,17 +323,18 @@ class EvaluationController {
             $evaluation_form_type = 'iso';
         }
 
-        // Fetch teacher's schedule details (room, subject_area) before they are cleared
+        // Fetch teacher's schedule details (room, subject_area, focus) before they are cleared
         $observation_room = $data['observation_room'] ?? null;
         $subject_area = $data['subject_area'] ?? null;
         if (!empty($teacher_id)) {
-            $schedInfoStmt = $this->db->prepare("SELECT evaluation_room, evaluation_subject_area FROM teachers WHERE id = :id LIMIT 1");
+            $schedInfoStmt = $this->db->prepare("SELECT evaluation_room, evaluation_subject_area, evaluation_focus FROM teachers WHERE id = :id LIMIT 1");
             $schedInfoStmt->bindValue(':id', $teacher_id);
             $schedInfoStmt->execute();
             $schedInfo = $schedInfoStmt->fetch(PDO::FETCH_ASSOC);
             if ($schedInfo) {
                 if (empty($observation_room)) $observation_room = $schedInfo['evaluation_room'];
                 if (empty($subject_area)) $subject_area = $schedInfo['evaluation_subject_area'];
+                if (empty($evaluation_focus)) $evaluation_focus = $schedInfo['evaluation_focus'];
             }
         }
 

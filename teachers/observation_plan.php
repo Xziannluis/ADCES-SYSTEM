@@ -14,6 +14,29 @@ $database = new Database();
 $db = $database->getConnection();
 
 $teacher_id = $_SESSION['teacher_id'] ?? null;
+
+// If teacher_id not in session, try to resolve it now (e.g. teacher record linked after login)
+if (empty($teacher_id) && !empty($_SESSION['user_id'])) {
+    $resolve_stmt = $db->prepare("SELECT id FROM teachers WHERE user_id = :uid LIMIT 1");
+    $resolve_stmt->execute([':uid' => $_SESSION['user_id']]);
+    $resolved = $resolve_stmt->fetch(PDO::FETCH_ASSOC);
+    if ($resolved) {
+        $teacher_id = $resolved['id'];
+        $_SESSION['teacher_id'] = $teacher_id;
+    } elseif (!empty($_SESSION['name']) && !empty($_SESSION['department'])) {
+        // Fallback: match by name and department, then link
+        $name_stmt = $db->prepare("SELECT id FROM teachers WHERE name = :name AND department = :dept AND user_id IS NULL LIMIT 1");
+        $name_stmt->execute([':name' => $_SESSION['name'], ':dept' => $_SESSION['department']]);
+        $name_match = $name_stmt->fetch(PDO::FETCH_ASSOC);
+        if ($name_match) {
+            $link_stmt = $db->prepare("UPDATE teachers SET user_id = :uid WHERE id = :tid");
+            $link_stmt->execute([':uid' => $_SESSION['user_id'], ':tid' => $name_match['id']]);
+            $teacher_id = $name_match['id'];
+            $_SESSION['teacher_id'] = $teacher_id;
+        }
+    }
+}
+
 if (!$teacher_id) {
     $_SESSION['error'] = "Teacher record not found.";
     header("Location: dashboard.php");

@@ -174,9 +174,50 @@ class Teacher {
             return $department !== '';
         })));
 
+        // Get current secondary departments before deleting, to find removed ones
+        $currentStmt = $this->conn->prepare("SELECT department FROM teacher_departments WHERE teacher_id = :teacher_id");
+        $currentStmt->bindParam(':teacher_id', $teacherId);
+        $currentStmt->execute();
+        $currentDepts = $currentStmt->fetchAll(PDO::FETCH_COLUMN, 0);
+
+        // Get teacher's primary department (should never be cleaned up)
+        $primaryStmt = $this->conn->prepare("SELECT department FROM teachers WHERE id = :teacher_id LIMIT 1");
+        $primaryStmt->bindParam(':teacher_id', $teacherId);
+        $primaryStmt->execute();
+        $primaryDept = $primaryStmt->fetchColumn();
+
+        // Find departments that were removed (existed before but not in new list)
+        $removedDepts = array_diff($currentDepts, $departments);
+
         $deleteStmt = $this->conn->prepare("DELETE FROM teacher_departments WHERE teacher_id = :teacher_id");
         $deleteStmt->bindParam(':teacher_id', $teacherId);
         $deleteStmt->execute();
+
+        // Clean up teacher_assignments where the evaluator's department
+        // is no longer in the teacher's current departments (primary + remaining secondaries)
+        if (!empty($removedDepts)) {
+            $allTeacherDepts = array_values(array_unique(array_filter(
+                array_merge([$primaryDept], $departments)
+            )));
+
+            if (!empty($allTeacherDepts)) {
+                $placeholders = implode(',', array_fill(0, count($allTeacherDepts), '?'));
+                $cleanupStmt = $this->conn->prepare(
+                    "DELETE ta FROM teacher_assignments ta
+                     JOIN users u ON ta.evaluator_id = u.id
+                     WHERE ta.teacher_id = ?
+                     AND u.department NOT IN ($placeholders)"
+                );
+                $cleanupStmt->execute(array_merge([$teacherId], $allTeacherDepts));
+            } else {
+                // Teacher has no departments left — remove all assignments
+                $cleanupStmt = $this->conn->prepare(
+                    "DELETE FROM teacher_assignments WHERE teacher_id = :teacher_id"
+                );
+                $cleanupStmt->bindParam(':teacher_id', $teacherId);
+                $cleanupStmt->execute();
+            }
+        }
 
         if (empty($departments)) {
             return true;

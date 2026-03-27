@@ -214,6 +214,7 @@ foreach ($evaluations as $evaluationRow) {
         }
         .report-table td {
             font-size: 8.5px;
+            font-weight: normal;
             line-height: 1.25;
             word-break: break-word;
             overflow-wrap: anywhere;

@@ -118,6 +118,29 @@ if (!empty($_SESSION['error'])) { $error_message = $_SESSION['error']; unset($_S
 // View toggle: "plan" (default) or "my_observation"
 $view_mode = $_GET['view'] ?? 'plan';
 $my_teacher_id = $_SESSION['teacher_id'] ?? null;
+
+// If teacher_id not in session, try to resolve it now (e.g. teacher record linked after login)
+if (empty($my_teacher_id) && !empty($_SESSION['user_id'])) {
+    $resolve_stmt = $db->prepare("SELECT id FROM teachers WHERE user_id = :uid LIMIT 1");
+    $resolve_stmt->execute([':uid' => $_SESSION['user_id']]);
+    $resolved = $resolve_stmt->fetch(PDO::FETCH_ASSOC);
+    if ($resolved) {
+        $my_teacher_id = $resolved['id'];
+        $_SESSION['teacher_id'] = $my_teacher_id;
+    } elseif (!empty($_SESSION['name']) && !empty($_SESSION['department'])) {
+        // Fallback: match by name and department, then link
+        $name_stmt = $db->prepare("SELECT id FROM teachers WHERE name = :name AND department = :dept AND user_id IS NULL LIMIT 1");
+        $name_stmt->execute([':name' => $_SESSION['name'], ':dept' => $_SESSION['department']]);
+        $name_match = $name_stmt->fetch(PDO::FETCH_ASSOC);
+        if ($name_match) {
+            $link_stmt = $db->prepare("UPDATE teachers SET user_id = :uid WHERE id = :tid");
+            $link_stmt->execute([':uid' => $_SESSION['user_id'], ':tid' => $name_match['id']]);
+            $my_teacher_id = $name_match['id'];
+            $_SESSION['teacher_id'] = $my_teacher_id;
+        }
+    }
+}
+
 $has_teacher_record = !empty($my_teacher_id);
 
 // "My Observation" data
@@ -1088,12 +1111,15 @@ try {
                                     <td class="text-center" style="font-size:0.8rem;">
                                         <?php 
                                         $ack = $ack_map[$tid] ?? null;
+                                        $faculty_sig = $eval_data[$tid]['faculty_signature'] ?? '';
                                         if ($ack && !empty($ack['signature'])): ?>
                                             <img src="<?php echo $ack['signature']; ?>" alt="Signature" style="max-height: 30px; max-width: 60px;" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
                                         <?php elseif ($ack): ?>
                                             <span class="text-success" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
                                                 <i class="fas fa-check-circle"></i>
                                             </span>
+                                        <?php elseif (!empty($faculty_sig)): ?>
+                                            <img src="<?php echo $faculty_sig; ?>" alt="Signature" style="max-height: 30px; max-width: 60px;" title="Faculty signature from evaluation">
                                         <?php elseif ($has_schedule): ?>
                                             <span class="text-warning"><i class="fas fa-clock"></i> Pending</span>
                                         <?php endif; ?>
@@ -1140,7 +1166,7 @@ try {
 
     <!-- Schedule Modal -->
     <div class="modal fade" id="scheduleModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header bg-primary text-white">
                     <h5 class="modal-title"><i class="fas fa-calendar-check me-2"></i>Set Evaluation Schedule</h5>
@@ -1227,7 +1253,7 @@ try {
                         <!-- Focus of Observation (ISO) -->
                         <div class="mb-3" id="focusObservationGroup">
                             <label class="form-label fw-bold">Focus of Observation <span class="text-danger">*</span></label>
-                            <div class="d-flex flex-column gap-1" id="isoFocusCheckboxes">
+                            <div id="isoFocusCheckboxes">
                                 <div class="form-check">
                                     <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="communications" id="modal_focus_communications">
                                     <label class="form-check-label" for="modal_focus_communications">Communication Competence</label>
@@ -1241,7 +1267,7 @@ try {
                                     <label class="form-check-label" for="modal_focus_assessment">Assessment of Students' Learning</label>
                                 </div>
                             </div>
-                            <div class="d-flex flex-column gap-1" id="peacFocusCheckboxes" style="display:none;">
+                            <div id="peacFocusCheckboxes" style="display:none;">
                                 <div class="form-check">
                                     <input class="form-check-input" type="checkbox" name="evaluation_focus[]" value="teacher_actions" id="modal_focus_teacher_actions">
                                     <label class="form-check-label" for="modal_focus_teacher_actions">Teacher Actions</label>
