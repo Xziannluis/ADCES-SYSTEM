@@ -965,7 +965,8 @@ $stats = $evaluation->getDepartmentStats($_SESSION['department'], $academic_year
 
     function selectFormType(type) {
         _selectedFormType = type;
-        document.getElementById('evalFormStep1').style.display = 'none';
+        var step1 = document.getElementById('evalFormStep1');
+        if (step1) step1.style.display = 'none';
         document.getElementById('evalFormStep2').style.display = 'block';
         document.getElementById('evalFormTypeLabel').innerHTML =
             (type === 'iso' ? '<i class="fas fa-file-alt me-1"></i> ISO Form' : '<i class="fas fa-clipboard-check me-1"></i> PEAC Form') + ' Evaluations';

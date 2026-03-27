@@ -1869,6 +1869,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     indicator_comments: indicatorComments,
                     comments_summary: commentSummary,
                     evaluation_focus: data.evaluation_focus || '',
+                    evaluation_form_type: 'iso',
                     // Allows the AI service to generate shorter/standard/detailed if you add UI later
                     style: data.style || 'standard'
                 };

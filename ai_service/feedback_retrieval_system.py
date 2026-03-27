@@ -50,7 +50,7 @@ class FeedbackTemplateBackend:
     def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes) -> int:
         raise NotImplementedError
 
-    def fetch_templates(self, field_name: str) -> List[Dict[str, Any]]:
+    def fetch_templates(self, field_name: str, form_type: str = "") -> List[Dict[str, Any]]:
         raise NotImplementedError
 
     def count_templates(self) -> int:
@@ -97,7 +97,7 @@ class SQLiteFeedbackTemplateBackend(FeedbackTemplateBackend):
         self.connection.commit()
         return int(cursor.lastrowid)
 
-    def fetch_templates(self, field_name: str) -> List[Dict[str, Any]]:
+    def fetch_templates(self, field_name: str, form_type: str = "") -> List[Dict[str, Any]]:
         cursor = self.connection.execute(
             """
             SELECT id, field_name, evaluation_comment, feedback_text, embedding_vector
@@ -161,17 +161,29 @@ class MySQLFeedbackTemplateBackend(FeedbackTemplateBackend):
             self.connection.commit()
         return inserted_id
 
-    def fetch_templates(self, field_name: str) -> List[Dict[str, Any]]:
+    def fetch_templates(self, field_name: str, form_type: str = "") -> List[Dict[str, Any]]:
         with self.connection.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT id, field_name, evaluation_comment, feedback_text, embedding_vector
-                FROM `{self.table_name}`
-                WHERE field_name = %s AND is_active = 1
-                ORDER BY id ASC
-                """,
-                (field_name,),
-            )
+            if form_type and form_type in ("iso", "peac"):
+                cur.execute(
+                    f"""
+                    SELECT id, field_name, evaluation_comment, feedback_text, embedding_vector
+                    FROM `{self.table_name}`
+                    WHERE field_name = %s AND is_active = 1
+                      AND (form_type = %s OR form_type IS NULL OR form_type = '')
+                    ORDER BY id ASC
+                    """,
+                    (field_name, form_type),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT id, field_name, evaluation_comment, feedback_text, embedding_vector
+                    FROM `{self.table_name}`
+                    WHERE field_name = %s AND is_active = 1
+                    ORDER BY id ASC
+                    """,
+                    (field_name,),
+                )
             rows = cur.fetchall()
         return list(rows)
 
@@ -266,8 +278,8 @@ class FeedbackRetrievalSystem:
         denominator = float(np.linalg.norm(vector_a) * np.linalg.norm(vector_b)) + 1e-12
         return numerator / denominator
 
-    def fetch_templates(self, field_name: str) -> List[Dict[str, Any]]:
-        return self.backend.fetch_templates(field_name)
+    def fetch_templates(self, field_name: str, form_type: str = "") -> List[Dict[str, Any]]:
+        return self.backend.fetch_templates(field_name, form_type=form_type)
 
     def retrieve_best_feedback(
         self,
@@ -282,11 +294,12 @@ class FeedbackRetrievalSystem:
         field_name: str,
         evaluation_comment: str,
         top_k: int = 3,
+        form_type: str = "",
     ) -> List[FeedbackTemplate]:
         if field_name not in SUPPORTED_FIELDS:
             raise ValueError(f"Unsupported field_name '{field_name}'. Expected one of: {', '.join(SUPPORTED_FIELDS)}")
 
-        templates = self.fetch_templates(field_name)
+        templates = self.fetch_templates(field_name, form_type=form_type)
         if not templates:
             return []
 
@@ -359,25 +372,25 @@ class FeedbackRetrievalSystem:
             for row in selected
         ]
 
-    def retrieve_feedback_for_form(self, evaluation_inputs: Dict[str, str], top_k: int = 1) -> Dict[str, Optional[FeedbackTemplate]]:
+    def retrieve_feedback_for_form(self, evaluation_inputs: Dict[str, str], top_k: int = 1, form_type: str = "") -> Dict[str, Optional[FeedbackTemplate]]:
         results: Dict[str, Optional[FeedbackTemplate]] = {}
         for field_name in SUPPORTED_FIELDS:
             query = (evaluation_inputs.get(field_name) or "").strip()
             if not query:
                 results[field_name] = None
                 continue
-            matches = self.retrieve_top_feedback(field_name, query, top_k=max(1, int(top_k or 1)))
+            matches = self.retrieve_top_feedback(field_name, query, top_k=max(1, int(top_k or 1)), form_type=form_type)
             results[field_name] = matches[0] if matches else None
         return results
 
-    def retrieve_top_feedback_for_form(self, evaluation_inputs: Dict[str, str], top_k: int = 5) -> Dict[str, List[FeedbackTemplate]]:
+    def retrieve_top_feedback_for_form(self, evaluation_inputs: Dict[str, str], top_k: int = 5, form_type: str = "") -> Dict[str, List[FeedbackTemplate]]:
         results: Dict[str, List[FeedbackTemplate]] = {}
         for field_name in SUPPORTED_FIELDS:
             query = (evaluation_inputs.get(field_name) or "").strip()
             if not query:
                 results[field_name] = []
                 continue
-            results[field_name] = self.retrieve_top_feedback(field_name, query, top_k=max(1, int(top_k or 1)))
+            results[field_name] = self.retrieve_top_feedback(field_name, query, top_k=max(1, int(top_k or 1)), form_type=form_type)
         return results
 
     def seed_feedback_templates(self, templates: Iterable[Dict[str, str]]) -> None:

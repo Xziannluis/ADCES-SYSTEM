@@ -196,16 +196,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // Get assigned teachers (scoped to program assignments when available)
-$assigned_query = "SELECT ta.*, t.name as teacher_name, t.department 
+// Include teachers whose secondary department matches via teacher_departments
+$hasTeacherDepts = false;
+try {
+    $tdChk = $db->query("SHOW TABLES LIKE 'teacher_departments'");
+    $hasTeacherDepts = $tdChk && $tdChk->fetch(PDO::FETCH_NUM);
+} catch (PDOException $e) { $hasTeacherDepts = false; }
+
+$assigned_query = "SELECT DISTINCT ta.*, t.name as teacher_name, t.department 
                   FROM teacher_assignments ta 
-                  JOIN teachers t ON ta.teacher_id = t.id 
-                  WHERE ta.evaluator_id = :evaluator_id";
+                  JOIN teachers t ON ta.teacher_id = t.id";
+if (!empty($target_programs) && $hasTeacherDepts) {
+    $assigned_query .= " LEFT JOIN teacher_departments td ON td.teacher_id = t.id";
+}
+$assigned_query .= " WHERE ta.evaluator_id = :evaluator_id";
 if (!empty($target_programs)) {
     $programPlaceholders = [];
     foreach ($target_programs as $idx => $dept) {
         $programPlaceholders[] = ':program_' . $idx;
     }
-    $assigned_query .= " AND t.department IN (" . implode(',', $programPlaceholders) . ")";
+    $inClause = implode(',', $programPlaceholders);
+    if ($hasTeacherDepts) {
+        $tdPlaceholders = [];
+        foreach ($target_programs as $idx => $dept) {
+            $tdPlaceholders[] = ':tdprog_' . $idx;
+        }
+        $tdInClause = implode(',', $tdPlaceholders);
+        $assigned_query .= " AND (t.department IN ($inClause) OR td.department IN ($tdInClause))";
+    } else {
+        $assigned_query .= " AND t.department IN ($inClause)";
+    }
 }
 $assigned_query .= " ORDER BY ta.subject, ta.grade_level, t.name";
 $assigned_stmt = $db->prepare($assigned_query);
@@ -213,6 +233,11 @@ $assigned_stmt->bindParam(':evaluator_id', $current_evaluator_id);
 if (!empty($target_programs)) {
     foreach ($target_programs as $idx => $dept) {
         $assigned_stmt->bindValue(':program_' . $idx, $dept);
+    }
+    if ($hasTeacherDepts) {
+        foreach ($target_programs as $idx => $dept) {
+            $assigned_stmt->bindValue(':tdprog_' . $idx, $dept);
+        }
     }
 }
 $assigned_stmt->execute();
@@ -380,15 +405,6 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                             <p><strong>Assigned Teachers:</strong> <?php echo count($assigned_teachers); ?></p>
                         </div>
                     </div>
-                    <?php if(!empty($evaluator_specializations)): ?>
-                    <div class="row mt-3">
-                        <div class="col-12">
-                            <p><strong>Specializations:</strong> 
-                                <?php echo implode(', ', $evaluator_specializations); ?>
-                            </p>
-                        </div>
-                    </div>
-                    <?php endif; ?>
                 </div>
             </div>
 

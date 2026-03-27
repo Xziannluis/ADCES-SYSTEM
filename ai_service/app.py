@@ -126,7 +126,7 @@ async def debug_echo(request: Request):
 
 
 BASE_PATH = pathlib.Path(__file__).parent
-ROOT_PATH = BASE_PATH.resolve().parent.parent
+ROOT_PATH = BASE_PATH.resolve().parent
 PHP_DB_CONFIG_PATH = ROOT_PATH / "config" / "database.php"
 FEEDBACK_PATH = BASE_PATH / "ai_feedback.jsonl"
 EMBEDDINGS_CACHE_PATH = BASE_PATH / "comment_embeddings_cache.npz"
@@ -594,6 +594,7 @@ class GenerateRequest(BaseModel):
     regeneration_nonce: Optional[str] = ""
     previously_shown: Dict[str, List[str]] = Field(default_factory=dict)
     evaluation_focus: Optional[str] = ""
+    evaluation_form_type: Optional[str] = ""
 
 
 class FeedbackItem(BaseModel):
@@ -671,7 +672,7 @@ def _coerce_rating_item(v: Any) -> Optional[RatingItem]:
     if isinstance(v, dict) and "rating" in v:
         try:
             return RatingItem(
-                rating=float(v.get("rating")),
+                rating=float(v["rating"]),
                 comment=str(v.get("comment") or ""),
                 criterion_text=str(v.get("criterion_text") or ""),
             )
@@ -727,6 +728,14 @@ def _is_peac_request(req: GenerateRequest) -> bool:
     return "teacher_actions" in ratings_keys or "student_learning_actions" in ratings_keys
 
 
+def _effective_form_type(req: GenerateRequest) -> str:
+    """Return 'iso' or 'peac' based on explicit field or inferred from ratings."""
+    explicit = (req.evaluation_form_type or "").strip().lower()
+    if explicit in ("iso", "peac"):
+        return explicit
+    return "peac" if _is_peac_request(req) else "iso"
+
+
 def _domain_scores(req: GenerateRequest) -> Dict[str, float]:
     avg = req.averages
     focus = _parse_evaluation_focus(req)
@@ -750,8 +759,8 @@ def _domain_scores(req: GenerateRequest) -> Dict[str, float]:
 
 def _evaluation_signature(req: GenerateRequest) -> Dict[str, Any]:
     domains = _domain_scores(req)
-    weakest = min(domains, key=domains.get) if domains else "Instructional practice"
-    strongest = max(domains, key=domains.get) if domains else "Professional practice"
+    weakest: str = min(domains.keys(), key=lambda k: domains[k]) if domains else "Instructional practice"
+    strongest: str = max(domains.keys(), key=lambda k: domains[k]) if domains else "Professional practice"
     max_scale = 4.0 if _is_peac_request(req) else 5.0
     overall_level = _score_band(req.averages.overall, max_scale)
     return {
@@ -1191,7 +1200,7 @@ def _load_sbert():
     return SentenceTransformer(model_name)
 
 
-def _build_dataset_entries() -> List[Dict[str, Any]]:
+def _build_dataset_entries(form_type: str = "") -> List[Dict[str, Any]]:
     entries: List[Dict[str, Any]] = []
 
     def add_entry(text: str, category: str, source: str, meta: Optional[Dict[str, Any]] = None) -> None:
@@ -1215,7 +1224,7 @@ def _build_dataset_entries() -> List[Dict[str, Any]]:
     }
     for field_name, template_field in field_map.items():
         try:
-            templates = retrieval_system.fetch_templates(field_name)
+            templates = retrieval_system.fetch_templates(field_name, form_type=form_type)
         except Exception:
             templates = []
         for row in templates:
@@ -1281,8 +1290,8 @@ def _load_embedding_cache(entries: List[Dict[str, Any]]) -> Optional[Tuple[List[
         return None
 
 
-def _ensure_dataset_embeddings() -> Tuple[List[Dict[str, Any]], np.ndarray]:
-    entries = _build_dataset_entries()
+def _ensure_dataset_embeddings(form_type: str = "") -> Tuple[List[Dict[str, Any]], np.ndarray]:
+    entries = _build_dataset_entries(form_type=form_type)
     if not entries:
         return [], np.zeros((0, 384), dtype=np.float32)
 
@@ -1330,7 +1339,8 @@ def _cosine_search(query_embedding: np.ndarray, embeddings: np.ndarray) -> np.nd
 
 
 def _retrieve_top_comments(req: GenerateRequest, comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    dataset, embeddings = _ensure_dataset_embeddings()
+    form_type = _effective_form_type(req)
+    dataset, embeddings = _ensure_dataset_embeddings(form_type=form_type)
     if not dataset:
         return []
     query_text = _compose_query_text(req, comments)
@@ -2134,6 +2144,7 @@ def _summarize_comments_for_field(req: GenerateRequest, comments: List[Dict[str,
 
 def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]) -> Tuple[Dict[str, str], Dict[str, List[Dict[str, Any]]]]:
     retrieval_system = _load_feedback_retrieval_system()
+    form_type = _effective_form_type(req)
     queries = {
         "strengths": _normalize_whitespace(req.strengths or "") or _compose_field_query(req, comments, "strengths"),
         "areas_for_improvement": _normalize_whitespace(req.improvement_areas or "") or _compose_field_query(req, comments, "areas_for_improvement"),
@@ -2141,12 +2152,12 @@ def _retrieve_form_feedback(req: GenerateRequest, comments: List[Dict[str, Any]]
     }
 
     try:
-        matched_top = retrieval_system.retrieve_top_feedback_for_form(queries, top_k=10)
+        matched_top = retrieval_system.retrieve_top_feedback_for_form(queries, top_k=10, form_type=form_type)
     except Exception:
         matched_top = {}
         for field_name, query in queries.items():
             try:
-                matched_top[field_name] = retrieval_system.retrieve_top_feedback(field_name, query, top_k=10)
+                matched_top[field_name] = retrieval_system.retrieve_top_feedback(field_name, query, top_k=10, form_type=form_type)
             except Exception:
                 matched_top[field_name] = []
 
@@ -2540,7 +2551,7 @@ def generate(req: GenerateRequest):
                 for field_name, items in field_retrieved.items()
             },
             "embedding_cache_path": str(EMBEDDINGS_CACHE_PATH),
-            "dataset_size": len(_build_dataset_entries()),
+            "dataset_size": len(_build_dataset_entries(form_type=_effective_form_type(req))),
             "model": os.getenv("SBERT_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
             "generator": "mysql-only-retrieval",
             "overall_band": sig["overall_level"],

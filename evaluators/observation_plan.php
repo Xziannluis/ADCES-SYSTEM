@@ -13,11 +13,40 @@ $database = new Database();
 $db = $database->getConnection();
 $teacher = new Teacher($db);
 
+$hasTeacherDepartments = false;
+try {
+    $teacherDepartmentsCheck = $db ? $db->query("SHOW TABLES LIKE 'teacher_departments'") : false;
+    $hasTeacherDepartments = $teacherDepartmentsCheck && $teacherDepartmentsCheck->fetch(PDO::FETCH_NUM);
+} catch (PDOException $e) {
+    $hasTeacherDepartments = false;
+}
+
 // Clear expired schedules (24h past)
 try {
     $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
 } catch (Exception $e) {
     error_log('Error clearing expired schedules: ' . $e->getMessage());
+}
+
+// Also clear schedules for teachers who already have a completed evaluation this period
+try {
+    $month = (int)date('n');
+    $year = (int)date('Y');
+    $curAY = ($month >= 6) ? ($year . '-' . ($year + 1)) : (($year - 1) . '-' . $year);
+    $curSem = ($month >= 6 && $month <= 10) ? '1st' : '2nd';
+    $db->prepare("UPDATE teachers t
+        INNER JOIN evaluations e ON e.teacher_id = t.id AND e.status = 'completed'
+            AND e.academic_year = :ay AND e.semester = :sem
+        SET t.evaluation_schedule = NULL, t.evaluation_room = NULL, t.evaluation_focus = NULL,
+            t.evaluation_subject_area = NULL, t.evaluation_subject = NULL, t.evaluation_semester = NULL,
+            t.evaluation_form_type = 'iso', t.updated_at = NOW()
+        WHERE t.evaluation_schedule IS NOT NULL
+          AND (t.evaluation_form_type IS NULL OR t.evaluation_form_type != 'both'
+               OR (SELECT COUNT(*) FROM evaluations e2 WHERE e2.teacher_id = t.id AND e2.status = 'completed'
+                   AND e2.academic_year = :ay2 AND e2.semester = :sem2 AND e2.evaluation_form_type = 'peac') > 0)")
+        ->execute([':ay' => $curAY, ':sem' => $curSem, ':ay2' => $curAY, ':sem2' => $curSem]);
+} catch (Exception $e) {
+    error_log('Error clearing completed-eval schedules: ' . $e->getMessage());
 }
 
 $success_message = '';
@@ -66,7 +95,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
             $is_reschedule = !empty($_POST['is_reschedule']);
             $success_message = $is_reschedule ? "Schedule updated. Teacher will need to sign again." : "Evaluation schedule set successfully!";
-            notifyScheduleParticipants($db, $teacher_id, $schedule, $room, $_SESSION['user_id'], $_SESSION['name'] ?? 'Evaluator');
+            notifyScheduleParticipants($db, $teacher_id, $schedule, $room, $_SESSION['user_id'], $_SESSION['name'] ?? 'Evaluator', $_SESSION['role'] ?? '');
         } else {
             $error_message = "Failed to set schedule.";
         }
@@ -109,6 +138,8 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                 $sig_data = null;
             }
             $signed_count = 0;
+            $signed_eval_ids = [];
+            $has_upcoming = false;
             foreach ($signed_items as $item) {
                 $eval_id = ($item === 'upcoming') ? null : (int)$item;
                 // Check if already signed
@@ -123,10 +154,32 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                     $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :eid, NOW(), :sig)");
                     $ins->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id, ':sig' => $sig_data]);
                     $signed_count++;
+                    if ($eval_id !== null) {
+                        $signed_eval_ids[] = $eval_id;
+                    } else {
+                        $has_upcoming = true;
+                    }
                 }
             }
             if ($signed_count > 0) {
                 $success_message = "Successfully signed {$signed_count} observation schedule(s).";
+                // Determine departments of signed schedules
+                $signed_depts = [];
+                if (!empty($signed_eval_ids)) {
+                    $ph = implode(',', array_fill(0, count($signed_eval_ids), '?'));
+                    $dStmt = $db->prepare("SELECT DISTINCT u.department FROM evaluations e JOIN users u ON u.id = e.evaluator_id WHERE e.id IN ($ph) AND u.department IS NOT NULL AND u.department != ''");
+                    $dStmt->execute(array_values($signed_eval_ids));
+                    while ($r = $dStmt->fetch(PDO::FETCH_ASSOC)) {
+                        $signed_depts[] = $r['department'];
+                    }
+                }
+                if ($has_upcoming && empty($signed_depts)) {
+                    $pdStmt = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
+                    $pdStmt->execute([':id' => $my_teacher_id]);
+                    $pd = $pdStmt->fetchColumn();
+                    if (!empty($pd)) $signed_depts[] = $pd;
+                }
+                notifyObservationPlanSigned($db, $my_teacher_id, $_SESSION['name'] ?? 'Teacher', $signed_depts);
             } else {
                 $success_message = "Selected schedules were already signed.";
             }
@@ -279,7 +332,8 @@ if ($is_coordinator) {
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
 } else {
-    // Dean/principal query (unchanged)
+    // Dean/principal query — only show evaluations from evaluators in THIS department
+    // Cross-department teachers appear only after being evaluated by someone in this department
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
@@ -289,14 +343,14 @@ if ($is_coordinator) {
                      e.semester as eval_semester
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
-              WHERE (t.department = :department OR e.evaluator_id = :evaluator_id)
+              JOIN users eval_u ON e.evaluator_id = eval_u.id
+              WHERE eval_u.department = :eval_dept
               AND (t.user_id IS NULL OR t.user_id != :current_user_id)
               AND e.academic_year = :academic_year
               AND e.semester = :semester
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':department', $raw_department);
-    $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    $stmt->bindParam(':eval_dept', $raw_department);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
@@ -327,6 +381,8 @@ if ($is_coordinator) {
     $sched_stmt->bindParam(':academic_year', $academic_year);
     $sched_stmt->bindParam(':semester', $semester);
 } else {
+    // Dean/principal: only show scheduled teachers whose primary department matches
+    // Cross-department teachers appear only after being evaluated (via query 1)
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
@@ -413,15 +469,15 @@ foreach ($eval_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', strtotime($obs_date));
     }
 
-    // Get observers
-    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester ORDER BY u.name";
+    // Get observers (filtered to current department)
+    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
     $obs_stmt = $db->prepare($obs_query);
-    $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester]);
+    $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
     $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
     $assign_stmt = $db->prepare($assign_query);
-    $assign_stmt->execute([':teacher_id' => $tid]);
+    $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
 
     $all_observers = array_unique(array_merge($observers, $assigned));
@@ -460,9 +516,9 @@ foreach ($scheduled_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', $ts) . "\n" . date('g:ia', $ts);
     }
 
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
     $assign_stmt = $db->prepare($assign_query);
-    $assign_stmt->execute([':teacher_id' => $tid]);
+    $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     $all_observers = $assigned;
     if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {

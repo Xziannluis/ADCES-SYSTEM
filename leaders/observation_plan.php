@@ -68,6 +68,16 @@ if (empty($academic_year)) {
 
 // Get teachers who have evaluations OR a scheduled observation in this department
 // 1) Teachers with evaluations in this academic year/semester (any evaluator)
+$hasTeacherDepartments = false;
+try {
+    $tdCheck = $db ? $db->query("SHOW TABLES LIKE 'teacher_departments'") : false;
+    $hasTeacherDepartments = $tdCheck && $tdCheck->fetch(PDO::FETCH_NUM);
+} catch (PDOException $e) {
+    $hasTeacherDepartments = false;
+}
+
+// Only show evaluations from evaluators in THIS department
+// Cross-department teachers appear only after being evaluated by someone in this department
 $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                  t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                  t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
@@ -77,13 +87,14 @@ $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                  e.semester as eval_semester
           FROM teachers t
           JOIN evaluations e ON e.teacher_id = t.id
-          WHERE t.department = :department 
+          JOIN users eval_u ON e.evaluator_id = eval_u.id
+          WHERE eval_u.department = :eval_dept
           AND (t.user_id IS NULL OR t.user_id != :current_user_id)
           AND e.academic_year = :academic_year
           AND e.semester = :semester
           ORDER BY t.name ASC";
 $stmt = $db->prepare($query);
-$stmt->bindParam(':department', $raw_department);
+$stmt->bindParam(':eval_dept', $raw_department);
 $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
 $stmt->bindParam(':academic_year', $academic_year);
 $stmt->bindParam(':semester', $semester);
@@ -91,6 +102,8 @@ $stmt->execute();
 $eval_teachers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // 2) Teachers with a schedule set but no evaluation yet (upcoming observations)
+// Only show scheduled teachers whose primary department matches
+// Cross-department teachers appear only after being evaluated (via query 1)
 $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                        t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                        t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
@@ -164,15 +177,15 @@ foreach ($eval_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', strtotime($obs_date));
     }
 
-    // Get observers (all evaluators, not just president/VP)
-    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester ORDER BY u.name";
+    // Get observers (filtered to current department)
+    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
     $obs_stmt = $db->prepare($obs_query);
-    $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester]);
+    $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
     $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
     $assign_stmt = $db->prepare($assign_query);
-    $assign_stmt->execute([':teacher_id' => $tid]);
+    $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
 
     $observer_map[$tid] = array_unique(array_merge($observers, $assigned));
@@ -207,9 +220,9 @@ foreach ($scheduled_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', $ts) . "\n" . date('g:ia', $ts);
     }
 
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
     $assign_stmt = $db->prepare($assign_query);
-    $assign_stmt->execute([':teacher_id' => $tid]);
+    $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
     $observer_map[$tid] = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
 }
 

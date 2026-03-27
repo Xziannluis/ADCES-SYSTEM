@@ -35,6 +35,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $signature_data = null;
         }
         $signed_count = 0;
+        $signed_eval_ids = [];
+        $has_upcoming = false;
         foreach ($signed_items as $item) {
             $eval_id = ($item === 'upcoming') ? null : (int)$item;
             if ($eval_id === null) {
@@ -48,10 +50,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :eid, NOW(), :sig)");
                 $ins->execute([':tid' => $teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id, ':sig' => $signature_data]);
                 $signed_count++;
+                if ($eval_id !== null) {
+                    $signed_eval_ids[] = $eval_id;
+                } else {
+                    $has_upcoming = true;
+                }
             }
         }
         if ($signed_count > 0) {
             $success_message = "Successfully signed {$signed_count} observation schedule(s).";
+            // Determine departments of signed schedules
+            $signed_depts = [];
+            if (!empty($signed_eval_ids)) {
+                $ph = implode(',', array_fill(0, count($signed_eval_ids), '?'));
+                $dStmt = $db->prepare("SELECT DISTINCT u.department FROM evaluations e JOIN users u ON u.id = e.evaluator_id WHERE e.id IN ($ph) AND u.department IS NOT NULL AND u.department != ''");
+                $dStmt->execute(array_values($signed_eval_ids));
+                while ($r = $dStmt->fetch(PDO::FETCH_ASSOC)) {
+                    $signed_depts[] = $r['department'];
+                }
+            }
+            if ($has_upcoming && empty($signed_depts)) {
+                // Upcoming schedule belongs to teacher's primary department
+                $pdStmt = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
+                $pdStmt->execute([':id' => $teacher_id]);
+                $pd = $pdStmt->fetchColumn();
+                if (!empty($pd)) $signed_depts[] = $pd;
+            }
+            // Notify evaluators in those specific departments
+            require_once __DIR__ . '/../includes/mailer.php';
+            notifyObservationPlanSigned($db, $teacher_id, $_SESSION['name'] ?? 'Teacher', $signed_depts);
         } else {
             $success_message = "Selected schedules were already signed.";
         }
@@ -94,8 +121,13 @@ if (!$teacher_data) {
 $focus_labels = [
     'communications' => 'Communication Competence',
     'management' => 'Management and Presentation of the Lesson',
-    'assessment' => "Assessment of Students' Learning"
+    'assessment' => "Assessment of Students' Learning",
 ];
+// PEAC focus labels are exclusive to JHS department
+if (($teacher_data['department'] ?? '') === 'JHS') {
+    $focus_labels['teacher_actions'] = 'Teacher Actions';
+    $focus_labels['student_learning_actions'] = 'Student Learning Actions';
+}
 
 // Get evaluators assigned to this teacher
 $obs_query = "SELECT DISTINCT u.name, u.role FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :tid ORDER BY u.name";
@@ -451,8 +483,6 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
                             </button>
                         </form>
                     </div>
-                </div>
-                    </form>
                 </div>
                 <?php endif; ?>
 
