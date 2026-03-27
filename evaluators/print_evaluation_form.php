@@ -50,8 +50,18 @@ if (!$eval) {
     exit();
 }
 
+// Allow access if user is the teacher being evaluated
+$isOwnEvaluation = false;
+$tchkStmt = $db->prepare("SELECT id FROM teachers WHERE user_id = :uid LIMIT 1");
+$tchkStmt->bindParam(':uid', $_SESSION['user_id'], PDO::PARAM_INT);
+$tchkStmt->execute();
+$myTeacher = $tchkStmt->fetch(PDO::FETCH_ASSOC);
+if ($myTeacher && (int)$myTeacher['id'] === (int)$eval['teacher_id']) {
+    $isOwnEvaluation = true;
+}
+
 // Coordinators can only view their own evaluations within assigned programs
-if (in_array($_SESSION['role'] ?? '', ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
+if (!$isOwnEvaluation && in_array($_SESSION['role'] ?? '', ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
     if ((int)$eval['evaluator_id'] !== (int)($_SESSION['user_id'] ?? 0)) {
         http_response_code(403);
         echo 'Access denied.';

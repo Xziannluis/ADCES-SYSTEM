@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'config/constants.php';
+require_once __DIR__ . '/includes/ai_autostart.php';
 
 // Redirect if already logged in
 if(isset($_SESSION['user_id'])) {

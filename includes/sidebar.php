@@ -52,6 +52,7 @@
 
         <?php if ($_SESSION['role'] === 'teacher'): ?>
             <li><a href="../teachers/dashboard.php" class="nav-link"><i class="fas fa-file-alt"></i> My Evaluations</a></li>
+            <li><a href="../teachers/observation_plan.php" class="nav-link"><i class="fas fa-clipboard-list"></i> Observation Plan</a></li>
         <?php elseif(in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'])): ?>
             <li><a href="my_evaluations.php" class="nav-link"><i class="fas fa-file-alt"></i> My Evaluations</a></li>
         <?php elseif(in_array($_SESSION['role'], ['president', 'vice_president'])): ?>

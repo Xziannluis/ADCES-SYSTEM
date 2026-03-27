@@ -83,10 +83,22 @@ function sendScheduleNotificationToEvaluator($toEmail, $evaluatorName, $teacherN
  *
  * Works for both Higher Ed (Dean + Chairperson) and Basic Ed (Principal + Subject Coordinator).
  */
-function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId, $setterName) {
+function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId, $setterName, $setterRole = '') {
     if (empty($schedule) && empty($room)) {
         return;
     }
+
+    // Determine setter role if not provided
+    if (empty($setterRole)) {
+        try {
+            $roleStmt = $db->prepare("SELECT role FROM users WHERE id = :id LIMIT 1");
+            $roleStmt->execute([':id' => $setterId]);
+            $setterRole = $roleStmt->fetchColumn() ?: '';
+        } catch (PDOException $e) { $setterRole = ''; }
+    }
+
+    $isDeanOrPrincipal = in_array($setterRole, ['dean', 'principal']);
+    $isCoordinatorOrChair = in_array($setterRole, ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
 
     try {
         // 1. Get teacher info and send them an email
@@ -105,40 +117,64 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
         }
         $teacherName = $tdata['name'] ?? 'Teacher';
 
-        // 2. Find all evaluators assigned to this teacher via teacher_assignments
+        // 2. Find evaluators to notify based on setter's role:
+        //    - Dean/Principal sets schedule → notify coordinators + chairperson (in setter's dept)
+        //    - Coordinator/Chairperson sets schedule → notify dean/principal (in setter's dept)
+        $targetRoles = [];
+        if ($isDeanOrPrincipal) {
+            $targetRoles = ['chairperson', 'subject_coordinator', 'grade_level_coordinator'];
+        } elseif ($isCoordinatorOrChair) {
+            $targetRoles = ['dean', 'principal'];
+        } else {
+            // Fallback: notify all evaluator roles
+            $targetRoles = ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'];
+        }
+
+        // Get setter's department to scope notifications
+        $setterDept = '';
+        try {
+            $sdStmt = $db->prepare("SELECT department FROM users WHERE id = :id LIMIT 1");
+            $sdStmt->execute([':id' => $setterId]);
+            $setterDept = $sdStmt->fetchColumn() ?: '';
+        } catch (PDOException $e) {}
+
+        // Find evaluators assigned to this teacher who match the target roles
+        $rolePlaceholders = implode(',', array_fill(0, count($targetRoles), '?'));
         $evalStmt = $db->prepare(
             "SELECT DISTINCT u.id, u.name, u.email, u.role
              FROM teacher_assignments ta
              JOIN users u ON u.id = ta.evaluator_id
-             WHERE ta.teacher_id = :teacher_id
+             WHERE ta.teacher_id = ?
+               AND u.role IN ($rolePlaceholders)
                AND u.status = 'active'
-               AND u.id != :setter_id
+               AND u.id != ?
                AND u.email IS NOT NULL
                AND u.email != ''"
         );
-        $evalStmt->execute([':teacher_id' => $teacherId, ':setter_id' => $setterId]);
+        $evalParams = [$teacherId];
+        foreach ($targetRoles as $r) { $evalParams[] = $r; }
+        $evalParams[] = $setterId;
+        $evalStmt->execute($evalParams);
         $assignedEvaluators = $evalStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // 3. Also find department-level evaluators (dean/principal) for this teacher's department
-        //    who may not be in teacher_assignments but still oversee the department
-        $teacherDept = null;
-        $deptStmt = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
-        $deptStmt->execute([':id' => $teacherId]);
-        $teacherDept = $deptStmt->fetchColumn();
-
+        // 3. Also find department-level evaluators matching target roles
+        //    Use setter's department so the right hierarchy is notified
         $deptEvaluators = [];
-        if (!empty($teacherDept)) {
+        if (!empty($setterDept)) {
             $deptEvalStmt = $db->prepare(
                 "SELECT DISTINCT u.id, u.name, u.email, u.role
                  FROM users u
-                 WHERE u.department = :dept
-                   AND u.role IN ('dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator')
+                 WHERE u.department = ?
+                   AND u.role IN ($rolePlaceholders)
                    AND u.status = 'active'
-                   AND u.id != :setter_id
+                   AND u.id != ?
                    AND u.email IS NOT NULL
                    AND u.email != ''"
             );
-            $deptEvalStmt->execute([':dept' => $teacherDept, ':setter_id' => $setterId]);
+            $deptParams = [$setterDept];
+            foreach ($targetRoles as $r) { $deptParams[] = $r; }
+            $deptParams[] = $setterId;
+            $deptEvalStmt->execute($deptParams);
             $deptEvaluators = $deptEvalStmt->fetchAll(PDO::FETCH_ASSOC);
         }
 
@@ -489,5 +525,121 @@ function sendEvaluationCompletedEmail($toEmail, $teacherName, $evaluatorName, $e
     } catch (Exception $e) {
         error_log('Mailer error: ' . $mail->ErrorInfo);
         return false;
+    }
+}
+
+/**
+ * Notify evaluators when a teacher signs the observation plan.
+ * Notifies all evaluator roles (dean, principal, chairperson, subject_coordinator, grade_level_coordinator)
+ * only in the specific department(s) where the signed schedules belong.
+ * @param array $departments — the department(s) of the signed schedules
+ */
+function notifyObservationPlanSigned($db, $teacherId, $teacherName, $departments = []) {
+    try {
+        // If no departments specified, fall back to teacher's primary department
+        if (empty($departments)) {
+            $deptStmt = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
+            $deptStmt->execute([':id' => $teacherId]);
+            $primaryDept = $deptStmt->fetchColumn();
+            if (!empty($primaryDept)) {
+                $departments = [$primaryDept];
+            }
+        }
+
+        if (empty($departments)) return;
+
+        // Find all evaluator-role users in those departments
+        $placeholders = implode(',', array_fill(0, count($departments), '?'));
+        $evalStmt = $db->prepare(
+            "SELECT DISTINCT u.id, u.name, u.email, u.role
+             FROM users u
+             WHERE u.department IN ($placeholders)
+               AND u.role IN ('dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator')
+               AND u.status = 'active'
+               AND u.email IS NOT NULL
+               AND u.email != ''"
+        );
+        $evalStmt->execute(array_values($departments));
+        $evaluators = $evalStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($evaluators)) return;
+
+        $notifTitle = "Observation Plan Signed — {$teacherName}";
+        $notifMessage = "{$teacherName} has signed the observation plan.";
+
+        // In-app notification
+        $notifInsert = $db->prepare(
+            "INSERT INTO notifications (user_id, teacher_id, type, title, message, link) VALUES (:user_id, :teacher_id, 'observation_signed', :title, :message, :link)"
+        );
+
+        // Email config
+        $configPath = __DIR__ . '/../config/mail.php';
+        $mailConfig = file_exists($configPath) ? require($configPath) : [];
+        $mailEnabled = !empty($mailConfig['enabled']);
+        $autoloadPath = __DIR__ . '/../vendor/autoload.php';
+        if ($mailEnabled && file_exists($autoloadPath)) {
+            require_once $autoloadPath;
+        }
+
+        foreach ($evaluators as $ev) {
+            // In-app notification
+            $link = in_array($ev['role'], ['president', 'vice_president'])
+                ? 'leaders/observation_plan.php'
+                : 'evaluators/observation_plan.php';
+            $notifInsert->execute([
+                ':user_id' => $ev['id'],
+                ':teacher_id' => $teacherId,
+                ':title' => $notifTitle,
+                ':message' => $notifMessage,
+                ':link' => $link,
+            ]);
+
+            // Email notification
+            if ($mailEnabled && !empty($ev['email'])) {
+                try {
+                    $mail = new PHPMailer(true);
+                    $mail->isSMTP();
+                    $mail->Host = $mailConfig['host'] ?? '';
+                    $mail->Port = (int)($mailConfig['port'] ?? 587);
+                    $mail->SMTPAuth = !empty($mailConfig['smtp_auth']);
+                    $mail->Username = $mailConfig['username'] ?? '';
+                    $mail->Password = $mailConfig['password'] ?? '';
+                    $mail->SMTPSecure = $mailConfig['encryption'] ?? PHPMailer::ENCRYPTION_STARTTLS;
+
+                    $mail->setFrom($mailConfig['from_email'] ?? 'no-reply@example.com', $mailConfig['from_name'] ?? 'SMCC Evaluation System');
+                    $mail->addAddress($ev['email'], $ev['name'] ?? 'Evaluator');
+
+                    $body = "<p>Hi {$ev['name']},</p>";
+                    $body .= "<p><strong>{$teacherName}</strong> has signed the observation plan.</p>";
+                    $body .= "<p>You may now proceed with the classroom evaluation.</p>";
+
+                    $mail->isHTML(true);
+                    $mail->Subject = $notifTitle;
+                    $mail->Body = $body;
+                    $mail->AltBody = strip_tags(str_replace(['<br>', '</p>'], ["\n", "\n"], $body));
+                    $mail->send();
+                } catch (Exception $e) {
+                    error_log('Mailer error (observation plan signed): ' . $e->getMessage());
+                }
+            }
+        }
+
+        // Audit log
+        $tUserStmt = $db->prepare("SELECT user_id FROM teachers WHERE id = :id LIMIT 1");
+        $tUserStmt->execute([':id' => $teacherId]);
+        $tUserId = $tUserStmt->fetchColumn();
+        if ($tUserId) {
+            $logStmt = $db->prepare(
+                "INSERT INTO audit_logs (user_id, action, description, ip_address) VALUES (:user_id, :action, :description, :ip)"
+            );
+            $logStmt->execute([
+                ':user_id' => $tUserId,
+                ':action' => 'OBSERVATION_PLAN_SIGNED',
+                ':description' => "{$teacherName} signed the observation plan.",
+                ':ip' => $_SERVER['REMOTE_ADDR'] ?? ''
+            ]);
+        }
+    } catch (Exception $e) {
+        error_log('notifyObservationPlanSigned error: ' . $e->getMessage());
     }
 }

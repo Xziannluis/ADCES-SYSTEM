@@ -17,7 +17,7 @@ class Evaluation {
     }
 
     // Get evaluations for reporting
-    public function getEvaluationsForReport($evaluator_id = null, $academic_year = '', $semester = '', $teacher_id = '', $department = '', $cross_dept_user_id = null, $user_department = '') {
+    public function getEvaluationsForReport($evaluator_id = null, $academic_year = '', $semester = '', $teacher_id = '', $department = '', $cross_dept_user_id = null, $user_department = '', $form_type = '') {
         // Build base query
     $query = "SELECT e.*, t.name as teacher_name, u.name as evaluator_name, u.role as evaluator_role,
                          COUNT(ai.id) as ai_count
@@ -59,6 +59,11 @@ class Evaluation {
         if (!empty($teacher_id)) {
             $where[] = 'e.teacher_id = :teacher_id';
             $params[':teacher_id'] = $teacher_id;
+        }
+
+        if (!empty($form_type) && in_array($form_type, ['iso', 'peac'])) {
+            $where[] = 'e.evaluation_form_type = :form_type';
+            $params[':form_type'] = $form_type;
         }
 
         if (count($where) > 0) {
@@ -374,9 +379,34 @@ class Evaluation {
         $assess_row = $assess_stmt->fetch(PDO::FETCH_ASSOC);
         $assess_avg = ($assess_row['cnt'] > 0) ? ($assess_row['avg_rating'] ?? 0) : null;
 
+        // Calculate PEAC averages (teacher_actions, student_learning_actions)
+        $ta_query = "SELECT AVG(rating) as avg_rating, COUNT(*) as cnt
+                    FROM evaluation_details 
+                    WHERE evaluation_id = :evaluation_id AND category = 'teacher_actions'";
+        $ta_stmt = $this->conn->prepare($ta_query);
+        $ta_stmt->bindParam(':evaluation_id', $evaluation_id);
+        $ta_stmt->execute();
+        $ta_row = $ta_stmt->fetch(PDO::FETCH_ASSOC);
+        $ta_avg = ($ta_row['cnt'] > 0) ? ($ta_row['avg_rating'] ?? 0) : null;
+
+        $sla_query = "SELECT AVG(rating) as avg_rating, COUNT(*) as cnt
+                     FROM evaluation_details 
+                     WHERE evaluation_id = :evaluation_id AND category = 'student_learning_actions'";
+        $sla_stmt = $this->conn->prepare($sla_query);
+        $sla_stmt->bindParam(':evaluation_id', $evaluation_id);
+        $sla_stmt->execute();
+        $sla_row = $sla_stmt->fetch(PDO::FETCH_ASSOC);
+        $sla_avg = ($sla_row['cnt'] > 0) ? ($sla_row['avg_rating'] ?? 0) : null;
+
+        // For PEAC evaluations: store teacher_actions avg in communications_avg,
+        // student_learning_actions avg in management_avg (reuse existing columns)
+        $final_comm_avg = $comm_avg ?? $ta_avg;
+        $final_mgmt_avg = $mgmt_avg ?? $sla_avg;
+        $final_assess_avg = $assess_avg;
+
         // Calculate overall average — only from categories that have ratings
         // (focused evaluations may only cover 1 or 2 categories)
-        $active_avgs = array_filter([$comm_avg, $mgmt_avg, $assess_avg], function($v) { return $v !== null; });
+        $active_avgs = array_filter([$final_comm_avg, $final_mgmt_avg, $final_assess_avg], function($v) { return $v !== null; });
         $overall_avg = count($active_avgs) > 0 ? array_sum($active_avgs) / count($active_avgs) : 0;
 
         // Update evaluation with calculated averages
@@ -388,9 +418,9 @@ class Evaluation {
                         WHERE id = :evaluation_id";
         
         $update_stmt = $this->conn->prepare($update_query);
-        $update_stmt->bindParam(':comm_avg', $comm_avg);
-        $update_stmt->bindParam(':mgmt_avg', $mgmt_avg);
-        $update_stmt->bindParam(':assess_avg', $assess_avg);
+        $update_stmt->bindParam(':comm_avg', $final_comm_avg);
+        $update_stmt->bindParam(':mgmt_avg', $final_mgmt_avg);
+        $update_stmt->bindParam(':assess_avg', $final_assess_avg);
         $update_stmt->bindParam(':overall_avg', $overall_avg);
         $update_stmt->bindParam(':evaluation_id', $evaluation_id);
         

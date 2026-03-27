@@ -17,9 +17,30 @@ $db = $database->getConnection();
 // remove any past schedules so teacher doesn't see outdated entries
 // Clear schedules that are more than 24 hours past their scheduled time
 try {
-    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
 } catch (Exception $e) {
     error_log('Failed to clear expired schedules: ' . $e->getMessage());
+}
+
+// Also clear schedules for teachers who already have a completed evaluation this period
+try {
+    $month = (int)date('n');
+    $year = (int)date('Y');
+    $curAY = ($month >= 6) ? ($year . '-' . ($year + 1)) : (($year - 1) . '-' . $year);
+    $curSem = ($month >= 6 && $month <= 10) ? '1st' : '2nd';
+    $db->prepare("UPDATE teachers t
+        INNER JOIN evaluations e ON e.teacher_id = t.id AND e.status = 'completed'
+            AND e.academic_year = :ay AND e.semester = :sem
+        SET t.evaluation_schedule = NULL, t.evaluation_room = NULL, t.evaluation_focus = NULL,
+            t.evaluation_subject_area = NULL, t.evaluation_subject = NULL, t.evaluation_semester = NULL,
+            t.evaluation_form_type = 'iso', t.updated_at = NOW()
+        WHERE t.evaluation_schedule IS NOT NULL
+          AND (t.evaluation_form_type IS NULL OR t.evaluation_form_type != 'both'
+               OR (SELECT COUNT(*) FROM evaluations e2 WHERE e2.teacher_id = t.id AND e2.status = 'completed'
+                   AND e2.academic_year = :ay2 AND e2.semester = :sem2 AND e2.evaluation_form_type = 'peac') > 0)")
+        ->execute([':ay' => $curAY, ':sem' => $curSem, ':ay2' => $curAY, ':sem2' => $curSem]);
+} catch (Exception $e) {
+    error_log('Error clearing completed-eval schedules: ' . $e->getMessage());
 }
 
 $teacher = new Teacher($db);

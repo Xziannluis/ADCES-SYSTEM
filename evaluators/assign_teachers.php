@@ -97,13 +97,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
     
-    // Ensure teacher is within coordinator's program assignments
+    // Ensure teacher is within coordinator's program assignments (primary or secondary department)
     if (!empty($target_programs)) {
         $deptCheck = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
         $deptCheck->bindParam(':id', $teacher_id);
         $deptCheck->execute();
         $teacherDept = $deptCheck->fetchColumn();
-        if ($teacherDept === false || !in_array($teacherDept, $target_programs, true)) {
+
+        $inProgram = ($teacherDept !== false && in_array($teacherDept, $target_programs, true));
+
+        // Also check secondary departments from teacher_departments table
+        if (!$inProgram) {
+            try {
+                $placeholders = [];
+                $params = [':tid' => $teacher_id];
+                foreach ($target_programs as $i => $prog) {
+                    $key = ':prog_' . $i;
+                    $placeholders[] = $key;
+                    $params[$key] = $prog;
+                }
+                $secCheck = $db->prepare("SELECT 1 FROM teacher_departments WHERE teacher_id = :tid AND department IN (" . implode(',', $placeholders) . ") LIMIT 1");
+                $secCheck->execute($params);
+                $inProgram = ($secCheck->rowCount() > 0);
+            } catch (PDOException $e) {}
+        }
+
+        if (!$inProgram) {
             $_SESSION['error'] = "Selected teacher is outside the coordinator's assigned program.";
             header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
             exit();
@@ -177,16 +196,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // Get assigned teachers (scoped to program assignments when available)
-$assigned_query = "SELECT ta.*, t.name as teacher_name, t.department 
+// Include teachers whose secondary department matches via teacher_departments
+$hasTeacherDepts = false;
+try {
+    $tdChk = $db->query("SHOW TABLES LIKE 'teacher_departments'");
+    $hasTeacherDepts = $tdChk && $tdChk->fetch(PDO::FETCH_NUM);
+} catch (PDOException $e) { $hasTeacherDepts = false; }
+
+$assigned_query = "SELECT DISTINCT ta.*, t.name as teacher_name, t.department 
                   FROM teacher_assignments ta 
-                  JOIN teachers t ON ta.teacher_id = t.id 
-                  WHERE ta.evaluator_id = :evaluator_id";
+                  JOIN teachers t ON ta.teacher_id = t.id";
+if (!empty($target_programs) && $hasTeacherDepts) {
+    $assigned_query .= " LEFT JOIN teacher_departments td ON td.teacher_id = t.id";
+}
+$assigned_query .= " WHERE ta.evaluator_id = :evaluator_id";
 if (!empty($target_programs)) {
     $programPlaceholders = [];
     foreach ($target_programs as $idx => $dept) {
         $programPlaceholders[] = ':program_' . $idx;
     }
-    $assigned_query .= " AND t.department IN (" . implode(',', $programPlaceholders) . ")";
+    $inClause = implode(',', $programPlaceholders);
+    if ($hasTeacherDepts) {
+        $tdPlaceholders = [];
+        foreach ($target_programs as $idx => $dept) {
+            $tdPlaceholders[] = ':tdprog_' . $idx;
+        }
+        $tdInClause = implode(',', $tdPlaceholders);
+        $assigned_query .= " AND (t.department IN ($inClause) OR td.department IN ($tdInClause))";
+    } else {
+        $assigned_query .= " AND t.department IN ($inClause)";
+    }
 }
 $assigned_query .= " ORDER BY ta.subject, ta.grade_level, t.name";
 $assigned_stmt = $db->prepare($assigned_query);
@@ -194,6 +233,11 @@ $assigned_stmt->bindParam(':evaluator_id', $current_evaluator_id);
 if (!empty($target_programs)) {
     foreach ($target_programs as $idx => $dept) {
         $assigned_stmt->bindValue(':program_' . $idx, $dept);
+    }
+    if ($hasTeacherDepts) {
+        foreach ($target_programs as $idx => $dept) {
+            $assigned_stmt->bindValue(':tdprog_' . $idx, $dept);
+        }
     }
 }
 $assigned_stmt->execute();
@@ -361,15 +405,6 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                             <p><strong>Assigned Teachers:</strong> <?php echo count($assigned_teachers); ?></p>
                         </div>
                     </div>
-                    <?php if(!empty($evaluator_specializations)): ?>
-                    <div class="row mt-3">
-                        <div class="col-12">
-                            <p><strong>Specializations:</strong> 
-                                <?php echo implode(', ', $evaluator_specializations); ?>
-                            </p>
-                        </div>
-                    </div>
-                    <?php endif; ?>
                 </div>
             </div>
 
@@ -386,25 +421,77 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                 <select class="form-select" name="teacher_id" required>
                                     <option value="">Select Teacher</option>
                                     <?php while($teacher_row = $available_teachers->fetch(PDO::FETCH_ASSOC)):
-                                        // Exclude teachers whose name matches any chairperson's name in this department
+                                        // Exclude teachers who are evaluators/admins in the TARGET coordinator's department
+                                        // but allow them if they teach in other departments (cross-dept assignment)
                                         $exclude = false;
-                                        $chair_query = $db->prepare("SELECT 1 FROM users WHERE role = 'chairperson' AND department = :dept AND name = :name LIMIT 1");
-                                        $chair_query->bindParam(':dept', $_SESSION['department']);
-                                        $chair_query->bindParam(':name', $teacher_row['name']);
-                                        $chair_query->execute();
-                                        if ($chair_query->fetchColumn()) {
-                                            $exclude = true;
+                                        $target_dept_for_exclude = $coordinator_info['department'] ?? $_SESSION['department'];
+                                        if (!empty($teacher_row['user_id'])) {
+                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE id = :uid AND role IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator') AND department = :dept AND status = 'active' LIMIT 1");
+                                            $eval_query->bindParam(':uid', $teacher_row['user_id']);
+                                            $eval_query->bindParam(':dept', $target_dept_for_exclude);
+                                            $eval_query->execute();
+                                            if ($eval_query->fetchColumn()) {
+                                                $exclude = true;
+                                            }
+                                        } else {
+                                            // Fallback: match by name within the target department
+                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE role IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator') AND department = :dept AND name = :name AND status = 'active' LIMIT 1");
+                                            $eval_query->bindParam(':dept', $target_dept_for_exclude);
+                                            $eval_query->bindParam(':name', $teacher_row['name']);
+                                            $eval_query->execute();
+                                            if ($eval_query->fetchColumn()) {
+                                                $exclude = true;
+                                            }
                                         }
 
                                         // Respect evaluator specializations when present (e.g., an IT chairperson should only see IT teachers)
                                         $include_by_specialization = true;
                                         $include_by_department = true;
 
-                                        // Normalize department strings
-                                        $coord_dept = strtolower(trim($target_department ?? $_SESSION['department']));
+                                        // Use the TARGET coordinator's department, not the logged-in user's
+                                        $coord_dept = strtolower(trim($coordinator_info['department'] ?? $_SESSION['department']));
                                         $teacher_dept = strtolower(trim($teacher_row['department'] ?? ''));
 
-                                        if (!empty($evaluator_specializations)) {
+                                        // Check if this teacher has a secondary department matching the coordinator's programs
+                                        $teacher_matches_target = false;
+                                        if (!empty($target_programs)) {
+                                            foreach ($target_programs as $tp) {
+                                                if (strtolower(trim($tp)) === $teacher_dept) {
+                                                    $teacher_matches_target = true;
+                                                    break;
+                                                }
+                                            }
+                                            // Also check secondary departments via teacher_departments
+                                            if (!$teacher_matches_target && !empty($teacher_row['id'])) {
+                                                try {
+                                                    $prog_placeholders = [];
+                                                    foreach ($target_programs as $idx => $tp) {
+                                                        $prog_placeholders[] = ':prog_' . $idx;
+                                                    }
+                                                    $sec_dept_check = $db->prepare("SELECT 1 FROM teacher_departments WHERE teacher_id = :tid AND department IN (" . implode(',', $prog_placeholders) . ") LIMIT 1");
+                                                    $sec_dept_check->bindParam(':tid', $teacher_row['id']);
+                                                    foreach ($target_programs as $idx => $tp) {
+                                                        $sec_dept_check->bindValue(':prog_' . $idx, $tp);
+                                                    }
+                                                    $sec_dept_check->execute();
+                                                    if ($sec_dept_check->fetchColumn()) {
+                                                        $teacher_matches_target = true;
+                                                    }
+                                                } catch (Throwable $e) {
+                                                    // teacher_departments may not exist; treat as not matching
+                                                }
+                                            }
+                                        } else {
+                                            // No specific programs; trust the upstream query
+                                            $teacher_matches_target = true;
+                                        }
+
+                                        // If teacher is in a target program (primary or secondary), skip the hard-coded dept filter
+                                        if (!$teacher_matches_target) {
+                                            $include_by_department = false;
+                                        }
+
+                                        if (!empty($evaluator_specializations) && !$teacher_matches_target) {
                                             $specs = array_map('strtolower', $evaluator_specializations);
                                             // If evaluator specializes in IT, only include teachers whose department mentions IT
                                             if (in_array('it', $specs) || in_array('information technology', $specs) || in_array('information_technology', $specs)) {
@@ -414,22 +501,6 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                             // If evaluator specializes in CCIS, only include CCIS teachers
                                             if (in_array('ccis', $specs) || in_array('computer science', $specs) || in_array('cs', $specs)) {
                                                 $include_by_specialization = (strpos($teacher_dept, 'ccis') !== false || strpos($teacher_dept, 'computer science') !== false || strpos($teacher_dept, 'cs') !== false);
-                                            }
-                                        }
-
-                                        // Also use the evaluator's department string as a safety filter.
-                                        // For example, 'CCIS IT' should not include teachers from 'CCIS CS'.
-                                        if (!empty($coord_dept)) {
-                                            if (strpos($coord_dept, 'it') !== false || strpos($coord_dept, 'information technology') !== false) {
-                                                $include_by_department = (strpos($teacher_dept, 'it') !== false || strpos($teacher_dept, 'information technology') !== false);
-                                            } elseif (strpos($coord_dept, 'ccis') !== false || strpos($coord_dept, 'computer science') !== false || strpos($coord_dept, 'cs') !== false) {
-                                                $include_by_department = (strpos($teacher_dept, 'ccis') !== false || strpos($teacher_dept, 'computer science') !== false || strpos($teacher_dept, 'cs') !== false);
-                                            } else {
-                                                // Fallback: require the faculty prefix (e.g., 'ccis') to match if present
-                                                if (preg_match('/^[a-z]+/i', $coord_dept, $m)) {
-                                                    $prefix = $m[0];
-                                                    $include_by_department = (strpos($teacher_dept, $prefix) !== false);
-                                                }
                                             }
                                         }
 
