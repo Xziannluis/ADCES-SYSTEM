@@ -973,7 +973,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                 <div class="col-5">
                                     <div class="input-group">
                                         <span class="input-group-text"><i class="fas fa-clock"></i></span>
-                                        <input type="time" class="form-control" id="evaluation_time" step="900" required>
+                                        <input type="time" class="form-control" id="evaluation_time" step="60" required>
                                     </div>
                                 </div>
                             </div>

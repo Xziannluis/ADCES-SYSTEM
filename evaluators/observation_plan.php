@@ -285,15 +285,29 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
         $obs_stmt->execute([':tid' => $my_teacher_id]);
         $my_observers = $obs_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Get the dean/principal of this teacher's department
-        $dean_query = "SELECT name, role FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY FIELD(role,'dean','principal') LIMIT 1";
+        // Get deans/principals from ALL departments this teacher belongs to (primary + secondary), excluding self
+        $my_all_depts = [$my_teacher_data['department']];
+        try {
+            $sec_stmt = $db->prepare("SELECT department FROM teacher_departments WHERE teacher_id = :tid");
+            $sec_stmt->execute([':tid' => $my_teacher_id]);
+            while ($sd = $sec_stmt->fetchColumn()) {
+                if (!in_array($sd, $my_all_depts)) $my_all_depts[] = $sd;
+            }
+        } catch (Exception $e) {}
+        $ph_depts = implode(',', array_fill(0, count($my_all_depts), '?'));
+        $dean_query = "SELECT DISTINCT name FROM users WHERE department IN ($ph_depts) AND role IN ('dean','principal') AND status = 'active' AND id != ? ORDER BY name";
         $dean_stmt = $db->prepare($dean_query);
-        $dean_stmt->execute([':dept' => $my_teacher_data['department']]);
-        $dean_info_my = $dean_stmt->fetch(PDO::FETCH_ASSOC);
+        $dean_stmt->execute(array_merge($my_all_depts, [$_SESSION['user_id']]));
+        while ($dean_name_row = $dean_stmt->fetchColumn()) {
+            if (!in_array($dean_name_row, $my_observer_names)) $my_observer_names[] = $dean_name_row;
+        }
 
-        if ($dean_info_my) $my_observer_names[] = $dean_info_my['name'];
-        foreach ($my_observers as $obs) {
-            if (!in_array($obs['name'], $my_observer_names)) $my_observer_names[] = $obs['name'];
+        // Add assigned coordinators (unless current user is a coordinator — then only deans observe)
+        if (!in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
+            foreach ($my_observers as $obs) {
+                if ($obs['name'] === ($_SESSION['name'] ?? '')) continue; // exclude self
+                if (!in_array($obs['name'], $my_observer_names)) $my_observer_names[] = $obs['name'];
+            }
         }
 
         // Get completed evaluations
@@ -355,8 +369,8 @@ if ($is_coordinator) {
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
 } else {
-    // Dean/principal query — only show evaluations from evaluators in THIS department
-    // Cross-department teachers appear only after being evaluated by someone in this department
+    // Dean/principal query — show evaluations from evaluators in THIS department
+    // OR teachers who belong to this department (primary or secondary)
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
@@ -367,13 +381,16 @@ if ($is_coordinator) {
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
               JOIN users eval_u ON e.evaluator_id = eval_u.id
-              WHERE eval_u.department = :eval_dept
+              LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+              WHERE (eval_u.department = :eval_dept OR t.department = :dept2 OR td.department = :dept3)
               AND (t.user_id IS NULL OR t.user_id != :current_user_id)
               AND e.academic_year = :academic_year
               AND e.semester = :semester
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':eval_dept', $raw_department);
+    $stmt->bindParam(':dept2', $raw_department);
+    $stmt->bindParam(':dept3', $raw_department);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
@@ -404,13 +421,13 @@ if ($is_coordinator) {
     $sched_stmt->bindParam(':academic_year', $academic_year);
     $sched_stmt->bindParam(':semester', $semester);
 } else {
-    // Dean/principal: only show scheduled teachers whose primary department matches
-    // Cross-department teachers appear only after being evaluated (via query 1)
+    // Dean/principal: show scheduled teachers in this department (primary or secondary)
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
                     FROM teachers t
-                    WHERE t.department = :department
+                    LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                    WHERE (t.department = :department OR td.department = :department2)
                       AND t.status = 'active'
                       AND t.evaluation_schedule IS NOT NULL
                       AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
@@ -422,6 +439,7 @@ if ($is_coordinator) {
                     ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
     $sched_stmt->bindParam(':department', $raw_department);
+    $sched_stmt->bindParam(':department2', $raw_department);
     $sched_stmt->bindParam(':filter_semester', $semester);
     $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $sched_stmt->bindParam(':academic_year', $academic_year);
@@ -446,6 +464,24 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
 }
 $seen_ids = [];
 $teachers_list = [];
+
+// Build teacher role map: teacher_id → user role (for filtering observers)
+$teacher_role_map = [];
+try {
+    $role_stmt = $db->query("SELECT t.id, u.role FROM teachers t JOIN users u ON t.user_id = u.id WHERE t.user_id IS NOT NULL");
+    while ($rr = $role_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $teacher_role_map[$rr['id']] = $rr['role'];
+    }
+} catch (Exception $e) {}
+
+// Build teacher secondary departments map
+$teacher_sec_depts = [];
+try {
+    $tsd_stmt = $db->query("SELECT teacher_id, department FROM teacher_departments");
+    while ($tsd = $tsd_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $teacher_sec_depts[$tsd['teacher_id']][] = $tsd['department'];
+    }
+} catch (Exception $e) {}
 
 // Focus label mapping
 $focus_labels = [
@@ -507,6 +543,39 @@ foreach ($eval_teachers as $t) {
     if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
         array_unshift($all_observers, $dean_name);
     }
+    // Add deans from teacher's secondary departments
+    $t_primary_dept = $t['teacher_department'] ?? '';
+    $t_sec = $teacher_sec_depts[$tid] ?? [];
+    $t_all_depts_list = array_unique(array_filter(array_merge([$t_primary_dept], $t_sec)));
+    if (count($t_all_depts_list) > 0) {
+        $ph = implode(',', array_fill(0, count($t_all_depts_list), '?'));
+        $deans_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department IN ($ph) AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
+        $deans_stmt->execute(array_values($t_all_depts_list));
+        while ($dn = $deans_stmt->fetchColumn()) {
+            if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
+        }
+    }
+    // Exclude the teacher themselves from their own observer list
+    $teacher_name = $t['name'] ?? '';
+    $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
+        return $n !== $teacher_name;
+    }));
+    // If teacher is a chairperson/coordinator, only deans observe them
+    $teacher_user_role = $teacher_role_map[$tid] ?? '';
+    if (in_array($teacher_user_role, ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
+        $dean_only = array_values(array_filter($all_observers, function($name) use ($db) {
+            static $dean_cache = null;
+            if ($dean_cache === null) {
+                $dean_cache = [];
+                try {
+                    $ds = $db->query("SELECT DISTINCT name FROM users WHERE role IN ('dean','principal') AND status = 'active'");
+                    while ($r = $ds->fetchColumn()) $dean_cache[] = $r;
+                } catch (Exception $e) {}
+            }
+            return in_array($name, $dean_cache);
+        }));
+        if (!empty($dean_only)) $all_observers = $dean_only;
+    }
     $observer_map[$tid] = $all_observers;
 }
 
@@ -546,6 +615,39 @@ foreach ($scheduled_teachers as $t) {
     $all_observers = $assigned;
     if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
         array_unshift($all_observers, $dean_name);
+    }
+    // Add deans from teacher's secondary departments
+    $t_primary_dept = $t['teacher_department'] ?? '';
+    $t_sec = $teacher_sec_depts[$tid] ?? [];
+    $t_all_depts_list = array_unique(array_filter(array_merge([$t_primary_dept], $t_sec)));
+    if (count($t_all_depts_list) > 0) {
+        $ph = implode(',', array_fill(0, count($t_all_depts_list), '?'));
+        $deans_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department IN ($ph) AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
+        $deans_stmt->execute(array_values($t_all_depts_list));
+        while ($dn = $deans_stmt->fetchColumn()) {
+            if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
+        }
+    }
+    // Exclude the teacher themselves from their own observer list
+    $teacher_name = $t['name'] ?? '';
+    $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
+        return $n !== $teacher_name;
+    }));
+    // If teacher is a chairperson/coordinator, only deans observe them
+    $teacher_user_role = $teacher_role_map[$tid] ?? '';
+    if (in_array($teacher_user_role, ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
+        $dean_only = array_values(array_filter($all_observers, function($name) use ($db) {
+            static $dean_cache2 = null;
+            if ($dean_cache2 === null) {
+                $dean_cache2 = [];
+                try {
+                    $ds = $db->query("SELECT DISTINCT name FROM users WHERE role IN ('dean','principal') AND status = 'active'");
+                    while ($r = $ds->fetchColumn()) $dean_cache2[] = $r;
+                } catch (Exception $e) {}
+            }
+            return in_array($name, $dean_cache2);
+        }));
+        if (!empty($dean_only)) $all_observers = $dean_only;
     }
     $observer_map[$tid] = $all_observers;
 }
@@ -725,6 +827,21 @@ try {
             }
             .plan-table tr:nth-child(even) {
                 background: #fff !important;
+            }
+            /* Badges render as plain text in print */
+            .badge {
+                background: none !important;
+                color: #000 !important;
+                padding: 0 !important;
+                font-size: 0.85rem !important;
+                font-style: italic;
+                border: none !important;
+            }
+            /* Ensure all table cells have borders in print */
+            .plan-table,
+            .plan-table th,
+            .plan-table td {
+                border: 1.5px solid #000 !important;
             }
         }
     </style>
@@ -1044,7 +1161,7 @@ try {
                     <table class="plan-table">
                         <thead>
                             <tr>
-                                <th style="width: 3%;" class="no-print"><input type="checkbox" class="form-check-input" id="checkAllTeachers" title="Select All"></th>
+                                <th class="no-print" style="width:3%;border:none !important;padding:0;"><input type="checkbox" class="form-check-input" id="checkAllTeachers" title="Select All"></th>
                                 <th style="width: 11%;">Teacher</th>
                                 <th style="width: 6%;">Semester</th>
                                 <th style="width: 12%;">Focus of Observation</th>
@@ -1063,7 +1180,7 @@ try {
                                 <?php $counter = 1; foreach ($teachers_list as $t): ?>
                                 <?php $tid = $t['id']; $sd = $schedule_data[$tid] ?? []; $has_schedule = !empty($t['evaluation_schedule']); $is_done = $eval_data[$tid]['done'] ?? false; ?>
                                 <tr>
-                                    <td class="text-center no-print">
+                                    <td class="no-print" style="border:none !important;padding:0;">
                                         <?php if ($has_schedule && !$is_done): ?>
                                             <input type="checkbox" class="form-check-input reschedule-check" value="<?php echo (int)$tid; ?>" style="width:18px;height:18px;">
                                         <?php endif; ?>
@@ -1115,13 +1232,15 @@ try {
                                         if ($ack && !empty($ack['signature'])): ?>
                                             <img src="<?php echo $ack['signature']; ?>" alt="Signature" style="max-height: 30px; max-width: 60px;" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
                                         <?php elseif ($ack): ?>
-                                            <span class="text-success" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
+                                            <span class="text-success no-print" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
                                                 <i class="fas fa-check-circle"></i>
                                             </span>
+                                            <span class="print-only">Signed</span>
                                         <?php elseif (!empty($faculty_sig)): ?>
                                             <img src="<?php echo $faculty_sig; ?>" alt="Signature" style="max-height: 30px; max-width: 60px;" title="Faculty signature from evaluation">
                                         <?php elseif ($has_schedule): ?>
-                                            <span class="text-warning"><i class="fas fa-clock"></i> Pending</span>
+                                            <span class="text-warning no-print"><i class="fas fa-clock"></i> Pending</span>
+                                            <span class="print-only">Pending</span>
                                         <?php endif; ?>
                                     </td>
                                     <td class="text-center" style="font-size:0.8rem;">

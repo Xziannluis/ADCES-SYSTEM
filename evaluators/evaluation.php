@@ -255,7 +255,15 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_row['name']); ?></h6>
-                                    <p class="mb-0 text-muted"><?php echo htmlspecialchars($teacher_row['department']); ?></p>
+                                    <p class="mb-0 text-muted"><?php
+                                        // Show evaluator's department if teacher's primary differs (secondary dept context)
+                                        $eval_dept = $_SESSION['department'] ?? '';
+                                        $display_dept = $teacher_row['department'];
+                                        if ($teacher_row['department'] !== $eval_dept && !empty($eval_dept)) {
+                                            $display_dept = $eval_dept;
+                                        }
+                                        echo htmlspecialchars($display_dept);
+                                    ?></p>
                                     <small class="text-muted">
                                         <?php if (!empty($scheduleRaw)): ?>
                                             <i class="fas fa-calendar me-1"></i>
@@ -371,7 +379,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     </div>
                                     <div class="col-md-3">
                                         <label class="form-label">Date of Observation:</label>
-                                        <input type="date" class="form-control" id="observationDate" name="observation_date" required>
+                                        <input type="date" class="form-control" id="observationDate" name="observation_date" required min="<?php echo date('Y-m-d'); ?>" value="<?php echo date('Y-m-d'); ?>">
                                     </div>
                                 </div>
                                 <div class="row mb-3">

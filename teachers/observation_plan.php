@@ -158,19 +158,31 @@ $obs_stmt = $db->prepare($obs_query);
 $obs_stmt->execute([':tid' => $teacher_id]);
 $observers = $obs_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get the dean/principal of this teacher's department
-$dean_query = "SELECT name, role FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY FIELD(role,'dean','principal') LIMIT 1";
+// Get deans/principals from ALL departments this teacher belongs to (primary + secondary), excluding self
+$t_all_depts = [$teacher_data['department']];
+try {
+    $sec_stmt = $db->prepare("SELECT department FROM teacher_departments WHERE teacher_id = :tid");
+    $sec_stmt->execute([':tid' => $teacher_id]);
+    while ($sd = $sec_stmt->fetchColumn()) {
+        if (!in_array($sd, $t_all_depts)) $t_all_depts[] = $sd;
+    }
+} catch (Exception $e) {}
+$ph_depts = implode(',', array_fill(0, count($t_all_depts), '?'));
+$dean_query = "SELECT DISTINCT name FROM users WHERE department IN ($ph_depts) AND role IN ('dean','principal') AND status = 'active' AND id != ? ORDER BY name";
 $dean_stmt = $db->prepare($dean_query);
-$dean_stmt->execute([':dept' => $teacher_data['department']]);
-$dean_info = $dean_stmt->fetch(PDO::FETCH_ASSOC);
+$dean_stmt->execute(array_merge($t_all_depts, [$_SESSION['user_id']]));
 
 $all_observer_names = [];
-if ($dean_info) {
-    $all_observer_names[] = $dean_info['name'];
+while ($dean_name_row = $dean_stmt->fetchColumn()) {
+    $all_observer_names[] = $dean_name_row;
 }
-foreach ($observers as $obs) {
-    if (!in_array($obs['name'], $all_observer_names)) {
-        $all_observer_names[] = $obs['name'];
+// If current user is a coordinator, only the deans observe them
+if (!in_array($_SESSION['role'] ?? '', ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
+    foreach ($observers as $obs) {
+        if ($obs['name'] === ($_SESSION['name'] ?? '')) continue; // exclude self
+        if (!in_array($obs['name'], $all_observer_names)) {
+            $all_observer_names[] = $obs['name'];
+        }
     }
 }
 
