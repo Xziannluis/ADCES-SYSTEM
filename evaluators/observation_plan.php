@@ -309,6 +309,26 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                 if (!in_array($obs['name'], $my_observer_names)) $my_observer_names[] = $obs['name'];
             }
         }
+        // If President/VP scheduled this teacher, only they are the observer
+        $my_sched_by = $my_teacher_data['scheduled_by'] ?? null;
+        if ($my_sched_by) {
+            $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
+            $sb_stmt->execute([':id' => $my_sched_by]);
+            $sb_name = $sb_stmt->fetchColumn();
+            if ($sb_name) {
+                $my_observer_names = [$sb_name];
+            }
+        }
+        // If NOT scheduled by president/VP, add president/VP who have evaluated this teacher
+        if (empty($my_sched_by) || empty($sb_name)) {
+            $pv_stmt = $db->prepare("SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem AND u.role IN ('president','vice_president') ORDER BY u.name");
+            $pv_stmt->execute([':tid' => $my_teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
+            while ($pv_name = $pv_stmt->fetchColumn()) {
+                if (!in_array($pv_name, $my_observer_names)) {
+                    $my_observer_names[] = $pv_name;
+                }
+            }
+        }
 
         // Get completed evaluations
         $eval_query = "SELECT e.id, e.observation_date, e.status, e.subject_area, e.subject_observed, e.observation_room, e.semester, e.evaluation_focus, u.name as evaluator_name
@@ -350,6 +370,7 @@ if ($is_coordinator) {
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                     t.scheduled_by, t.scheduled_department,
                      e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
                      e.subject_area as eval_subject_area, e.evaluation_focus as eval_focus,
@@ -374,6 +395,7 @@ if ($is_coordinator) {
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                     t.scheduled_by, t.scheduled_department,
                      e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
                      e.subject_area as eval_subject_area, e.evaluation_focus as eval_focus,
@@ -382,7 +404,8 @@ if ($is_coordinator) {
               JOIN evaluations e ON e.teacher_id = t.id
               JOIN users eval_u ON e.evaluator_id = eval_u.id
               LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-              WHERE (eval_u.department = :eval_dept OR t.department = :dept2 OR td.department = :dept3)
+              WHERE (eval_u.department = :eval_dept OR t.department = :dept2 OR td.department = :dept3
+                     OR eval_u.role IN ('president','vice_president'))
               AND (t.user_id IS NULL OR t.user_id != :current_user_id)
               AND e.academic_year = :academic_year
               AND e.semester = :semester
@@ -402,7 +425,8 @@ $eval_teachers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 if ($is_coordinator) {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
-                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
+                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                           t.scheduled_by, t.scheduled_department
                     FROM teachers t
                     JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :assigned_evaluator_id
                     WHERE t.status = 'active'
@@ -424,7 +448,8 @@ if ($is_coordinator) {
     // Dean/principal: show scheduled teachers in this department (primary or secondary)
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
-                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
+                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                           t.scheduled_by, t.scheduled_department
                     FROM teachers t
                     LEFT JOIN teacher_departments td ON td.teacher_id = t.id
                     WHERE (t.department = :department OR td.department = :department2)
@@ -528,13 +553,13 @@ foreach ($eval_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', strtotime($obs_date));
     }
 
-    // Get observers (filtered to current department)
-    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
+    // Get observers (filtered to current department + president/VP)
+    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";
     $obs_stmt = $db->prepare($obs_query);
     $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
     $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
+    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";
     $assign_stmt = $db->prepare($assign_query);
     $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -555,6 +580,18 @@ foreach ($eval_teachers as $t) {
             if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
         }
     }
+    // If President/VP scheduled this teacher, only they are the observer
+    $sched_by_id = $t['scheduled_by'] ?? null;
+    if ($sched_by_id) {
+        $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
+        $sb_stmt->execute([':id' => $sched_by_id]);
+        $sb_name = $sb_stmt->fetchColumn();
+        if ($sb_name) {
+            $all_observers = [$sb_name];
+            $observer_map[$tid] = $all_observers;
+            continue;
+        }
+    }
     // Exclude the teacher themselves from their own observer list
     $teacher_name = $t['name'] ?? '';
     $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
@@ -568,7 +605,7 @@ foreach ($eval_teachers as $t) {
             if ($dean_cache === null) {
                 $dean_cache = [];
                 try {
-                    $ds = $db->query("SELECT DISTINCT name FROM users WHERE role IN ('dean','principal') AND status = 'active'");
+                    $ds = $db->query("SELECT DISTINCT name FROM users WHERE role IN ('dean','principal','president','vice_president') AND status = 'active'");
                     while ($r = $ds->fetchColumn()) $dean_cache[] = $r;
                 } catch (Exception $e) {}
             }
@@ -608,7 +645,7 @@ foreach ($scheduled_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', $ts) . "\n" . date('g:ia', $ts);
     }
 
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
+    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";
     $assign_stmt = $db->prepare($assign_query);
     $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -628,6 +665,18 @@ foreach ($scheduled_teachers as $t) {
             if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
         }
     }
+    // If President/VP scheduled this teacher, only they are the observer
+    $sched_by_id = $t['scheduled_by'] ?? null;
+    if ($sched_by_id) {
+        $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
+        $sb_stmt->execute([':id' => $sched_by_id]);
+        $sb_name = $sb_stmt->fetchColumn();
+        if ($sb_name) {
+            $all_observers = [$sb_name];
+            $observer_map[$tid] = $all_observers;
+            continue;
+        }
+    }
     // Exclude the teacher themselves from their own observer list
     $teacher_name = $t['name'] ?? '';
     $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
@@ -641,7 +690,7 @@ foreach ($scheduled_teachers as $t) {
             if ($dean_cache2 === null) {
                 $dean_cache2 = [];
                 try {
-                    $ds = $db->query("SELECT DISTINCT name FROM users WHERE role IN ('dean','principal') AND status = 'active'");
+                    $ds = $db->query("SELECT DISTINCT name FROM users WHERE role IN ('dean','principal','president','vice_president') AND status = 'active'");
                     while ($r = $ds->fetchColumn()) $dean_cache2[] = $r;
                 } catch (Exception $e) {}
             }

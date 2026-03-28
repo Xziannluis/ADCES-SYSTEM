@@ -185,6 +185,26 @@ if (!in_array($_SESSION['role'] ?? '', ['chairperson', 'subject_coordinator', 'g
         }
     }
 }
+// If President/VP scheduled this teacher, only they are the observer
+$sched_by_id = $teacher_data['scheduled_by'] ?? null;
+if ($sched_by_id) {
+    $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
+    $sb_stmt->execute([':id' => $sched_by_id]);
+    $sb_name = $sb_stmt->fetchColumn();
+    if ($sb_name) {
+        $all_observer_names = [$sb_name];
+    }
+}
+// If NOT scheduled by president/VP, add president/VP who have evaluated this teacher
+if (empty($sched_by_id) || empty($sb_name)) {
+    $pv_eval_stmt = $db->prepare("SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem AND u.role IN ('president','vice_president') ORDER BY u.name");
+    $pv_eval_stmt->execute([':tid' => $teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
+    while ($pv_name = $pv_eval_stmt->fetchColumn()) {
+        if (!in_array($pv_name, $all_observer_names)) {
+            $all_observer_names[] = $pv_name;
+        }
+    }
+}
 
 // Build observation plan data
 $has_schedule = !empty($teacher_data['evaluation_schedule']);

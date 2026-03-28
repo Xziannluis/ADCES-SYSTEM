@@ -63,7 +63,16 @@ if(!$is_controller_endpoint && $user_role === 'edp' && strpos($_SERVER['REQUEST_
 }
 
 // Leaders (President, Vice President) should access the leaders area
-if(!$is_controller_endpoint && in_array($user_role, ['president', 'vice_president']) && strpos($_SERVER['REQUEST_URI'], '/leaders/') === false) {
+// Exception: allow access to specific evaluators pages they share
+$leaders_allowed_evaluator_pages = ['/evaluators/evaluation_peac.php', '/evaluators/my_evaluations.php'];
+$is_leaders_allowed_page = false;
+foreach ($leaders_allowed_evaluator_pages as $allowed_page) {
+    if (strpos($_SERVER['REQUEST_URI'], $allowed_page) !== false) {
+        $is_leaders_allowed_page = true;
+        break;
+    }
+}
+if(!$is_controller_endpoint && !$is_leaders_allowed_page && in_array($user_role, ['president', 'vice_president']) && strpos($_SERVER['REQUEST_URI'], '/leaders/') === false) {
     header("Location: ../leaders/dashboard.php");
     exit();
 }

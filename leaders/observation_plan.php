@@ -76,25 +76,34 @@ try {
     $hasTeacherDepartments = false;
 }
 
-// Only show evaluations from evaluators in THIS department
-// Cross-department teachers appear only after being evaluated by someone in this department
+// Show evaluations from evaluators in THIS department, OR from president/VP for teachers in this department
 $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                  t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                  t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                 t.scheduled_by, t.scheduled_department,
                  e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
                  e.subject_observed, e.observation_room as eval_room,
                  e.subject_area as eval_subject_area, e.evaluation_focus as eval_focus,
                  e.semester as eval_semester
           FROM teachers t
           JOIN evaluations e ON e.teacher_id = t.id
-          JOIN users eval_u ON e.evaluator_id = eval_u.id
-          WHERE eval_u.department = :eval_dept
+          JOIN users eval_u ON e.evaluator_id = eval_u.id" .
+          ($hasTeacherDepartments ? " LEFT JOIN teacher_departments td ON td.teacher_id = t.id" : "") .
+          " WHERE (
+              eval_u.department = :eval_dept
+              OR (eval_u.role IN ('president','vice_president') AND (t.department = :teacher_dept" .
+              ($hasTeacherDepartments ? " OR td.department = :td_dept" : "") . "))
+          )
           AND (t.user_id IS NULL OR t.user_id != :current_user_id)
           AND e.academic_year = :academic_year
           AND e.semester = :semester
           ORDER BY t.name ASC";
 $stmt = $db->prepare($query);
 $stmt->bindParam(':eval_dept', $raw_department);
+$stmt->bindParam(':teacher_dept', $raw_department);
+if ($hasTeacherDepartments) {
+    $stmt->bindParam(':td_dept', $raw_department);
+}
 $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
 $stmt->bindParam(':academic_year', $academic_year);
 $stmt->bindParam(':semester', $semester);
@@ -106,9 +115,12 @@ $eval_teachers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // Cross-department teachers appear only after being evaluated (via query 1)
 $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                        t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
-                       t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
-                FROM teachers t
-                WHERE t.department = :department
+                       t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                       t.scheduled_by, t.scheduled_department
+                FROM teachers t" .
+                ($hasTeacherDepartments ? " LEFT JOIN teacher_departments td ON td.teacher_id = t.id" : "") .
+                " WHERE (t.department = :department" .
+                ($hasTeacherDepartments ? " OR td.department = :td_department" : "") . ")
                   AND t.status = 'active'
                   AND t.evaluation_schedule IS NOT NULL
                   AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
@@ -120,6 +132,9 @@ $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department
                 ORDER BY t.name ASC";
 $sched_stmt = $db->prepare($sched_query);
 $sched_stmt->bindParam(':department', $raw_department);
+if ($hasTeacherDepartments) {
+    $sched_stmt->bindParam(':td_department', $raw_department);
+}
 $sched_stmt->bindParam(':filter_semester', $semester);
 $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
 $sched_stmt->bindParam(':academic_year', $academic_year);
@@ -134,6 +149,26 @@ $schedule_data = [];
 $dean_name = $_SESSION['name'] ?? '';
 $seen_ids = [];
 $teachers_list = [];
+
+// Build teacher role map (teacher_id => user role) for coordinator filtering
+$teacher_role_map = [];
+try {
+    $trm_stmt = $db->query("SELECT t.id as teacher_id, u.role FROM teachers t JOIN users u ON t.user_id = u.id WHERE t.status = 'active' AND u.status = 'active'");
+    while ($trm = $trm_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $teacher_role_map[(int)$trm['teacher_id']] = $trm['role'];
+    }
+} catch (Exception $e) {}
+
+// Build teacher secondary departments map
+$teacher_sec_depts = [];
+if ($hasTeacherDepartments) {
+    try {
+        $tsd_stmt = $db->query("SELECT teacher_id, department FROM teacher_departments");
+        while ($tsd = $tsd_stmt->fetch(PDO::FETCH_ASSOC)) {
+            $teacher_sec_depts[(int)$tsd['teacher_id']][] = $tsd['department'];
+        }
+    } catch (Exception $e) {}
+}
 
 // Focus label mapping
 $focus_labels = [
@@ -177,18 +212,62 @@ foreach ($eval_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', strtotime($obs_date));
     }
 
-    // Get observers (filtered to current department)
-    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
+    // Get observers (filtered to current department + president/VP)
+    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";
     $obs_stmt = $db->prepare($obs_query);
     $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
     $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
+    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";
     $assign_stmt = $db->prepare($assign_query);
     $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
 
     $observer_map[$tid] = array_unique(array_merge($observers, $assigned));
+    // Add deans from teacher's departments (primary + secondary)
+    $t_primary_dept = $t['teacher_department'] ?? '';
+    $t_sec = $teacher_sec_depts[$tid] ?? [];
+    $t_all_depts_list = array_unique(array_filter(array_merge([$t_primary_dept], $t_sec)));
+    if (count($t_all_depts_list) > 0) {
+        $ph = implode(',', array_fill(0, count($t_all_depts_list), '?'));
+        $deans_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department IN ($ph) AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
+        $deans_stmt->execute(array_values($t_all_depts_list));
+        while ($dn = $deans_stmt->fetchColumn()) {
+            if (!in_array($dn, $observer_map[$tid])) $observer_map[$tid][] = $dn;
+        }
+    }
+    // If President/VP scheduled this teacher, only they are the observer
+    $sched_by_id = $t['scheduled_by'] ?? null;
+    if ($sched_by_id) {
+        $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
+        $sb_stmt->execute([':id' => $sched_by_id]);
+        $sb_name = $sb_stmt->fetchColumn();
+        if ($sb_name) {
+            $observer_map[$tid] = [$sb_name];
+            continue;
+        }
+    }
+    // Exclude teacher themselves from observer list
+    $teacher_name = $t['name'] ?? '';
+    $observer_map[$tid] = array_values(array_filter($observer_map[$tid], function($n) use ($teacher_name) {
+        return $n !== $teacher_name;
+    }));
+    // If teacher is a coordinator, only deans/president/VP observe them
+    $teacher_user_role = $teacher_role_map[$tid] ?? '';
+    if (in_array($teacher_user_role, ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
+        $dean_only = array_values(array_filter($observer_map[$tid], function($name) use ($db) {
+            static $dean_cache = null;
+            if ($dean_cache === null) {
+                $dean_cache = [];
+                try {
+                    $ds = $db->query("SELECT DISTINCT name FROM users WHERE role IN ('dean','principal','president','vice_president') AND status = 'active'");
+                    while ($r = $ds->fetchColumn()) $dean_cache[] = $r;
+                } catch (Exception $e) {}
+            }
+            return in_array($name, $dean_cache);
+        }));
+        if (!empty($dean_only)) $observer_map[$tid] = $dean_only;
+    }
 }
 
 // Process scheduled-only teachers
@@ -220,10 +299,54 @@ foreach ($scheduled_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', $ts) . "\n" . date('g:ia', $ts);
     }
 
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
+    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";
     $assign_stmt = $db->prepare($assign_query);
     $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
     $observer_map[$tid] = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
+    // Add deans from teacher's departments (primary + secondary)
+    $t_primary_dept = $t['teacher_department'] ?? '';
+    $t_sec = $teacher_sec_depts[$tid] ?? [];
+    $t_all_depts_list = array_unique(array_filter(array_merge([$t_primary_dept], $t_sec)));
+    if (count($t_all_depts_list) > 0) {
+        $ph = implode(',', array_fill(0, count($t_all_depts_list), '?'));
+        $deans_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department IN ($ph) AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
+        $deans_stmt->execute(array_values($t_all_depts_list));
+        while ($dn = $deans_stmt->fetchColumn()) {
+            if (!in_array($dn, $observer_map[$tid])) $observer_map[$tid][] = $dn;
+        }
+    }
+    // If President/VP scheduled this teacher, only they are the observer
+    $sched_by_id = $t['scheduled_by'] ?? null;
+    if ($sched_by_id) {
+        $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
+        $sb_stmt->execute([':id' => $sched_by_id]);
+        $sb_name = $sb_stmt->fetchColumn();
+        if ($sb_name) {
+            $observer_map[$tid] = [$sb_name];
+            continue;
+        }
+    }
+    // Exclude teacher themselves from observer list
+    $teacher_name = $t['name'] ?? '';
+    $observer_map[$tid] = array_values(array_filter($observer_map[$tid], function($n) use ($teacher_name) {
+        return $n !== $teacher_name;
+    }));
+    // If teacher is a coordinator, only deans/president/VP observe them
+    $teacher_user_role = $teacher_role_map[$tid] ?? '';
+    if (in_array($teacher_user_role, ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
+        $dean_only = array_values(array_filter($observer_map[$tid], function($name) use ($db) {
+            static $dean_cache2 = null;
+            if ($dean_cache2 === null) {
+                $dean_cache2 = [];
+                try {
+                    $ds = $db->query("SELECT DISTINCT name FROM users WHERE role IN ('dean','principal','president','vice_president') AND status = 'active'");
+                    while ($r = $ds->fetchColumn()) $dean_cache2[] = $r;
+                } catch (Exception $e) {}
+            }
+            return in_array($name, $dean_cache2);
+        }));
+        if (!empty($dean_only)) $observer_map[$tid] = $dean_only;
+    }
 }
 
 // Filter by month if selected

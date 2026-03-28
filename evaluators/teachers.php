@@ -18,7 +18,7 @@ $teacher = new Teacher($db);
 
 // Clear schedules that are more than 24 hours past their scheduled time
 try {
-    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
 } catch (Exception $e) {
     error_log('Error clearing expired schedules: ' . $e->getMessage());
 }
@@ -34,7 +34,7 @@ try {
             AND e.academic_year = :ay AND e.semester = :sem
         SET t.evaluation_schedule = NULL, t.evaluation_room = NULL, t.evaluation_focus = NULL,
             t.evaluation_subject_area = NULL, t.evaluation_subject = NULL, t.evaluation_semester = NULL,
-            t.evaluation_form_type = 'iso', t.updated_at = NOW()
+            t.evaluation_form_type = 'iso', t.scheduled_by = NULL, t.scheduled_department = NULL, t.updated_at = NOW()
         WHERE t.evaluation_schedule IS NOT NULL
           AND (t.evaluation_form_type IS NULL OR t.evaluation_form_type != 'both'
                OR (SELECT COUNT(*) FROM evaluations e2 WHERE e2.teacher_id = t.id AND e2.status = 'completed'
@@ -92,7 +92,7 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule')
     $focus_json = !empty($focus) ? json_encode($focus) : null;
     
     if (!empty($teacher_id)) {
-        $query = "UPDATE teachers SET evaluation_schedule = :schedule, evaluation_room = :room, evaluation_focus = :focus, evaluation_subject_area = :subject_area, evaluation_subject = :subject, evaluation_semester = :semester, evaluation_form_type = :form_type, updated_at = NOW() WHERE id = :id";
+        $query = "UPDATE teachers SET evaluation_schedule = :schedule, evaluation_room = :room, evaluation_focus = :focus, evaluation_subject_area = :subject_area, evaluation_subject = :subject, evaluation_semester = :semester, evaluation_form_type = :form_type, scheduled_by = :scheduled_by, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':schedule', $schedule);
         $stmt->bindParam(':room', $room);
@@ -101,6 +101,7 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule')
         $stmt->bindParam(':subject', $subject);
         $stmt->bindParam(':semester', $semester);
         $stmt->bindParam(':form_type', $form_type);
+        $stmt->bindValue(':scheduled_by', $_SESSION['user_id'], PDO::PARAM_INT);
         $stmt->bindParam(':id', $teacher_id);
         
         if ($stmt->execute()) {
@@ -119,7 +120,7 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule')
     $teacher_id = $_POST['teacher_id'] ?? '';
 
     if (!empty($teacher_id)) {
-        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, updated_at = NOW() WHERE id = :id";
+        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':id', $teacher_id);
 
@@ -169,7 +170,7 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'mark_done') {
             $db->beginTransaction();
 
             // 1) Clear schedule/room (so teacher dashboard's schedule banner is removed)
-            $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, updated_at = NOW() WHERE id = :id";
+            $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
             $stmt = $db->prepare($query);
             $stmt->bindParam(':id', $teacher_id);
             $stmt->execute();

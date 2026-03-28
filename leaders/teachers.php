@@ -16,7 +16,7 @@ $teacher = new Teacher($db);
 
 // Clear schedules that are more than 24 hours past
 try {
-    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', scheduled_by = NULL, updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
 } catch (Exception $e) {
     error_log('Error clearing expired schedules: ' . $e->getMessage());
 }
@@ -32,7 +32,7 @@ try {
             AND e.academic_year = :ay AND e.semester = :sem
         SET t.evaluation_schedule = NULL, t.evaluation_room = NULL, t.evaluation_focus = NULL,
             t.evaluation_subject_area = NULL, t.evaluation_subject = NULL, t.evaluation_semester = NULL,
-            t.evaluation_form_type = 'iso', t.updated_at = NOW()
+            t.evaluation_form_type = 'iso', t.scheduled_by = NULL, t.updated_at = NOW()
         WHERE t.evaluation_schedule IS NOT NULL
           AND (t.evaluation_form_type IS NULL OR t.evaluation_form_type != 'both'
                OR (SELECT COUNT(*) FROM evaluations e2 WHERE e2.teacher_id = t.id AND e2.status = 'completed'
@@ -76,12 +76,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $semester = in_array($semester, ['1st', '2nd']) ? $semester : null;
     $form_type = trim($_POST['evaluation_form_type'] ?? 'iso');
     if (!in_array($form_type, ['iso', 'peac', 'both'])) $form_type = 'iso';
-    // PEAC is exclusive to JHS department — check the teacher's department
+    $scheduled_department = trim($_POST['scheduled_department'] ?? '');
+    // PEAC is exclusive to JHS department — check the scheduled department or teacher's department
     if ($form_type === 'peac' || $form_type === 'both') {
-        $tchkDept = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
-        $tchkDept->execute([':id' => $teacher_id]);
-        $tchkRow = $tchkDept->fetch(PDO::FETCH_ASSOC);
-        if (!$tchkRow || $tchkRow['department'] !== 'JHS') {
+        $check_dept = !empty($scheduled_department) ? $scheduled_department : '';
+        if (empty($check_dept)) {
+            $tchkDept = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
+            $tchkDept->execute([':id' => $teacher_id]);
+            $tchkRow = $tchkDept->fetch(PDO::FETCH_ASSOC);
+            $check_dept = $tchkRow['department'] ?? '';
+        }
+        if ($check_dept !== 'JHS') {
             $form_type = 'iso';
         }
     }
@@ -92,7 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $focus_json = !empty($focus) ? json_encode($focus) : null;
 
     if (!empty($teacher_id)) {
-        $query = "UPDATE teachers SET evaluation_schedule = :schedule, evaluation_room = :room, evaluation_focus = :focus, evaluation_subject_area = :subject_area, evaluation_subject = :subject, evaluation_semester = :semester, evaluation_form_type = :form_type, updated_at = NOW() WHERE id = :id";
+        $query = "UPDATE teachers SET evaluation_schedule = :schedule, evaluation_room = :room, evaluation_focus = :focus, evaluation_subject_area = :subject_area, evaluation_subject = :subject, evaluation_semester = :semester, evaluation_form_type = :form_type, scheduled_by = :scheduled_by, scheduled_department = :scheduled_department, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':schedule', $schedule);
         $stmt->bindParam(':room', $room);
@@ -101,11 +106,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $stmt->bindParam(':subject', $subject);
         $stmt->bindParam(':semester', $semester);
         $stmt->bindParam(':form_type', $form_type);
+        $stmt->bindValue(':scheduled_by', $_SESSION['user_id'], PDO::PARAM_INT);
+        $stmt->bindParam(':scheduled_department', $scheduled_department);
         $stmt->bindParam(':id', $teacher_id);
 
         if ($stmt->execute()) {
             $success_message = "Evaluation schedule updated successfully!";
-            notifyScheduleParticipants($db, $teacher_id, $schedule, $room, $_SESSION['user_id'], $_SESSION['name'] ?? 'Evaluator', $_SESSION['role'] ?? '');
+            notifyScheduleParticipants($db, $teacher_id, $schedule, $room, $_SESSION['user_id'], $_SESSION['name'] ?? 'Evaluator', $_SESSION['role'] ?? '', $scheduled_department);
         } else {
             $error_message = "Failed to update schedule.";
         }
@@ -116,13 +123,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule') {
     $teacher_id = $_POST['teacher_id'] ?? '';
     if (!empty($teacher_id)) {
-        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, updated_at = NOW() WHERE id = :id";
+        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':id', $teacher_id);
         if ($stmt->execute()) {
             $success_message = "Evaluation schedule cancelled.";
         } else {
             $error_message = "Failed to cancel schedule.";
+        }
+    }
+}
+
+// Mark evaluation done
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'mark_done') {
+    $teacher_id = $_POST['teacher_id'] ?? '';
+    if (!empty($teacher_id)) {
+        try {
+            $db->beginTransaction();
+
+            $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
+            $stmt = $db->prepare($query);
+            $stmt->bindParam(':id', $teacher_id);
+            $stmt->execute();
+
+            $latestEvalStmt = $db->prepare("SELECT id, status FROM evaluations WHERE teacher_id = :teacher_id ORDER BY created_at DESC, id DESC LIMIT 1");
+            $latestEvalStmt->bindParam(':teacher_id', $teacher_id);
+            $latestEvalStmt->execute();
+            $latestEval = $latestEvalStmt->fetch(PDO::FETCH_ASSOC);
+
+            if ($latestEval) {
+                $updateEvalStmt = $db->prepare("UPDATE evaluations SET status = 'completed' WHERE id = :id AND (status IS NULL OR status <> 'completed')");
+                $updateEvalStmt->bindParam(':id', $latestEval['id']);
+                $updateEvalStmt->execute();
+            }
+
+            $tq = $db->prepare("SELECT user_id, name FROM teachers WHERE id = :id LIMIT 1");
+            $tq->bindParam(':id', $teacher_id);
+            $tq->execute();
+            $tdata = $tq->fetch(PDO::FETCH_ASSOC);
+            $uid = $tdata['user_id'] ?? null;
+
+            $description = sprintf(
+                "Evaluation marked done for %s by %s (user_id=%d)%s",
+                $tdata['name'] ?? ('teacher_id=' . $teacher_id),
+                $_SESSION['name'],
+                $_SESSION['user_id'],
+                $latestEval ? (sprintf("; evaluation_id=%d", (int)$latestEval['id'])) : '; no evaluation record found'
+            );
+
+            $log_q = $db->prepare("INSERT INTO audit_logs (user_id, action, description, ip_address) VALUES (:user_id, :action, :description, :ip)");
+            $action = 'EVALUATION_MARKED_DONE';
+            $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+            $log_q->bindValue(':user_id', $uid ?: $_SESSION['user_id']);
+            $log_q->bindParam(':action', $action);
+            $log_q->bindParam(':description', $description);
+            $log_q->bindParam(':ip', $ip);
+            $log_q->execute();
+
+            $db->commit();
+            $success_message = $latestEval ? "Marked as evaluated. Evaluation status updated." : "Marked as evaluated. Schedule cleared.";
+        } catch (Exception $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            error_log('Mark done error: ' . $e->getMessage());
+            $error_message = "Failed to mark as done.";
         }
     }
 }
@@ -159,6 +222,18 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
         continue;
     }
     $teachers_list[] = $t;
+}
+
+// Build teacher departments map (primary + secondary) for schedule modal
+$teacher_depts_map = [];
+foreach ($teachers_list as $t) {
+    $tid = $t['id'];
+    $depts = [$t['department']];
+    $sec = $teacher->getSecondaryDepartments($tid);
+    foreach ($sec as $sd) {
+        if (!in_array($sd, $depts)) $depts[] = $sd;
+    }
+    $teacher_depts_map[$tid] = $depts;
 }
 ?>
 <!DOCTYPE html>
@@ -483,7 +558,7 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
                             <?php endif; ?>
 
                             <div class="teacher-actions">
-                                <button class="btn btn-sm btn-outline-dark" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="editSchedule(<?php echo $teacher_row['id']; ?>, '<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>')">
+                                <button class="btn btn-sm btn-outline-dark" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="editSchedule(<?php echo $teacher_row['id']; ?>, '<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>', '<?php echo htmlspecialchars($teacher_row['evaluation_form_type'] ?? 'iso', ENT_QUOTES); ?>', <?php echo htmlspecialchars(json_encode($teacher_depts_map[$teacher_row['id']] ?? [$teacher_row['department']]), ENT_QUOTES); ?>, '<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>')">
                                     <i class="fas fa-calendar"></i> Schedule
                                 </button>
 
@@ -530,6 +605,18 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
                                     <div class="text-muted small">All fields are required so evaluators can plan the observation.</div>
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- Department for this evaluation (president/VP only) -->
+                        <div class="form-group schedule-field">
+                            <label class="form-label">Department <span class="text-danger">*</span></label>
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="fas fa-building"></i></span>
+                                <select class="form-select" id="scheduled_department" name="scheduled_department" required>
+                                    <option value="">Select department...</option>
+                                </select>
+                            </div>
+                            <div class="schedule-help">Select which department this evaluation is for.</div>
                         </div>
 
                         <!-- Evaluation Form Type -->
@@ -614,7 +701,7 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
                                 <div class="col-5">
                                     <div class="input-group">
                                         <span class="input-group-text"><i class="fas fa-clock"></i></span>
-                                        <input type="time" class="form-control" id="evaluation_time" step="900" required>
+                                        <input type="time" class="form-control" id="evaluation_time" step="60" required>
                                     </div>
                                 </div>
                             </div>
@@ -735,7 +822,7 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
             }
         }
 
-        function editSchedule(teacherId, schedule, room, focus, subjectArea, subject, semester, formType) {
+        function editSchedule(teacherId, schedule, room, focus, subjectArea, subject, semester, formType, departments, scheduledDept) {
             document.getElementById('schedule_teacher_id').value = teacherId;
             const scheduleInput = document.getElementById('evaluation_schedule');
             const dateInput = document.getElementById('evaluation_date');
@@ -744,6 +831,47 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
             document.getElementById('evaluation_room').value = room || '';
             document.getElementById('evaluation_subject_area').value = subjectArea || '';
             document.getElementById('evaluation_subject').value = subject || '';
+
+            // Populate department dropdown
+            const deptSelect = document.getElementById('scheduled_department');
+            deptSelect.innerHTML = '<option value="">Select department...</option>';
+            if (Array.isArray(departments)) {
+                departments.forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d;
+                    opt.textContent = d;
+                    if (scheduledDept && d === scheduledDept) opt.selected = true;
+                    deptSelect.appendChild(opt);
+                });
+                // Auto-select if only one department
+                if (departments.length === 1) {
+                    deptSelect.value = departments[0];
+                }
+            }
+
+            // Toggle PEAC/Both visibility based on selected department
+            function updateFormTypeVisibility() {
+                const selectedDept = deptSelect.value;
+                const peacWrap = document.getElementById('peac_radio_wrap');
+                const bothWrap = document.getElementById('both_radio_wrap');
+                if (peacWrap && bothWrap) {
+                    if (selectedDept === 'JHS' || selectedDept === '') {
+                        peacWrap.style.display = '';
+                        bothWrap.style.display = '';
+                    } else {
+                        peacWrap.style.display = 'none';
+                        bothWrap.style.display = 'none';
+                        // Reset to ISO if PEAC/Both was selected
+                        const checkedType = document.querySelector('input[name="evaluation_form_type"]:checked');
+                        if (checkedType && (checkedType.value === 'peac' || checkedType.value === 'both')) {
+                            document.getElementById('form_iso').checked = true;
+                            document.getElementById('isoFocusCheckboxes').style.display = '';
+                            document.getElementById('peacFocusCheckboxes').style.display = 'none';
+                        }
+                    }
+                }
+            }
+            deptSelect.onchange = updateFormTypeVisibility;
 
             // Set semester radio
             document.getElementById('semester_1st').checked = (semester === '1st');
@@ -758,6 +886,9 @@ while ($t = $allTeachersStmt->fetch(PDO::FETCH_ASSOC)) {
             // Toggle focus visibility
             document.getElementById('isoFocusCheckboxes').style.display = (formType === 'peac') ? 'none' : '';
             document.getElementById('peacFocusCheckboxes').style.display = (formType === 'iso') ? 'none' : '';
+
+            // Apply PEAC visibility based on department
+            updateFormTypeVisibility();
 
             // Set focus checkboxes
             document.getElementById('focus_communications').checked = false;

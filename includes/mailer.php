@@ -83,7 +83,7 @@ function sendScheduleNotificationToEvaluator($toEmail, $evaluatorName, $teacherN
  *
  * Works for both Higher Ed (Dean + Chairperson) and Basic Ed (Principal + Subject Coordinator).
  */
-function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId, $setterName, $setterRole = '') {
+function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId, $setterName, $setterRole = '', $scheduledDepartment = '') {
     if (empty($schedule) && empty($room)) {
         return;
     }
@@ -99,6 +99,7 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
 
     $isDeanOrPrincipal = in_array($setterRole, ['dean', 'principal']);
     $isCoordinatorOrChair = in_array($setterRole, ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
+    $isPresidentOrVP = in_array($setterRole, ['president', 'vice_president']);
 
     try {
         // 1. Get teacher info and send them an email
@@ -125,18 +126,26 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
             $targetRoles = ['chairperson', 'subject_coordinator', 'grade_level_coordinator'];
         } elseif ($isCoordinatorOrChair) {
             $targetRoles = ['dean', 'principal'];
+        } elseif ($isPresidentOrVP) {
+            // President/VP → notify dean and chairperson of the scheduled department
+            $targetRoles = ['dean', 'principal', 'chairperson'];
         } else {
             // Fallback: notify all evaluator roles
             $targetRoles = ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'];
         }
 
         // Get setter's department to scope notifications
+        // For president/VP, use the scheduled department instead
         $setterDept = '';
-        try {
-            $sdStmt = $db->prepare("SELECT department FROM users WHERE id = :id LIMIT 1");
-            $sdStmt->execute([':id' => $setterId]);
-            $setterDept = $sdStmt->fetchColumn() ?: '';
-        } catch (PDOException $e) {}
+        if ($isPresidentOrVP && !empty($scheduledDepartment)) {
+            $setterDept = $scheduledDepartment;
+        } else {
+            try {
+                $sdStmt = $db->prepare("SELECT department FROM users WHERE id = :id LIMIT 1");
+                $sdStmt->execute([':id' => $setterId]);
+                $setterDept = $sdStmt->fetchColumn() ?: '';
+            } catch (PDOException $e) {}
+        }
 
         // Find evaluators assigned to this teacher who match the target roles
         $rolePlaceholders = implode(',', array_fill(0, count($targetRoles), '?'));
