@@ -64,17 +64,15 @@ if (!$can_evaluate && empty($scheduleRaw)) {
 }
 
 $department_map = [
-    'CCIS' => 'College of Computing and Information Sciences',
-    'COE'  => 'College of Education',
-    'CBA'  => 'College of Business Administration',
-    'CCJE' => 'College of Criminal Justice Education',
-    'CAS'  => 'College of Arts and Sciences',
-    'CHM'  => 'College of Hospitality Management',
-    'CTE'  => 'College of Teacher Education',
-    'BASIC ED' => 'Basic Education Department',
-    'ELEM' => 'Elementary Department',
-    'JHS'  => 'Junior High School Department',
-    'SHS'  => 'Senior High School Department',
+    'CCIS'  => 'College of Computing and Information Sciences',
+    'CBM'   => 'College of Business and Management',
+    'CAS'   => 'College of Arts and Sciences',
+    'CCJE'  => 'College of Criminal Justice Education',
+    'CTHM'  => 'College of Tourism and Hospitality Management',
+    'CTEAS' => 'College of Teacher Education, Arts and Sciences',
+    'ELEM'  => 'Elementary Department',
+    'JHS'   => 'Junior High School Department',
+    'SHS'   => 'Senior High School Department',
 ];
 $dept_display = $department_map[$teacher_data['department']] ?? $teacher_data['department'];
 
@@ -520,11 +518,11 @@ $today = date('Y-m-d');
                         </div>
 
                         <!-- Signatures -->
-                        <div class="row mt-4">
-                            <div class="col-md-6">
-                                <div class="border p-3">
+                        <div class="row mt-4 align-items-stretch">
+                            <div class="col-md-6 d-flex">
+                                <div class="border p-3 w-100 d-flex flex-column">
                                     <h6>Rater/Observer:</h6>
-                                    <p class="small">I certify that this classroom evaluation represents my best judgment.</p>
+                                    <p class="small" style="min-height:3em;">I certify that this classroom evaluation represents my best judgment.</p>
                                     <div class="mb-3">
                                         <label class="form-label">Signature over printed name</label>
                                         <input type="hidden" id="raterSignature" name="rater_signature" required>
@@ -541,16 +539,16 @@ $today = date('Y-m-d');
                                         </div>
                                         <input type="text" class="form-control mt-2" id="raterPrintedName" name="rater_printed_name" value="<?php echo htmlspecialchars($_SESSION['name']); ?>" readonly>
                                     </div>
-                                    <div class="mb-3">
+                                    <div class="mt-auto">
                                         <label class="form-label">Date</label>
                                         <input type="date" class="form-control" id="raterDate" name="rater_date" value="<?php echo $today; ?>" required>
                                     </div>
                                 </div>
                             </div>
-                            <div class="col-md-6">
-                                <div class="border p-3">
+                            <div class="col-md-6 d-flex">
+                                <div class="border p-3 w-100 d-flex flex-column">
                                     <h6>Faculty:</h6>
-                                    <p class="small">I certify that this evaluation result has been discussed with me during the post-conference/debriefing.</p>
+                                    <p class="small" style="min-height:3em;">I certify that this evaluation result has been discussed with me during the post-conference/debriefing.</p>
                                     <div class="mb-3">
                                         <label class="form-label">Signature of Faculty over printed name</label>
                                         <input type="hidden" id="facultySignature" name="faculty_signature" required>
@@ -567,7 +565,7 @@ $today = date('Y-m-d');
                                         </div>
                                         <input type="text" class="form-control mt-2" id="facultyPrintedName" name="faculty_printed_name" value="<?php echo htmlspecialchars($teacher_data['name']); ?>" readonly>
                                     </div>
-                                    <div class="mb-3">
+                                    <div class="mt-auto">
                                         <label class="form-label">Date</label>
                                         <input type="date" class="form-control" id="facultyDate" name="faculty_date" value="<?php echo $today; ?>" required>
                                     </div>
@@ -659,16 +657,34 @@ $today = date('Y-m-d');
             if (!canvas) return null;
             const ctx = canvas.getContext('2d');
             let drawing = false;
-            const rect = () => canvas.getBoundingClientRect();
+
+            function resizeCanvas() {
+                const ratio = window.devicePixelRatio || 1;
+                const rect = canvas.getBoundingClientRect();
+                const w = Math.max(1, Math.floor(rect.width * ratio));
+                const h = Math.max(1, Math.floor(rect.height * ratio));
+                if (canvas.width !== w || canvas.height !== h) {
+                    canvas.width = w;
+                    canvas.height = h;
+                    ctx.lineWidth = 2 * ratio;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.strokeStyle = '#000';
+                }
+            }
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
 
             function getPos(e) {
-                const r = rect();
+                const r = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / r.width;
+                const scaleY = canvas.height / r.height;
                 const t = e.touches ? e.touches[0] : e;
-                return { x: t.clientX - r.left, y: t.clientY - r.top };
+                return { x: (t.clientX - r.left) * scaleX, y: (t.clientY - r.top) * scaleY };
             }
 
             function start(e) { e.preventDefault(); drawing = true; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); }
-            function move(e) { if (!drawing) return; e.preventDefault(); const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke(); }
+            function move(e) { if (!drawing) return; e.preventDefault(); const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); }
             function stop() { drawing = false; }
 
             canvas.addEventListener('mousedown', start);
@@ -679,7 +695,7 @@ $today = date('Y-m-d');
             canvas.addEventListener('touchmove', move, { passive: false });
             canvas.addEventListener('touchend', stop);
 
-            return { canvas, ctx, clear() { ctx.clearRect(0, 0, canvas.width, canvas.height); }, toDataURL() { return canvas.toDataURL(); } };
+            return { canvas, ctx, clear() { ctx.clearRect(0, 0, canvas.width, canvas.height); }, resize() { resizeCanvas(); }, toDataURL() { return canvas.toDataURL(); } };
         }
 
         const pads = {};
@@ -692,6 +708,7 @@ $today = date('Y-m-d');
                     if (!pads[role]) {
                         pads[role] = initSignaturePad(role + 'SignaturePad', role);
                     }
+                    if (pads[role]) requestAnimationFrame(function() { pads[role].resize(); });
                 }
             });
         });

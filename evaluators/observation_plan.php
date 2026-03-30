@@ -21,14 +21,7 @@ try {
     $hasTeacherDepartments = false;
 }
 
-// Clear expired schedules (24h past)
-try {
-    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
-} catch (Exception $e) {
-    error_log('Error clearing expired schedules: ' . $e->getMessage());
-}
-
-// Also clear schedules for teachers who already have a completed evaluation this period
+// Clear schedules for teachers where ALL assigned evaluators AND the dean/principal have completed
 try {
     $month = (int)date('n');
     $year = (int)date('Y');
@@ -39,18 +32,98 @@ try {
             AND e.academic_year = :ay AND e.semester = :sem
         SET t.evaluation_schedule = NULL, t.evaluation_room = NULL, t.evaluation_focus = NULL,
             t.evaluation_subject_area = NULL, t.evaluation_subject = NULL, t.evaluation_semester = NULL,
-            t.evaluation_form_type = 'iso', t.updated_at = NOW()
+            t.evaluation_form_type = 'iso', t.scheduled_by = NULL, t.scheduled_department = NULL, t.updated_at = NOW()
         WHERE t.evaluation_schedule IS NOT NULL
           AND (t.evaluation_form_type IS NULL OR t.evaluation_form_type != 'both'
                OR (SELECT COUNT(*) FROM evaluations e2 WHERE e2.teacher_id = t.id AND e2.status = 'completed'
-                   AND e2.academic_year = :ay2 AND e2.semester = :sem2 AND e2.evaluation_form_type = 'peac') > 0)")
-        ->execute([':ay' => $curAY, ':sem' => $curSem, ':ay2' => $curAY, ':sem2' => $curSem]);
+                   AND e2.academic_year = :ay2 AND e2.semester = :sem2 AND e2.evaluation_form_type = 'peac') > 0)
+          AND NOT EXISTS (
+              SELECT 1 FROM teacher_assignments ta
+              WHERE ta.teacher_id = t.id
+              AND NOT EXISTS (
+                  SELECT 1 FROM evaluations e3
+                  WHERE e3.teacher_id = t.id
+                  AND e3.evaluator_id = ta.evaluator_id
+                  AND e3.status = 'completed'
+                  AND e3.academic_year = :ay3
+                  AND e3.semester = :sem3
+              )
+          )
+          AND (
+              NOT EXISTS (
+                  SELECT 1 FROM users u
+                  WHERE u.role IN ('dean', 'principal')
+                  AND u.status = 'active'
+                  AND u.department = t.department
+              )
+              OR EXISTS (
+                  SELECT 1 FROM evaluations e4
+                  JOIN users u2 ON e4.evaluator_id = u2.id
+                  WHERE e4.teacher_id = t.id
+                  AND e4.status = 'completed'
+                  AND e4.academic_year = :ay4
+                  AND e4.semester = :sem4
+                  AND u2.role IN ('dean', 'principal')
+              )
+          )")
+        ->execute([':ay' => $curAY, ':sem' => $curSem, ':ay2' => $curAY, ':sem2' => $curSem,
+                   ':ay3' => $curAY, ':sem3' => $curSem, ':ay4' => $curAY, ':sem4' => $curSem]);
 } catch (Exception $e) {
     error_log('Error clearing completed-eval schedules: ' . $e->getMessage());
 }
 
 $success_message = '';
 $error_message = '';
+
+// Cancel / clear evaluation schedule (supports multiple teachers via teacher_ids JSON)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule') {
+    $teacher_ids = [];
+    if (!empty($_POST['teacher_ids'])) {
+        $decoded = json_decode($_POST['teacher_ids'], true);
+        if (is_array($decoded)) {
+            $teacher_ids = array_map('intval', $decoded);
+        }
+    } elseif (!empty($_POST['teacher_id'])) {
+        $teacher_ids = [intval($_POST['teacher_id'])];
+    }
+
+    $cancelled = 0;
+    foreach ($teacher_ids as $teacher_id) {
+        if ($teacher_id <= 0) continue;
+        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
+        $stmt = $db->prepare($query);
+        $stmt->bindParam(':id', $teacher_id);
+        if ($stmt->execute()) {
+            $cancelled++;
+            try {
+                $tq = $db->prepare("SELECT user_id, name FROM teachers WHERE id = :id LIMIT 1");
+                $tq->bindParam(':id', $teacher_id);
+                $tq->execute();
+                $tdata = $tq->fetch(PDO::FETCH_ASSOC);
+                $uid = $tdata['user_id'] ?? null;
+                $description = sprintf("Schedule cancelled for %s. Cancelled by %s (user_id=%d)", $tdata['name'] ?? ('teacher_id=' . $teacher_id), $_SESSION['name'], $_SESSION['user_id']);
+                $log_q = $db->prepare("INSERT INTO audit_logs (user_id, action, description, ip_address) VALUES (:user_id, :action, :description, :ip)");
+                $log_q->bindValue(':user_id', $uid ?: $_SESSION['user_id']);
+                $log_q->bindValue(':action', 'SCHEDULE_CANCELLED');
+                $log_q->bindParam(':description', $description);
+                $log_q->bindValue(':ip', $_SERVER['REMOTE_ADDR'] ?? '');
+                $log_q->execute();
+            } catch (Exception $e) {
+                error_log('Schedule cancel log error: ' . $e->getMessage());
+            }
+        }
+    }
+    if ($cancelled > 0) {
+        $success_message = "Evaluation schedule cancelled for {$cancelled} teacher(s).";
+    } else {
+        $error_message = "Failed to cancel schedule.";
+    }
+    $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
+    if ($success_message) $_SESSION['success'] = $success_message;
+    if ($error_message) $_SESSION['error'] = $error_message;
+    header("Location: $redirect");
+    exit();
+}
 
 // Handle schedule setting
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_schedule') {
@@ -236,17 +309,15 @@ if (isset($_GET['ajax_update']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $department_map = [
-    'CCIS' => 'College of Computing and Information Sciences',
-    'COE'  => 'College of Education',
-    'CBA'  => 'College of Business Administration',
-    'CCJE' => 'College of Criminal Justice Education',
-    'CAS'  => 'College of Arts and Sciences',
-    'CHM'  => 'College of Hospitality Management',
-    'CTE'  => 'College of Teacher Education',
-    'BASIC ED' => 'Basic Education Department',
-    'ELEM' => 'Elementary Department',
-    'JHS'  => 'Junior High School Department',
-    'SHS'  => 'Senior High School Department',
+    'CCIS'  => 'College of Computing and Information Sciences',
+    'CBM'   => 'College of Business and Management',
+    'CAS'   => 'College of Arts and Sciences',
+    'CCJE'  => 'College of Criminal Justice Education',
+    'CTHM'  => 'College of Tourism and Hospitality Management',
+    'CTEAS' => 'College of Teacher Education, Arts and Sciences',
+    'ELEM'  => 'Elementary Department',
+    'JHS'   => 'Junior High School Department',
+    'SHS'   => 'Senior High School Department',
 ];
 
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
@@ -426,8 +497,7 @@ if ($is_leader) {
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
 } else {
-    // Dean/principal query — show evaluations from evaluators in THIS department
-    // OR teachers who belong to this department (primary or secondary)
+    // Dean/principal query — show evaluations for teachers who belong to THIS department (primary or secondary)
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
@@ -438,16 +508,13 @@ if ($is_leader) {
                      e.semester as eval_semester
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
-              JOIN users eval_u ON e.evaluator_id = eval_u.id
               LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-              WHERE (eval_u.department = :eval_dept OR t.department = :dept2 OR td.department = :dept3
-                     OR eval_u.role IN ('president','vice_president'))
+              WHERE (t.department = :dept2 OR td.department = :dept3)
               AND (t.user_id IS NULL OR t.user_id != :current_user_id)
               AND e.academic_year = :academic_year
               AND e.semester = :semester
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':eval_dept', $raw_department);
     $stmt->bindParam(':dept2', $raw_department);
     $stmt->bindParam(':dept3', $raw_department);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
@@ -621,12 +688,12 @@ foreach ($eval_teachers as $t) {
         $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
         $assigned = [];
     } else {
-        $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";
+        $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
         $obs_stmt = $db->prepare($obs_query);
         $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
         $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
         $assign_stmt = $db->prepare($assign_query);
         $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
         $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -635,18 +702,6 @@ foreach ($eval_teachers as $t) {
     $all_observers = array_unique(array_merge($observers, $assigned));
     if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
         array_unshift($all_observers, $dean_name);
-    }
-    // Add deans from teacher's secondary departments
-    $t_primary_dept = $t['teacher_department'] ?? '';
-    $t_sec = $teacher_sec_depts[$tid] ?? [];
-    $t_all_depts_list = array_unique(array_filter(array_merge([$t_primary_dept], $t_sec)));
-    if (count($t_all_depts_list) > 0) {
-        $ph = implode(',', array_fill(0, count($t_all_depts_list), '?'));
-        $deans_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department IN ($ph) AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
-        $deans_stmt->execute(array_values($t_all_depts_list));
-        while ($dn = $deans_stmt->fetchColumn()) {
-            if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
-        }
     }
     // If President/VP scheduled this teacher, only they are the observer
     $sched_by_id = $t['scheduled_by'] ?? null;
@@ -717,25 +772,13 @@ foreach ($scheduled_teachers as $t) {
         // Leaders only see themselves as observer for scheduled teachers
         $all_observers = [$_SESSION['name'] ?? ''];
     } else {
-        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :department ORDER BY u.name";
         $assign_stmt = $db->prepare($assign_query);
         $assign_stmt->execute([':teacher_id' => $tid, ':department' => $raw_department]);
         $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
         $all_observers = $assigned;
         if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
             array_unshift($all_observers, $dean_name);
-        }
-        // Add deans from teacher's secondary departments
-        $t_primary_dept = $t['teacher_department'] ?? '';
-        $t_sec = $teacher_sec_depts[$tid] ?? [];
-        $t_all_depts_list = array_unique(array_filter(array_merge([$t_primary_dept], $t_sec)));
-        if (count($t_all_depts_list) > 0) {
-            $ph = implode(',', array_fill(0, count($t_all_depts_list), '?'));
-            $deans_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department IN ($ph) AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
-            $deans_stmt->execute(array_values($t_all_depts_list));
-            while ($dn = $deans_stmt->fetchColumn()) {
-                if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
-            }
         }
     }
     // If President/VP scheduled this teacher, only they are the observer
@@ -1312,6 +1355,9 @@ try {
                     <button class="btn btn-primary" id="bulkRescheduleBtn" disabled onclick="openRescheduleModal()">
                         <i class="fas fa-redo me-1"></i>Reschedule
                     </button>
+                    <button class="btn btn-outline-danger" id="bulkCancelBtn" disabled onclick="cancelSelectedSchedules()">
+                        <i class="fas fa-times me-1"></i>Cancel
+                    </button>
                 </div>
 
                 <!-- Observation Plan Table -->
@@ -1319,8 +1365,7 @@ try {
                     <table class="plan-table">
                         <thead>
                             <tr>
-                                <th class="no-print" style="width:3%;border:none !important;padding:0;"><input type="checkbox" class="form-check-input" id="checkAllTeachers" title="Select All"></th>
-                                <th style="width: 11%;">Teacher</th>
+                                <th style="width: 14%;">Teacher</th>
                                 <th style="width: 6%;">Semester</th>
                                 <th style="width: 12%;">Focus of Observation</th>
                                 <th style="width: 8%;">Date</th>
@@ -1338,12 +1383,12 @@ try {
                                 <?php $counter = 1; foreach ($teachers_list as $t): ?>
                                 <?php $tid = $t['id']; $sd = $schedule_data[$tid] ?? []; $has_schedule = !empty($t['evaluation_schedule']); $is_done = $eval_data[$tid]['done'] ?? false; ?>
                                 <tr>
-                                    <td class="no-print" style="border:none !important;padding:0;">
+                                    <td>
                                         <?php if ($has_schedule && !$is_done): ?>
-                                            <input type="checkbox" class="form-check-input reschedule-check" value="<?php echo (int)$tid; ?>" style="width:18px;height:18px;">
+                                            <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
                                         <?php endif; ?>
+                                        <?php echo $counter++ . '. ' . htmlspecialchars($t['name']); ?>
                                     </td>
-                                    <td><?php echo $counter++ . '. ' . htmlspecialchars($t['name']); ?></td>
                                     <td class="text-center"><?php $sem = $sd['semester'] ?? ''; echo htmlspecialchars($sem ? $sem . ' Semester' : ''); ?></td>
                                     <td style="font-size:0.8rem;"><?php echo htmlspecialchars($sd['focus'] ?? ''); ?></td>
                                     <td class="text-center">
@@ -1416,7 +1461,7 @@ try {
                                 <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="12" class="text-center text-muted">No teachers found for this semester.</td>
+                                    <td colspan="11" class="text-center text-muted">No teachers found for this semester.</td>
                                 </tr>
                             <?php endif; ?>
                         </tbody>
@@ -1703,6 +1748,32 @@ function updateFormTypeVisibility() {
     }
 }
 
+function cancelSelectedSchedules() {
+    var checked = document.querySelectorAll('.reschedule-check:checked');
+    if (checked.length === 0) return;
+    var count = checked.length;
+    if (!confirm('Cancel schedule for ' + count + ' selected teacher(s)?')) return;
+
+    // Submit one form per selected teacher sequentially via hidden form
+    var ids = [];
+    checked.forEach(function(cb) { ids.push(cb.value); });
+
+    // Create a hidden form and submit for each teacher
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.style.display = 'none';
+    var actionInput = document.createElement('input');
+    actionInput.name = 'action';
+    actionInput.value = 'cancel_schedule';
+    form.appendChild(actionInput);
+    var teacherInput = document.createElement('input');
+    teacherInput.name = 'teacher_ids';
+    teacherInput.value = JSON.stringify(ids);
+    form.appendChild(teacherInput);
+    document.body.appendChild(form);
+    form.submit();
+}
+
 function openRescheduleModal() {
     var checked = document.querySelectorAll('.reschedule-check:checked');
     if (checked.length === 0) return;
@@ -1906,12 +1977,14 @@ document.addEventListener('DOMContentLoaded', () => {
 (function() {
     var checkAll = document.getElementById('checkAllTeachers');
     var rescheduleBtn = document.getElementById('bulkRescheduleBtn');
+    var cancelBtn = document.getElementById('bulkCancelBtn');
     var countBadge = document.getElementById('rescheduleCount');
 
     function updateRescheduleState() {
         var checked = document.querySelectorAll('.reschedule-check:checked');
         var count = checked.length;
         if (rescheduleBtn) rescheduleBtn.disabled = (count === 0);
+        if (cancelBtn) cancelBtn.disabled = (count === 0);
         if (countBadge) {
             countBadge.textContent = count;
             countBadge.style.display = count > 0 ? 'inline' : 'none';

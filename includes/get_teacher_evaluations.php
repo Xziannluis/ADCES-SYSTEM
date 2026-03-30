@@ -43,9 +43,9 @@ if (in_array($role, ['chairperson', 'subject_coordinator', 'grade_level_coordina
     $query .= " AND e.evaluator_id = :evaluator_id";
     $params[':evaluator_id'] = $userId;
 }
-// Presidents/VPs see only president/VP evaluations
+// Presidents/VPs see all evaluations
 elseif (in_array($role, ['president', 'vice_president'])) {
-    $query .= " AND u.role IN ('president', 'vice_president')";
+    // No extra filter — top-level leaders can view all evaluations
 }
 // Dean/principal see department evaluations + their own
 // (no additional filter needed — they already see department-scoped teachers)

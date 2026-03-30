@@ -212,17 +212,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     $scheduledAt = new DateTime($scheduleRaw, $timezone);
                                     $scheduledAt->setTimezone($timezone);
                                     $now = new DateTime('now', $timezone);
-                                    $expiredAt = clone $scheduledAt;
-                                    $expiredAt->modify('+24 hours');
                                     $schedule_display = $scheduledAt->format('F d, Y \a\t h:i A');
                                     $schedule_message = $scheduledAt->format('F d, Y \a\t h:i A');
-                                    if ($now >= $expiredAt) {
-                                        // More than 24 hours past schedule — expired
-                                        $can_evaluate_now = false;
-                                        $schedule_badge_class = 'bg-danger';
-                                        $schedule_badge_text = 'Schedule expired';
-                                        $schedule_block_message = 'This schedule has expired (24 hours have passed). Please ask the dean/principal to set a new schedule.';
-                                    } elseif ($now >= $scheduledAt) {
+                                    if ($now >= $scheduledAt) {
                                         // Within the 24-hour evaluation window
                                         $can_evaluate_now = true;
                                         $schedule_badge_class = 'bg-success';
@@ -861,9 +853,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 </div>
                                 
                                 <!-- Agreement Section -->
-                                <div class="row mt-4">
-                                    <div class="col-md-6">
-                                        <div class="border p-3">
+                                <div class="row mt-4 align-items-stretch">
+                                    <div class="col-md-6 d-flex">
+                                        <div class="border p-3 w-100 d-flex flex-column">
                                             <h6>Rater/Observer</h6>
                                             <p class="small">I certify that this classroom evaluation represents my best judgment.</p>
                                             <div class="mb-3">
@@ -884,14 +876,14 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                                     </div>
                                                 </div>
                                             </div>
-                                            <div class="mb-3">
+                                            <div class="mt-auto">
                                                 <label class="form-label">Date</label>
                                                 <input type="date" class="form-control" id="raterDate" name="rater_date" required>
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="col-md-6">
-                                        <div class="border p-3">
+                                    <div class="col-md-6 d-flex">
+                                        <div class="border p-3 w-100 d-flex flex-column">
                                             <h6>Faculty</h6>
                                             <p class="small">I certify that this evaluation result has been discussed with me during the post conference/debriefing.</p>
                                             <div class="mb-3">
@@ -912,7 +904,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                                     </div>
                                                 </div>
                                             </div>
-                                            <div class="mb-3">
+                                            <div class="mt-auto">
                                                 <label class="form-label">Date</label>
                                                 <input type="date" class="form-control" id="facultyDate" name="faculty_date" required>
                                             </div>
@@ -1081,6 +1073,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     ctx.clearRect(0, 0, canvas.width, canvas.height);
                     hasInk = false;
                 },
+                resize() {
+                    resizeCanvas();
+                },
                 toDataUrl() {
                     if (!hasInk) return '';
                     try { return canvas.toDataURL('image/png'); } catch (e) { return ''; }
@@ -1097,6 +1092,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 if (!canvas) return null;
                 const pad = createSignaturePad(canvas);
                 pads.set(key, pad);
+                // Canvas was hidden when created, so force a resize now that it's visible
+                if (typeof pad.resize === 'function') pad.resize();
                 return pad;
             }
 
@@ -1113,7 +1110,10 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     if (!wrap) return;
                     const isHidden = wrap.style.display === 'none' || !wrap.style.display;
                     wrap.style.display = isHidden ? 'block' : 'none';
-                    if (isHidden) getPad(key);
+                    if (isHidden) {
+                        const pad = getPad(key);
+                        if (pad) requestAnimationFrame(() => pad.resize());
+                    }
                 });
             });
 

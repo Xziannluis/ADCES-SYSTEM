@@ -79,7 +79,7 @@ class User {
     // Login method
     public function login() {
     // Add debug logging
-    error_log("Attempting login with username: " . $this->username . ", role: " . $this->role);
+    error_log("Attempting login with username: " . $this->username);
         if (!$this->conn instanceof PDO) {
             error_log('Login aborted: database connection is not available.');
             return false;
@@ -93,16 +93,12 @@ class User {
         $stmt = $this->conn->prepare($query);
         // Sanitize and bind parameters
     $this->username = trim(htmlspecialchars(strip_tags($this->username)));
-    $this->role = trim(htmlspecialchars(strip_tags($this->role)));
         $stmt->bindParam(':username', $this->username);
         // Execute query
         if($stmt->execute()) {
             // Check if user exists
             if($stmt->rowCount() == 1) {
                 $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                $requestedRole = $this->normalizeRole($this->role);
-                $dbRole = $this->normalizeRole($row['role']);
 
                 $status = strtolower(trim((string)($row['status'] ?? '')));
                 if (!empty($status) && $status !== 'active') {
@@ -138,8 +134,8 @@ class User {
                 // Default credentials block removed for security.
                 // Users with placeholder passwords must use the password reset flow.
 
-                // Verify password and role
-                if ($passwordMatches && $roleMatches) {
+                // Verify password
+                if ($passwordMatches) {
                     // Set user properties
                     $this->id = $row['id'];
                     $this->username = $row['username'];

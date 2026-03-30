@@ -70,121 +70,209 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Forgot Password - AI Classroom Evaluation System</title>
+    <title>Forgot Password - AI-Driven Classroom Evaluation System</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        :root {
-            --primary: #2c3e50;
-            --secondary: #3498db;
-        }
-        .login-body {
-            background: url('smccnasipit_cover.jpg') no-repeat center center fixed;
-            background-size: cover;
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Roboto', Arial, sans-serif;
             min-height: 100vh;
             display: flex;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: url('smccnasipit_cover.jpg') no-repeat center center;
+            background-size: cover;
+            filter: blur(8px);
+            transform: scale(1.05);
+            z-index: 0;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.15);
+            z-index: 1;
+        }
+
+        .left-panel {
+            width: 45%;
+            display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
-            font-family: Arial, Helvetica, sans-serif;
             position: relative;
-        }
-        .login-body::before {
-            content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-            background: url('smccnasipit_cover.jpg') no-repeat center center fixed;
-            background-size: cover; filter: blur(8px); z-index: 0;
-        }
-        .login-body::after {
-            content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.4); z-index: 1;
-        }
-        .login-container {
-            width: 100%; max-width: 490px; padding: 20px; position: relative; z-index: 2;
-        }
-        .login-card {
-            background: white; padding: 40px 30px; border-radius: 10px;
-            box-shadow: 0 15px 35px rgba(0,0,0,0.3); border: none; backdrop-filter: blur(2px);
-        }
-        
-        .login-header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        
-        .login-header h2 {
-            color: #ffffff;
-            font-weight: 800;
-            margin-bottom: 5px;
-            font-size: 1.8rem;
-            text-transform: uppercase;
-            text-shadow: -1px -1px 0 #003366, 1px -1px 0 #003366, -1px 1px 0 #003366, 1px 1px 0 #003366, 2px 2px 5px rgba(0,0,0,0.6);
-            white-space: nowrap;
-        }
-        
-        .login-header p {
-            color: #ffffff;
-            font-size: 1.2rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            text-shadow: -1px -1px 0 #003366, 1px -1px 0 #003366, -1px 1px 0 #003366, 1px 1px 0 #003366, 2px 2px 4px rgba(0,0,0,0.6);
-            margin-bottom: 0;
-        }
-        
-        .logo-container {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        
-        .logo-image {
-            max-width: 130px;
-            height: auto;
-            filter: drop-shadow(0 5px 10px rgba(0,0,0,0.2));
+            z-index: 2;
+            padding: 40px;
         }
 
-        .btn-login { background: #073b5eff; border: none; padding: 12px; font-weight: 600; border-radius: 8px; transition: all 0.3s; }
-        .btn-login:hover { transform: translateY(-2px); box-shadow: 0 5px 15px #0a436aff; }
+        .left-panel::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; bottom: 0;
+            width: 120%;
+            background: linear-gradient(to right, rgba(10, 20, 40, 0.75) 0%, rgba(10, 20, 40, 0.7) 60%, rgba(10, 20, 40, 0.4) 85%, transparent 100%);
+            z-index: 0;
+        }
+
+        .left-panel .logo-img {
+            width: 200px; height: auto;
+            margin-bottom: 28px;
+            filter: drop-shadow(0 8px 24px rgba(0,0,0,0.5));
+            position: relative; z-index: 1;
+        }
+
+        .left-panel h1 {
+            color: #fff; font-size: 2rem; font-weight: 700;
+            text-align: center; margin-bottom: 8px;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            position: relative; z-index: 1;
+        }
+
+        .left-panel .system-name {
+            color: rgba(255,255,255,0.85); font-size: 1.1rem;
+            font-weight: 400; letter-spacing: 0.5px;
+            text-align: center; margin-bottom: 6px;
+            text-shadow: 0 1px 6px rgba(0,0,0,0.4);
+            position: relative; z-index: 1;
+        }
+
+        .left-panel .address {
+            color: rgba(255,255,255,0.6); font-size: 0.95rem;
+            text-align: center;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+            position: relative; z-index: 1;
+        }
+
+        .right-panel {
+            width: 55%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .right-content {
+            width: 100%; max-width: 420px;
+            display: flex; flex-direction: column; align-items: center;
+        }
+
+        .panel-heading {
+            font-size: 1.5rem; font-weight: 700; color: #fff;
+            text-transform: uppercase; letter-spacing: 2px;
+            margin-bottom: 20px; text-align: center;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+        }
+
+        .login-card {
+            background: #fff; border-radius: 16px;
+            padding: 36px 32px 28px; width: 100%;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+        }
+
+        .login-card h4 { font-weight: 700; color: #1a2a44; font-size: 1.2rem; }
+
+        .form-floating { margin-bottom: 16px; }
+        .form-floating .form-control {
+            border: 1.5px solid #dee2e6; border-radius: 10px;
+            height: 50px; font-size: 0.95rem; padding: 16px 14px 6px;
+        }
+        .form-floating .form-control:focus {
+            border-color: #2a5298;
+            box-shadow: 0 0 0 3px rgba(42,82,152,0.12);
+        }
+        .form-floating label { color: #6c757d; font-size: 0.9rem; }
+
+        .btn-login {
+            background: #4a6cf7; border: none; padding: 12px;
+            font-weight: 600; font-size: 1rem; border-radius: 10px;
+            color: #fff; transition: all 0.25s;
+        }
+        .btn-login:hover {
+            background: #3b5de7; transform: translateY(-1px);
+            box-shadow: 0 4px 14px rgba(74,108,247,0.4); color: #fff;
+        }
+
+        .btn-back {
+            background: #f0f2f5; border: 1px solid #dee2e6;
+            padding: 11px; font-weight: 600; font-size: 0.95rem;
+            border-radius: 10px; color: #495057; transition: all 0.25s;
+        }
+        .btn-back:hover { background: #e2e6ea; color: #1a2a44; }
+
+        .alert { border-radius: 10px; border: none; padding: 12px 15px; font-size: 0.9rem; }
+
+        .footer-text {
+            margin-top: 20px; color: rgba(255,255,255,0.55);
+            font-size: 0.8rem; text-align: center;
+        }
+
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
+            .left-panel { width: 100%; padding: 30px 20px; }
+            .left-panel .logo-img { width: 100px; margin-bottom: 12px; }
+            .left-panel h1 { font-size: 1.3rem; }
+            .left-panel::before { width: 100%; background: rgba(10, 20, 40, 0.65); }
+            .right-panel { width: 100%; padding: 24px 16px; }
+            .login-card { padding: 28px 22px 24px; }
+        }
     </style>
 </head>
-<body class="login-body">
-    <div class="login-container">
-        <!-- SMCC Logo -->
-        <div class="logo-container">
-            <img src="assets/img/SMCC_LOGO.webp" alt="SMCC Logo" class="logo-image">
-        </div>
-        
-        <div class="login-header">
-            <h2><i class="fas fa-robot me-2"></i>ADCES</h2>
-            <p>PASSWORD RECOVERY</p>
-        </div>
+<body>
+    <div class="left-panel">
+        <img src="assets/img/SMCC_LOGO.webp" alt="SMCC Logo" class="logo-img">
+        <h1>Saint Michael College of Caraga</h1>
+        <p class="system-name">AI-Driven Classroom Evaluation System</p>
+        <p class="address">Brgy. 4, Atupan St., Nasipit, Agusan del Norte</p>
+    </div>
 
-        <div class="login-card">
-            <h4 class="text-center mb-4">Forgot Password</h4>
-            
-            <?php if(isset($_SESSION['error'])): ?>
-                <div class="alert alert-danger" role="alert">
-                    <i class="fas fa-exclamation-circle me-2"></i><?php echo htmlspecialchars($_SESSION['error']); unset($_SESSION['error']); ?>
-                </div>
-            <?php endif; ?>
+    <div class="right-panel">
+        <div class="right-content">
+            <h2 class="panel-heading">Password Recovery</h2>
 
-            <form method="POST" action="">
-                <div class="mb-4">
-                    <p class="text-muted text-center" style="font-size: 0.95rem;">Enter the email associated with your account to receive a 6-digit recovery code.</p>
-                    <label for="email" class="form-label" style="font-weight: 600;">Email Address or Username</label>
-                    <input type="text" class="form-control" id="email" name="email" value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>" required placeholder="user@gmail.com">
+            <div class="login-card">
+                <h4 class="text-center mb-3">Forgot Password</h4>
+                <p class="text-muted text-center mb-4" style="font-size: 0.88rem;">Enter the email associated with your account to receive a 6-digit recovery code.</p>
+
+                <?php if(isset($_SESSION['error'])): ?>
+                <div class="alert alert-danger alert-dismissible fade show">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    <?php echo htmlspecialchars($_SESSION['error']); unset($_SESSION['error']); ?>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                 </div>
-                
-                <button type="submit" class="btn btn-primary btn-login w-100 mb-3">
-                    <i class="fas fa-paper-plane me-2"></i>Send Verification Code
-                </button>
-                
-                <div class="text-center">
-                    <a href="login.php" class="text-decoration-none" style="color: var(--secondary); font-weight: 500;">
-                        <i class="fas fa-arrow-left me-1"></i> Back to Login
+                <?php endif; ?>
+
+                <form method="POST" action="">
+                    <div class="form-floating">
+                        <input type="text" class="form-control" id="email" name="email" required placeholder="Email or Username" value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>">
+                        <label for="email">Email Address or Username</label>
+                    </div>
+
+                    <button type="submit" class="btn btn-login w-100 mb-2">
+                        <i class="fas fa-paper-plane me-2"></i>Send Verification Code
+                    </button>
+                    <a href="login.php" class="btn btn-back w-100">
+                        <i class="fas fa-arrow-left me-2"></i>Back to Login
                     </a>
-                </div>
-            </form>
+                </form>
+            </div>
+
+            <p class="footer-text">&copy; <?php echo date('Y'); ?> Saint Michael College of Caraga | All Rights Reserved</p>
         </div>
     </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

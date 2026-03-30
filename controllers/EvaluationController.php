@@ -318,8 +318,8 @@ class EvaluationController {
         $others_specify = $data['others_specify'] ?? '';
         $evaluation_focus = $data['evaluation_focus'] ?? null;
         $evaluation_form_type = $data['evaluation_form_type'] ?? 'iso';
-        // PEAC is exclusive to JHS department
-        if ($evaluation_form_type === 'peac' && ($_SESSION['department'] ?? '') !== 'JHS') {
+        // Validate form type value
+        if (!in_array($evaluation_form_type, ['iso', 'peac'], true)) {
             $evaluation_form_type = 'iso';
         }
 
@@ -372,22 +372,10 @@ class EvaluationController {
         $stmt->bindValue(':others_specify', $others_specify);
 
         if ($stmt->execute()) {
-            // clear any existing schedule for this teacher since evaluation has been completed
-            if (!empty($teacher_id)) {
-                // For "both" form type: only clear schedule after PEAC is done (ISO must be done first)
-                $teacherFormStmt = $this->db->prepare("SELECT evaluation_form_type FROM teachers WHERE id = :id LIMIT 1");
-                $teacherFormStmt->bindValue(':id', $teacher_id);
-                $teacherFormStmt->execute();
-                $teacherFormType = $teacherFormStmt->fetchColumn();
-
-                if ($teacherFormType === 'both' && $evaluation_form_type === 'iso') {
-                    // ISO part done, keep schedule so evaluator can still do PEAC
-                } else {
-                    $clearStmt = $this->db->prepare("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', updated_at = NOW() WHERE id = :id");
-                    $clearStmt->bindValue(':id', $teacher_id);
-                    $clearStmt->execute();
-                }
-            }
+            // Do NOT clear the teacher's schedule here. Multiple evaluators (chairperson, dean)
+            // may need to evaluate the same teacher using the same schedule. The schedule will be
+            // cleared automatically once ALL assigned evaluators have completed, or after the
+            // 24-hour expiration window.
             $lastId = $this->resolveInsertedEvaluationId($teacher_id, $evaluatorId);
             error_log("Evaluation create stmt executed. lastInsertId=" . var_export($lastId, true));
             return $lastId;

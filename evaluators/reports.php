@@ -18,17 +18,15 @@ $teacher = new Teacher($db);
 // Map department codes/names to their full display names for printing.
 // Add/adjust entries as needed to match your database values.
 $department_map = [
-    'CCIS' => 'College of Computing and Information Sciences',
-    'COE'  => 'College of Education',
-    'CBA'  => 'College of Business Administration',
-    'CCJE' => 'College of Criminal Justice Education',
-    'CAS'  => 'College of Arts and Sciences',
-    'CHM'  => 'College of Hospitality Management',
-    'CTE'  => 'College of Teacher Education',
-    'BASIC ED' => 'Basic Education Department',
-    'ELEM' => 'Elementary Department',
-    'JHS'  => 'Junior High School Department',
-    'SHS'  => 'Senior High School Department',
+    'CCIS'  => 'College of Computing and Information Sciences',
+    'CBM'   => 'College of Business and Management',
+    'CAS'   => 'College of Arts and Sciences',
+    'CCJE'  => 'College of Criminal Justice Education',
+    'CTHM'  => 'College of Tourism and Hospitality Management',
+    'CTEAS' => 'College of Teacher Education, Arts and Sciences',
+    'ELEM'  => 'Elementary Department',
+    'JHS'   => 'Junior High School Department',
+    'SHS'   => 'Senior High School Department',
 ];
 
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
@@ -1050,8 +1048,8 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         <?php endif; ?>
     });
 
-    // For non-JHS departments, auto-select ISO when modal opens
-    <?php if (($_SESSION['department'] ?? '') !== 'JHS'): ?>
+    // For non-JHS departments (and non-leaders), auto-select ISO when modal opens
+    <?php if (($_SESSION['department'] ?? '') !== 'JHS' && !$is_leader): ?>
     document.getElementById('evalFormModal').addEventListener('shown.bs.modal', function() {
         selectFormType('iso');
     });

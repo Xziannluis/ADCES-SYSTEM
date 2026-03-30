@@ -256,17 +256,15 @@ foreach ($evaluations as $ev) {
 }
 
 $department_map = [
-    'CCIS' => 'College of Computing and Information Sciences',
-    'COE'  => 'College of Education',
-    'CBA'  => 'College of Business Administration',
-    'CCJE' => 'College of Criminal Justice Education',
-    'CAS'  => 'College of Arts and Sciences',
-    'CHM'  => 'College of Hospitality Management',
-    'CTE'  => 'College of Teacher Education',
-    'BASIC ED' => 'Basic Education Department',
-    'ELEM' => 'Elementary Department',
-    'JHS'  => 'Junior High School Department',
-    'SHS'  => 'Senior High School Department',
+    'CCIS'  => 'College of Computing and Information Sciences',
+    'CBM'   => 'College of Business and Management',
+    'CAS'   => 'College of Arts and Sciences',
+    'CCJE'  => 'College of Criminal Justice Education',
+    'CTHM'  => 'College of Tourism and Hospitality Management',
+    'CTEAS' => 'College of Teacher Education, Arts and Sciences',
+    'ELEM'  => 'Elementary Department',
+    'JHS'   => 'Junior High School Department',
+    'SHS'   => 'Senior High School Department',
 ];
 $department_display = $department_map[$teacher_data['department']] ?? $teacher_data['department'];
 ?>

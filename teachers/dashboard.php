@@ -17,12 +17,12 @@ $db = $database->getConnection();
 // remove any past schedules so teacher doesn't see outdated entries
 // Clear schedules that are more than 24 hours past their scheduled time
 try {
-    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
 } catch (Exception $e) {
     error_log('Failed to clear expired schedules: ' . $e->getMessage());
 }
 
-// Also clear schedules for teachers who already have a completed evaluation this period
+// Clear schedules for teachers where ALL assigned evaluators AND the dean/principal have completed
 try {
     $month = (int)date('n');
     $year = (int)date('Y');
@@ -33,12 +33,42 @@ try {
             AND e.academic_year = :ay AND e.semester = :sem
         SET t.evaluation_schedule = NULL, t.evaluation_room = NULL, t.evaluation_focus = NULL,
             t.evaluation_subject_area = NULL, t.evaluation_subject = NULL, t.evaluation_semester = NULL,
-            t.evaluation_form_type = 'iso', t.updated_at = NOW()
+            t.evaluation_form_type = 'iso', t.scheduled_by = NULL, t.scheduled_department = NULL, t.updated_at = NOW()
         WHERE t.evaluation_schedule IS NOT NULL
           AND (t.evaluation_form_type IS NULL OR t.evaluation_form_type != 'both'
                OR (SELECT COUNT(*) FROM evaluations e2 WHERE e2.teacher_id = t.id AND e2.status = 'completed'
-                   AND e2.academic_year = :ay2 AND e2.semester = :sem2 AND e2.evaluation_form_type = 'peac') > 0)")
-        ->execute([':ay' => $curAY, ':sem' => $curSem, ':ay2' => $curAY, ':sem2' => $curSem]);
+                   AND e2.academic_year = :ay2 AND e2.semester = :sem2 AND e2.evaluation_form_type = 'peac') > 0)
+          AND NOT EXISTS (
+              SELECT 1 FROM teacher_assignments ta
+              WHERE ta.teacher_id = t.id
+              AND NOT EXISTS (
+                  SELECT 1 FROM evaluations e3
+                  WHERE e3.teacher_id = t.id
+                  AND e3.evaluator_id = ta.evaluator_id
+                  AND e3.status = 'completed'
+                  AND e3.academic_year = :ay3
+                  AND e3.semester = :sem3
+              )
+          )
+          AND (
+              NOT EXISTS (
+                  SELECT 1 FROM users u
+                  WHERE u.role IN ('dean', 'principal')
+                  AND u.status = 'active'
+                  AND u.department = t.department
+              )
+              OR EXISTS (
+                  SELECT 1 FROM evaluations e4
+                  JOIN users u2 ON e4.evaluator_id = u2.id
+                  WHERE e4.teacher_id = t.id
+                  AND e4.status = 'completed'
+                  AND e4.academic_year = :ay4
+                  AND e4.semester = :sem4
+                  AND u2.role IN ('dean', 'principal')
+              )
+          )")
+        ->execute([':ay' => $curAY, ':sem' => $curSem, ':ay2' => $curAY, ':sem2' => $curSem,
+                   ':ay3' => $curAY, ':sem3' => $curSem, ':ay4' => $curAY, ':sem4' => $curSem]);
 } catch (Exception $e) {
     error_log('Error clearing completed-eval schedules: ' . $e->getMessage());
 }

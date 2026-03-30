@@ -90,14 +90,15 @@ $overallAvg        = (float)($eval['overall_avg'] ?? 0);
 // Department display name — use the evaluator's department (observation context)
 $deptCode = $eval['evaluator_department'] ?? $eval['teacher_department'] ?? '';
 $deptDisplayNames = [
-    'SHS' => 'Senior High School Department',
-    'JHS' => 'Junior High School Department',
-    'CCIS' => 'College of Computing and Information Sciences',
-    'CBA' => 'College of Business Administration',
-    'COED' => 'College of Education',
-    'CASS' => 'College of Arts and Social Sciences',
-    'COE' => 'College of Engineering',
-    'ELEM' => 'Elementary Department',
+    'CCIS'  => 'College of Computing and Information Sciences',
+    'CBM'   => 'College of Business and Management',
+    'CAS'   => 'College of Arts and Sciences',
+    'CCJE'  => 'College of Criminal Justice Education',
+    'CTHM'  => 'College of Tourism and Hospitality Management',
+    'CTEAS' => 'College of Teacher Education, Arts and Sciences',
+    'ELEM'  => 'Elementary Department',
+    'JHS'   => 'Junior High School Department',
+    'SHS'   => 'Senior High School Department',
 ];
 $deptFullName = $deptDisplayNames[$deptCode] ?? ($deptCode ?: 'Department');
 

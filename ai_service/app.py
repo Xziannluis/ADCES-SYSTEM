@@ -2424,6 +2424,211 @@ def _vary_sentence_starters(sentences: List[str]) -> List[str]:
     return result
 
 
+# ── Opener randomization pool ─────────────────────────────────────────
+# Large pool of natural openers for each option's first sentence.
+# These are shuffled per-request so output never feels repetitive.
+_RANDOMIZABLE_OPENERS: List[Tuple[re.Pattern, int]] = [
+    # Each tuple: (pattern matching the opener, number of words to replace)
+    # -- Seed: "A/An [adj] [noun] of/in/from ..."  (tail consumed by _detect_opener_boundary)
+    (re.compile(r"^(?:An? (?:key aspect|notable element|notable observation|notable strength|significant part|significant element|important feature|important finding|clear strength|distinct strength|noteworthy strength|evident strength|commendable aspect|positive pattern|defining quality|well-demonstrated practice|consistent practice|effective element|key instructional strength|developing area|gap in instructional consistency|dimension to focus|area of consistent strength|area that could be strengthened))\b", re.IGNORECASE), None),
+    # -- Seed: "Based on / Drawing from / As reflected"
+    (re.compile(r"^(?:Based on (?:lesson|the lesson|classroom) evidence,?\s*|Drawing from (?:the )?classroom evidence,?\s*|As reflected in the lesson,?\s*|From the (?:lesson )?evidence[^,]*,?\s*)", re.IGNORECASE), None),
+    # -- Seed: "Throughout / During / Across / Over"
+    (re.compile(r"^(?:Throughout the (?:class|lesson|classroom visit),?\s*|During the lesson,?\s*|Across the (?:class session|lesson segments),?\s*|Over the course of the lesson,?\s*|In the course of the lesson,?\s*)", re.IGNORECASE), None),
+    # -- Seed: "Upon review / After examining / Looking at / From a review"
+    (re.compile(r"^(?:Upon review of the lesson,?\s*|After examining the lesson,?\s*|Looking at (?:the )?(?:overall )?lesson(?: delivery)?,?\s*|From a review of the lesson,?\s*)", re.IGNORECASE), None),
+    # -- Seed: "The teacher/instructor/educator [verb]"
+    (re.compile(r"^(?:The (?:teacher|instructor|educator)(?:'s practice reflected that\s*| (?:uses|maintains|delivers|speaks|demonstrates|employs|communicates)))\b", re.IGNORECASE), None),
+    # -- Seed: "The lesson/classroom evidence [verb] that"
+    (re.compile(r"^(?:The (?:lesson|classroom evidence) (?:clearly (?:reflected|showed)|provided clear evidence|demonstrated|indicated|also showed) that\s*)", re.IGNORECASE), None),
+    # -- Seed: "It became/was [state]"
+    (re.compile(r"^(?:It (?:became apparent|was evident|was clear|was consistently (?:noted|observed)|was noted))\b", re.IGNORECASE), None),
+    # -- Seed: "From the perspective of"
+    (re.compile(r"^(?:From the perspective of (?:instructional delivery|the (?:lesson|PEAC standards)|classroom practice),?\s*)", re.IGNORECASE), None),
+    # -- Seed: "As the lesson unfolded"
+    (re.compile(r"^(?:As the lesson unfolded,?\s*it became evident that\s*)", re.IGNORECASE), None),
+    # -- Seed: "One of the distinguishing"
+    (re.compile(r"^(?:One of the (?:clear strengths observed|distinguishing features of the lesson) was that\s*)", re.IGNORECASE), None),
+    # -- Seed: reflection phrases
+    (re.compile(r"^(?:As indicated by the performance indicators,?\s*|Considering the full scope of the lesson,?\s*|With (?:attention|regard) to instructional practice,?\s*)", re.IGNORECASE), None),
+    # -- Pool openers that may already be in text
+    (re.compile(r"^(?:Evidence from the lesson confirmed that\s*|Among the strengths noted in the lesson,?\s*|Classroom evidence (?:showed|suggests) that\s*|The instructional delivery showed that\s*)", re.IGNORECASE), None),
+    # -- Improvement pool openers
+    (re.compile(r"^(?:An (?:area that could be strengthened involves|aspect requiring focused effort involves|opportunity for growth was noted where|emerging area for development is that)\s*)", re.IGNORECASE), None),
+    (re.compile(r"^(?:One aspect that (?:needs further development|could be strengthened) is (?:that\s*)?)", re.IGNORECASE), None),
+    (re.compile(r"^(?:A point that merits (?:attention|further development) is (?:that\s*)?)", re.IGNORECASE), None),
+    (re.compile(r"^(?:Room for improvement was noted in how\s*|Further refinement is needed in how\s*)", re.IGNORECASE), None),
+    # -- Recommendation pool openers
+    (re.compile(r"^(?:It is recommended to\s*|A practical next step would be to\s*|The teacher is encouraged to\s*|Moving forward,?\s*(?:it would help to\s*)?|To strengthen future lessons,?\s*|An actionable step is to\s*|For continued growth,?\s*|A focused improvement strategy is to\s*|To address this area effectively,?\s*|Going forward,?\s*(?:consider\s*)?|One productive strategy would be to\s*|To improve in this area,?\s*|A concrete next step is to\s*|For the next lesson cycle,?\s*|To build on current progress,?\s*|An effective approach would be to\s*|Consider prioritizing\s*|A recommended practice is to\s*|To raise performance in this area,?\s*|As a next step,?\s*)", re.IGNORECASE), None),
+    # -- Critical indicator openers
+    (re.compile(r"^(?:A clear strength in the lesson was\s*|A distinct strength observed was\s*|A noteworthy strength in the lesson was\s*|An area that would benefit from focused attention is\s*|It would be beneficial to strengthen\s*)", re.IGNORECASE), None),
+    # -- Notably / Other
+    (re.compile(r"^(?:Notably,?\s*)", re.IGNORECASE), None),
+]
+
+_OPENER_POOL_STRENGTHS = [
+    "The lesson clearly reflected that",
+    "A notable strength was that",
+    "It was evident during the lesson that",
+    "One of the clear strengths observed was that",
+    "A key instructional strength was that",
+    "The lesson demonstrated that",
+    "An effective element of the lesson was that",
+    "A consistent practice throughout the lesson was that",
+    "The instructional delivery showed that",
+    "A commendable aspect of the lesson was that",
+    "Evidence from the lesson confirmed that",
+    "Among the strengths noted in the lesson,",
+    "A well-demonstrated practice was that",
+    "Classroom evidence showed that",
+    "The lesson provided clear evidence that",
+    "A positive pattern in the lesson was that",
+    "An area of consistent strength was that",
+    "The teacher's practice reflected that",
+    "Across the lesson segments, it was clear that",
+    "A defining quality of the lesson was that",
+]
+
+_OPENER_POOL_IMPROVEMENT = [
+    "Upon review of the lesson,",
+    "An area that could be strengthened involves",
+    "One aspect that needs further development is that",
+    "Looking at the lesson delivery,",
+    "A point that merits attention is that",
+    "Based on the lesson evidence,",
+    "From the classroom evidence,",
+    "A dimension to focus on is that",
+    "An opportunity for growth was noted where",
+    "The lesson also showed that",
+    "With regard to instructional practice,",
+    "A developing area in the lesson was that",
+    "Room for improvement was noted in how",
+    "An aspect requiring focused effort involves",
+    "Further refinement is needed in how",
+    "A gap in instructional consistency was that",
+    "It was noted during the lesson that",
+    "An emerging area for development is that",
+    "Classroom evidence suggests that",
+    "The lesson indicated that",
+]
+
+_OPENER_POOL_RECOMMENDATION = [
+    "It is recommended to",
+    "A practical next step would be to",
+    "The teacher is encouraged to",
+    "Moving forward, it would help to",
+    "To strengthen future lessons,",
+    "An actionable step is to",
+    "For continued growth,",
+    "A focused improvement strategy is to",
+    "To address this area effectively,",
+    "Going forward, consider",
+    "One productive strategy would be to",
+    "To improve in this area,",
+    "A concrete next step is to",
+    "For the next lesson cycle,",
+    "To build on current progress,",
+    "An effective approach would be to",
+    "Consider prioritizing",
+    "A recommended practice is to",
+    "To raise performance in this area,",
+    "As a next step,",
+]
+
+
+def _detect_opener_boundary(text: str) -> int:
+    """Find where the 'opener' phrase ends and the substantive content begins.
+    Returns the character index where the core content starts."""
+    for pattern, _ in _RANDOMIZABLE_OPENERS:
+        m = pattern.match(text)
+        if m:
+            end = m.end()
+            # Many seed openers have trailing filler tails like
+            # "of the lesson was that" or "during the lesson that"
+            # that the initial regex didn't capture.  Consume them here.
+            remaining = text[end:]
+            tail = re.match(
+                r"\s*(?:"
+                r"of the (?:observed )?(?:lesson|class)\s+(?:was|demonstrated|is)\s+that"
+                r"|during the lesson\s+that"
+                r"|from the observation\s+was\s+that"
+                r"|in the lesson\s+was(?:\s+that)?"
+                r"|observed\s+was(?:\s+that)?"
+                r")\s*",
+                remaining, re.IGNORECASE
+            )
+            if tail:
+                end += tail.end()
+            # Skip trailing whitespace and commas after the opener
+            while end < len(text) and text[end] in " ,":
+                end += 1
+            return end
+    return 0
+
+
+def _randomize_openers(options: List[str], rng: random.Random, field_name: str = "") -> List[str]:
+    """Replace each option's opener with a randomly-selected unique opener.
+    Uses the request-seeded RNG for deterministic but varied output."""
+    if not options:
+        return options
+
+    # Pick pool based on field_name (authoritative) rather than guessing
+    if field_name == "recommendations":
+        pool = _OPENER_POOL_RECOMMENDATION
+    elif field_name == "areas_for_improvement":
+        pool = _OPENER_POOL_IMPROVEMENT
+    else:
+        pool = _OPENER_POOL_STRENGTHS
+
+    result: List[str] = []
+    used_opener_keys: set = set()
+
+    # Shuffle pool once, deterministically for this request
+    shuffled = list(pool)
+    rng.shuffle(shuffled)
+    pool_idx = 0
+
+    for text in options:
+        boundary = _detect_opener_boundary(text)
+        if boundary == 0:
+            # No recognized opener — keep as-is
+            result.append(text)
+            used_opener_keys.add(_opener_key(text, 4))
+            continue
+
+        core = text[boundary:]
+        if not core.strip():
+            result.append(text)
+            continue
+
+        # Pick the next opener that doesn't clash with already-used openers
+        chosen = None
+        for i in range(len(shuffled)):
+            candidate_opener = shuffled[(pool_idx + i) % len(shuffled)]
+            key = _opener_key(candidate_opener, 3)
+            if key not in used_opener_keys:
+                chosen = candidate_opener
+                pool_idx = (pool_idx + i + 1) % len(shuffled)
+                break
+
+        if chosen is None:
+            result.append(text)
+            used_opener_keys.add(_opener_key(text, 4))
+            continue
+
+        # Stitch: opener + core content
+        core_start = core.lstrip()
+        if core_start:
+            joined = f"{chosen} {core_start[0].lower() + core_start[1:]}"
+        else:
+            joined = chosen
+
+        result.append(_normalize_sentence(joined))
+        used_opener_keys.add(_opener_key(chosen, 3))
+
+    return result
+
+
 def _trim_to_sentences(text: str, max_sentences: int = 3) -> str:
     """Trim text to at most max_sentences sentences."""
     sents = _split_sentences(text)
@@ -2647,6 +2852,9 @@ def _make_three_options(base_text: str, req: GenerateRequest, field_name: str, r
 
     # Vary sentence starters across the 3 options
     out = _vary_sentence_starters(out)
+
+    # Forcefully randomize openers so each generation feels fresh
+    out = _randomize_openers(out, rng, field_name)
 
     return out[:3]
 

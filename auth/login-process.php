@@ -52,7 +52,6 @@ if (!empty($_POST)) {
     $user = new User($db);
     $user->username = $_POST['username'];
     $user->password = $_POST['password'];
-    $user->role = $_POST['role'];
 
     if($user->login()) {
     session_regenerate_id(true);
@@ -104,7 +103,7 @@ if (!empty($_POST)) {
         }
         exit();
     } else {
-        $_SESSION['error'] = "Invalid username, password or role selection. Please try again.";
+        $_SESSION['error'] = "Invalid username or password. Please try again.";
         header("Location: ../login.php");
         exit();
     }
