@@ -870,7 +870,22 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
 
                                 <!-- Assignment badge removed per request -->
 
-                                <?php if(!empty($teacher_row['evaluation_schedule']) || !empty($teacher_row['evaluation_room'])): ?>
+                                <?php
+                                // Only show schedule if it belongs to this department:
+                                // - scheduled_department matches current department, OR
+                                // - scheduled_department is empty (legacy) AND teacher's primary dept matches, OR
+                                // - viewer is president/VP (sees all)
+                                $viewer_dept = $_SESSION['department'] ?? '';
+                                $sched_dept_val = $teacher_row['scheduled_department'] ?? '';
+                                if ($is_leader) {
+                                    $sched_dept_match = true;
+                                } elseif (!empty($sched_dept_val)) {
+                                    $sched_dept_match = ($sched_dept_val === $viewer_dept);
+                                } else {
+                                    $sched_dept_match = ($teacher_row['department'] === $viewer_dept);
+                                }
+                                ?>
+                                <?php if($sched_dept_match && (!empty($teacher_row['evaluation_schedule']) || !empty($teacher_row['evaluation_room']))): ?>
                                 <div class="schedule-info">
                                     <?php if(!empty($teacher_row['evaluation_schedule'])): ?>
                                         <?php $scheduleFormatted = date('F d, Y \a\t h:i A', strtotime($teacher_row['evaluation_schedule'])); ?>

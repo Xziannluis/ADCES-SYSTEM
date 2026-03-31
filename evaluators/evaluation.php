@@ -122,8 +122,14 @@ try {
 // Load observation plan acknowledgments to check if teachers have signed
 $teacher_signed_map = [];
 try {
-    $ack_stmt = $db->prepare("SELECT DISTINCT teacher_id FROM observation_plan_acknowledgments");
-    $ack_stmt->execute();
+    $eval_viewer_dept = $_SESSION['department'] ?? '';
+    if (in_array($_SESSION['role'], ['president', 'vice_president'])) {
+        $ack_stmt = $db->prepare("SELECT DISTINCT teacher_id FROM observation_plan_acknowledgments");
+        $ack_stmt->execute();
+    } else {
+        $ack_stmt = $db->prepare("SELECT DISTINCT teacher_id FROM observation_plan_acknowledgments WHERE department = :dept OR department IS NULL");
+        $ack_stmt->execute([':dept' => $eval_viewer_dept]);
+    }
     while ($ack_row = $ack_stmt->fetch(PDO::FETCH_ASSOC)) {
         $teacher_signed_map[(int)$ack_row['teacher_id']] = true;
     }
@@ -206,8 +212,20 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     <div class="list-group" id="teacherList">
                         <?php while($teacher_row = $teachers->fetch(PDO::FETCH_ASSOC)): ?>
                         <?php
-                            $scheduleRaw = $teacher_row['evaluation_schedule'] ?? '';
-                            $scheduleRoom = $teacher_row['evaluation_room'] ?? '';
+                            // Check if the schedule belongs to the current viewer's department
+                            $viewer_dept_eval = $_SESSION['department'] ?? '';
+                            $sched_dept_eval = $teacher_row['scheduled_department'] ?? '';
+                            $is_leader_eval = in_array($_SESSION['role'], ['president', 'vice_president']);
+                            if ($is_leader_eval) {
+                                $sched_for_this_dept = true;
+                            } elseif (!empty($sched_dept_eval)) {
+                                $sched_for_this_dept = ($sched_dept_eval === $viewer_dept_eval);
+                            } else {
+                                $sched_for_this_dept = ($teacher_row['department'] === $viewer_dept_eval);
+                            }
+
+                            $scheduleRaw = $sched_for_this_dept ? ($teacher_row['evaluation_schedule'] ?? '') : '';
+                            $scheduleRoom = $sched_for_this_dept ? ($teacher_row['evaluation_room'] ?? '') : '';
                             $has_schedule = !empty($scheduleRaw) || !empty($scheduleRoom);
                             $can_evaluate_now = false;
                             $schedule_message = 'No schedule set';

@@ -159,17 +159,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $stmt->bindParam(':form_type', $form_type);
         $is_leader_role = in_array($_SESSION['role'], ['president', 'vice_president']);
         $stmt->bindValue(':scheduled_by', $is_leader_role ? $_SESSION['user_id'] : null, $is_leader_role ? PDO::PARAM_INT : PDO::PARAM_NULL);
-        $sched_dept_val = $is_leader_role && !empty($scheduled_department) ? $scheduled_department : null;
+        // Always store scheduled_department: leaders use selected dept, deans/coordinators use their own dept
+        if ($is_leader_role && !empty($scheduled_department)) {
+            $sched_dept_val = $scheduled_department;
+        } else {
+            $sched_dept_val = $_SESSION['department'] ?? null;
+        }
         $stmt->bindValue(':scheduled_department', $sched_dept_val);
         $stmt->bindParam(':id', $teacher_id);
 
         if ($stmt->execute()) {
-            // Always clear signatures when schedule is set/updated — teacher must re-sign
+            // Clear signatures for this department only when schedule is set/updated — teacher must re-sign
             $del_sem = $_POST['filter_semester'] ?? ($_GET['semester'] ?? '1st');
             $del_ay = $_POST['filter_academic_year'] ?? ($_GET['academic_year'] ?? '');
             if (!empty($del_ay)) {
-                $del_ack = $db->prepare("DELETE FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem");
-                $del_ack->execute([':tid' => $teacher_id, ':ay' => $del_ay, ':sem' => $del_sem]);
+                $del_ack = $db->prepare("DELETE FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND (department = :dept OR department IS NULL)");
+                $del_ack->execute([':tid' => $teacher_id, ':ay' => $del_ay, ':sem' => $del_sem, ':dept' => $sched_dept_val]);
             }
             $is_reschedule = !empty($_POST['is_reschedule']);
             $success_message = $is_reschedule ? "Schedule updated. Teacher will need to sign again." : "Evaluation schedule set successfully!";
@@ -244,16 +249,29 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
             foreach ($signed_items as $item) {
                 $eval_id = ($item === 'upcoming') ? null : (int)$item;
                 // Check if already signed
+                // Determine department for this signature
+                $sign_dept = null;
+                if ($eval_id !== null) {
+                    $dStmt2 = $db->prepare("SELECT u.department FROM evaluations e JOIN users u ON u.id = e.evaluator_id WHERE e.id = :eid LIMIT 1");
+                    $dStmt2->execute([':eid' => $eval_id]);
+                    $sign_dept = $dStmt2->fetchColumn() ?: null;
+                }
+                if (empty($sign_dept)) {
+                    $tdStmt = $db->prepare("SELECT scheduled_department, department FROM teachers WHERE id = :tid LIMIT 1");
+                    $tdStmt->execute([':tid' => $my_teacher_id]);
+                    $tRow = $tdStmt->fetch(PDO::FETCH_ASSOC);
+                    $sign_dept = !empty($tRow['scheduled_department']) ? $tRow['scheduled_department'] : ($tRow['department'] ?? null);
+                }
                 if ($eval_id === null) {
-                    $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL LIMIT 1");
-                    $check->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester]);
+                    $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL AND (department = :dept OR (department IS NULL AND :dept2 IS NULL)) LIMIT 1");
+                    $check->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':dept' => $sign_dept, ':dept2' => $sign_dept]);
                 } else {
                     $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id = :eid LIMIT 1");
                     $check->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id]);
                 }
                 if ($check->rowCount() === 0) {
-                    $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :eid, NOW(), :sig)");
-                    $ins->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id, ':sig' => $sig_data]);
+                    $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, department, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :dept, :eid, NOW(), :sig)");
+                    $ins->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':dept' => $sign_dept, ':eid' => $eval_id, ':sig' => $sig_data]);
                     $signed_count++;
                     if ($eval_id !== null) {
                         $signed_eval_ids[] = $eval_id;
@@ -584,6 +602,7 @@ if ($is_leader) {
     $sched_stmt->bindParam(':semester', $semester);
 } else {
     // Dean/principal: show scheduled teachers in this department (primary or secondary)
+    // Only show if the schedule was set FOR this department, or if no scheduled_department (legacy/own dept)
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
@@ -593,6 +612,7 @@ if ($is_leader) {
                     WHERE (t.department = :department OR td.department = :department2)
                       AND t.status = 'active'
                       AND t.evaluation_schedule IS NOT NULL
+                      AND (t.scheduled_department IS NULL OR t.scheduled_department = '' OR t.scheduled_department = :department3)
                       AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                       AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                       AND t.id NOT IN (
@@ -603,6 +623,7 @@ if ($is_leader) {
     $sched_stmt = $db->prepare($sched_query);
     $sched_stmt->bindParam(':department', $raw_department);
     $sched_stmt->bindParam(':department2', $raw_department);
+    $sched_stmt->bindParam(':department3', $raw_department);
     $sched_stmt->bindParam(':filter_semester', $semester);
     $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $sched_stmt->bindParam(':academic_year', $academic_year);
@@ -705,10 +726,17 @@ foreach ($eval_teachers as $t) {
         $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
     }
 
-    // Always include assigned coordinators/chairpersons as observers (no department filter)
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
-    $assign_stmt = $db->prepare($assign_query);
-    $assign_stmt->execute([':teacher_id' => $tid]);
+    // If teacher is from a different primary department (secondary dept view), only include observers from current department
+    $is_secondary_dept = !empty($raw_department) && ($t['teacher_department'] ?? '') !== $raw_department;
+    if ($is_secondary_dept) {
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
+    } else {
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid]);
+    }
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
 
     $all_observers = array_unique(array_merge($observers, $assigned));
@@ -796,10 +824,17 @@ foreach ($scheduled_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', $ts) . "\n" . date('g:ia', $ts);
     }
 
-    // Include all assigned coordinators/chairpersons as observers (no department filter)
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
-    $assign_stmt = $db->prepare($assign_query);
-    $assign_stmt->execute([':teacher_id' => $tid]);
+    // If teacher is from a different primary department (secondary dept view), only include observers from current department
+    $is_secondary_dept = !empty($raw_department) && ($t['teacher_department'] ?? '') !== $raw_department;
+    if ($is_secondary_dept) {
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
+    } else {
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid]);
+    }
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     $all_observers = $assigned;
     if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
@@ -947,10 +982,18 @@ if ($is_leader) {
 // Load acknowledgment data for current semester/year
 $ack_map = [];
 try {
-    $ack_query = "SELECT teacher_id, acknowledged_at, signature FROM observation_plan_acknowledgments WHERE academic_year = :ay AND semester = :sem";
-    $ack_stmt = $db->prepare($ack_query);
-    $ack_stmt->bindParam(':ay', $academic_year);
-    $ack_stmt->bindParam(':sem', $semester);
+    if ($is_leader) {
+        $ack_query = "SELECT teacher_id, department, acknowledged_at, signature FROM observation_plan_acknowledgments WHERE academic_year = :ay AND semester = :sem";
+        $ack_stmt = $db->prepare($ack_query);
+        $ack_stmt->bindParam(':ay', $academic_year);
+        $ack_stmt->bindParam(':sem', $semester);
+    } else {
+        $ack_query = "SELECT teacher_id, department, acknowledged_at, signature FROM observation_plan_acknowledgments WHERE academic_year = :ay AND semester = :sem AND (department = :dept OR department IS NULL)";
+        $ack_stmt = $db->prepare($ack_query);
+        $ack_stmt->bindParam(':ay', $academic_year);
+        $ack_stmt->bindParam(':sem', $semester);
+        $ack_stmt->bindParam(':dept', $raw_department);
+    }
     $ack_stmt->execute();
     while ($ack_row = $ack_stmt->fetch(PDO::FETCH_ASSOC)) {
         $ack_map[$ack_row['teacher_id']] = $ack_row;

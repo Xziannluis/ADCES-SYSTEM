@@ -62,16 +62,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $has_upcoming = false;
         foreach ($signed_items as $item) {
             $eval_id = ($item === 'upcoming') ? null : (int)$item;
+            // Determine department for this signature
+            $sign_dept = null;
+            if ($eval_id !== null) {
+                $dStmt2 = $db->prepare("SELECT u.department FROM evaluations e JOIN users u ON u.id = e.evaluator_id WHERE e.id = :eid LIMIT 1");
+                $dStmt2->execute([':eid' => $eval_id]);
+                $sign_dept = $dStmt2->fetchColumn() ?: null;
+            }
+            if (empty($sign_dept)) {
+                // Use scheduled_department from teacher record, fallback to primary department
+                $tdStmt = $db->prepare("SELECT scheduled_department, department FROM teachers WHERE id = :tid LIMIT 1");
+                $tdStmt->execute([':tid' => $teacher_id]);
+                $tRow = $tdStmt->fetch(PDO::FETCH_ASSOC);
+                $sign_dept = !empty($tRow['scheduled_department']) ? $tRow['scheduled_department'] : ($tRow['department'] ?? null);
+            }
             if ($eval_id === null) {
-                $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL LIMIT 1");
-                $check->execute([':tid' => $teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester]);
+                $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL AND (department = :dept OR (department IS NULL AND :dept2 IS NULL)) LIMIT 1");
+                $check->execute([':tid' => $teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':dept' => $sign_dept, ':dept2' => $sign_dept]);
             } else {
                 $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id = :eid LIMIT 1");
                 $check->execute([':tid' => $teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id]);
             }
             if ($check->rowCount() === 0) {
-                $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :eid, NOW(), :sig)");
-                $ins->execute([':tid' => $teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id, ':sig' => $signature_data]);
+                $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, department, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :dept, :eid, NOW(), :sig)");
+                $ins->execute([':tid' => $teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':dept' => $sign_dept, ':eid' => $eval_id, ':sig' => $signature_data]);
                 $signed_count++;
                 if ($eval_id !== null) {
                     $signed_eval_ids[] = $eval_id;
