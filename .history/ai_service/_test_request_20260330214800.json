@@ -1,0 +1,37 @@
+{
+    "faculty_name": "John Doe",
+    "subject_observed": "Mathematics",
+    "observation_type": "Formal",
+    "form_type": "iso",
+    "ratings": {
+        "communications": {
+            "0": { "rating": "5", "comment": "clear voice", "criterion_text": "Uses an audible voice that can be heard at the back of the room." },
+            "1": { "rating": "4", "comment": "", "criterion_text": "Speaks fluently in the language of instruction." },
+            "2": { "rating": "4", "comment": "", "criterion_text": "Facilitates a dynamic discussion." },
+            "3": { "rating": "4", "comment": "", "criterion_text": "Uses engaging non-verbal cues (facial expression, gestures)." },
+            "4": { "rating": "3", "comment": "needs vocab adjustment", "criterion_text": "Uses words & expressions suited to the level of the students." }
+        },
+        "management": {
+            "0": { "rating": "4", "comment": "", "criterion_text": "The TILO (Topic Intended Learning Outcomes) are clearly presented." },
+            "1": { "rating": "4", "comment": "", "criterion_text": "Recall and connects previous lessons to the new lessons." },
+            "2": { "rating": "3", "comment": "intro needs work", "criterion_text": "The topic/lesson is introduced in an interesting & engaging way." },
+            "3": { "rating": "4", "comment": "", "criterion_text": "Uses current issues, real life & local examples to enrich class discussion." },
+            "4": { "rating": "4", "comment": "", "criterion_text": "Focuses class discussion on key concepts of the lesson." },
+            "5": { "rating": "3", "comment": "", "criterion_text": "Encourages active participation among students and ask questions about the topic." },
+            "6": { "rating": "4", "comment": "", "criterion_text": "Uses current instructional strategies and resources." },
+            "7": { "rating": "4", "comment": "", "criterion_text": "Designs teaching aids that facilitate understanding of key concepts." },
+            "8": { "rating": "5", "comment": "very adaptive", "criterion_text": "Adapts teaching approach in the light of student feedback and reactions." },
+            "9": { "rating": "4", "comment": "", "criterion_text": "Aids students using thought provoking questions (Art of Questioning)." },
+            "10": { "rating": "4", "comment": "", "criterion_text": "Integrate the institutional core values to the lessons." },
+            "11": { "rating": "3", "comment": "", "criterion_text": "Conduct the lesson using the principle of SMART" }
+        },
+        "assessment": {
+            "0": { "rating": "5", "comment": "excellent monitoring", "criterion_text": "Monitors students' understanding on key concepts discussed." },
+            "1": { "rating": "4", "comment": "", "criterion_text": "Uses assessment tool that relates specific course competencies stated in the syllabus." },
+            "2": { "rating": "4", "comment": "", "criterion_text": "Design test/quarter/assignments and other assessment tasks that are corrector-based." },
+            "3": { "rating": "5", "comment": "", "criterion_text": "Introduces varied activities that will answer the differentiated needs to the learners with varied learning style." },
+            "4": { "rating": "4", "comment": "", "criterion_text": "Conducts normative assessment before evaluating and grading the learner's performance outcome." },
+            "5": { "rating": "5", "comment": "", "criterion_text": "Monitors the formative assessment results and find ways to ensure learning for the learners." }
+        }
+    }
+}
