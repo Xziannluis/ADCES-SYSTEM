@@ -44,19 +44,17 @@ if (($eval['evaluation_form_type'] ?? 'iso') !== 'peac') {
     exit();
 }
 
-// Coordinators can only view their own evaluations within assigned programs
+// Coordinators can only view their own evaluations or evaluations on their assigned teachers
 if (in_array($_SESSION['role'] ?? '', ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
-    if ((int)$eval['evaluator_id'] !== (int)($_SESSION['user_id'] ?? 0)) {
-        http_response_code(403);
-        echo 'Access denied.';
-        exit();
-    }
-
-    $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
-    if (!empty($programs) && !in_array($eval['teacher_department'], $programs, true)) {
-        http_response_code(403);
-        echo 'Access denied.';
-        exit();
+    $is_own_evaluation = ((int)$eval['evaluator_id'] === (int)($_SESSION['user_id'] ?? 0));
+    if (!$is_own_evaluation) {
+        $assignCheck = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :eid AND teacher_id = :tid LIMIT 1");
+        $assignCheck->execute([':eid' => $_SESSION['user_id'], ':tid' => $eval['teacher_id']]);
+        if (!$assignCheck->fetch()) {
+            http_response_code(403);
+            echo 'Access denied.';
+            exit();
+        }
     }
 }
 

@@ -91,15 +91,18 @@ $assigned_stmt->bindParam(':supervisor_id', $_SESSION['user_id']);
 $assigned_stmt->execute();
 $assigned_coordinators = $assigned_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get available coordinators (same department and active)
-$available_query = "SELECT u.id, u.name, u.role, u.department 
+// Get available coordinators (same department — primary or secondary — and active)
+$available_query = "SELECT DISTINCT u.id, u.name, u.role, u.department 
                    FROM users u 
+                   LEFT JOIN teachers t ON t.user_id = u.id
+                   LEFT JOIN teacher_departments td ON td.teacher_id = t.id
                    WHERE u.role IN ('subject_coordinator', 'chairperson', 'grade_level_coordinator') 
-                   AND u.department = :department
-                   AND u.status = 'active' 
-                   ORDER BY u.role, u.name";
+                   AND u.status = 'active'
+                   AND (u.department = :dept1 OR td.department = :dept2)
+                   ORDER BY u.department, u.role, u.name";
 $available_stmt = $db->prepare($available_query);
-$available_stmt->bindParam(':department', $_SESSION['department']);
+$available_stmt->bindParam(':dept1', $_SESSION['department']);
+$available_stmt->bindParam(':dept2', $_SESSION['department']);
 $available_stmt->execute();
 $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
@@ -246,8 +249,7 @@ $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
                                     <option value="">Select Coordinator</option>
                                     <?php foreach($available_coordinators as $coordinator): ?>
                                         <option value="<?php echo $coordinator['id']; ?>">
-                                            <?php echo htmlspecialchars($coordinator['name']); ?> 
-                                            (<?php echo ucfirst(str_replace('_', ' ', $coordinator['role'])); ?> - <?php echo htmlspecialchars($coordinator['department']); ?>)
+                                            <?php echo htmlspecialchars($coordinator['name']); ?>
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
@@ -285,7 +287,6 @@ $available_coordinators = $available_stmt->fetchAll(PDO::FETCH_ASSOC);
                                         <div>
                                             <strong><?php echo htmlspecialchars($assignment['coordinator_name']); ?></strong>
                                             <span class="role-badge"><?php echo ucfirst(str_replace('_', ' ', $assignment['coordinator_role'])); ?></span>
-                                            <small class="text-muted ms-2"><?php echo htmlspecialchars($assignment['department']); ?></small>
                                         </div>
                                         <div>
                                             <a href="assign_teachers.php?evaluator_id=<?php echo $assignment['evaluator_id']; ?>" class="btn btn-sm btn-info me-2">

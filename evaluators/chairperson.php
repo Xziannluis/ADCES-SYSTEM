@@ -201,7 +201,7 @@ try {
                 <div class="dashboard-stat stat-1">
                     <i class="fas fa-chalkboard-teacher"></i>
                     <div class="number"><?php echo $assigned_teachers_count; ?></div>
-                    <div>Assigned Teachers (Program)</div>
+                    <div>Assigned Teachers</div>
                 </div>
                 <div class="dashboard-stat stat-2">
                     <i class="fas fa-clipboard-check"></i>
@@ -214,7 +214,7 @@ try {
                 <div class="col-md-6">
                     <div class="card mb-3">
                         <div class="card-header bg-info text-white">
-                            <h5 class="mb-0"><i class="fas fa-users me-2"></i>My Assigned Teachers (Program)</h5>
+                            <h5 class="mb-0"><i class="fas fa-users me-2"></i>My Assigned Teachers</h5>
                         </div>
                         <div class="card-body">
                             <?php if(!empty($assigned_teachers)): ?>
