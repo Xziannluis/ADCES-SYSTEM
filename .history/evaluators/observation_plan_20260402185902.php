@@ -118,7 +118,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $error_message = "Failed to cancel schedule.";
     }
     $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
-    if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
     if ($success_message) $_SESSION['success'] = $success_message;
     if ($error_message) $_SESSION['error'] = $error_message;
     header("Location: $redirect");
@@ -296,7 +295,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
     // Redirect to avoid resubmission, preserving filters
     $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
-    if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
     if ($success_message) $_SESSION['success'] = $success_message;
     if ($error_message) $_SESSION['error'] = $error_message;
     header("Location: $redirect");
@@ -591,7 +589,7 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
 // Deans/principals see teachers in their department + those they personally evaluated
 // President/VP see teachers in the selected department (all departments available)
 if ($is_leader) {
-    // President/VP: show evaluations in the selected department, or all if no department filter
+    // President/VP: show evaluations they personally made OR all evaluations in the selected department
     if (!empty($raw_department)) {
         $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                          t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
@@ -604,12 +602,13 @@ if ($is_leader) {
                   FROM teachers t
                   JOIN evaluations e ON e.teacher_id = t.id
                   LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-                  WHERE (t.department = :dept1 OR td.department = :dept2 OR t.scheduled_department = :dept3)
+                  WHERE (e.evaluator_id = :evaluator_id OR t.department = :dept1 OR td.department = :dept2 OR t.scheduled_department = :dept3)
                   AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                   AND e.academic_year = :academic_year
                   AND e.semester = :semester
                   ORDER BY t.name ASC";
         $stmt = $db->prepare($query);
+        $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
         $stmt->bindParam(':dept1', $raw_department);
         $stmt->bindParam(':dept2', $raw_department);
         $stmt->bindParam(':dept3', $raw_department);
@@ -805,11 +804,9 @@ if ($is_leader) {
         $leader_opted_teachers[(int)$opt_row['teacher_id']] = true;
     }
 }
-// For dean/principal: use their own name. For president/VP: don't auto-add (they must "Accept as Observer"). For coordinators: look up the dean/principal who supervises them.
-if (in_array($_SESSION['role'], ['dean', 'principal'])) {
+// For dean/principal/president/VP: use their own name. For coordinators: look up the dean/principal who supervises them.
+if (in_array($_SESSION['role'], ['dean', 'principal', 'president', 'vice_president'])) {
     $dean_name = $_SESSION['name'] ?? '';
-} elseif (in_array($_SESSION['role'], ['president', 'vice_president'])) {
-    $dean_name = ''; // President/VP only appear after accepting as observer
 } else {
     $dean_name = '';
     $dean_lookup = $db->prepare("SELECT u.name FROM evaluator_assignments ea JOIN users u ON ea.supervisor_id = u.id WHERE ea.evaluator_id = :eid LIMIT 1");
@@ -914,7 +911,7 @@ foreach ($eval_teachers as $t) {
     if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
         array_unshift($all_observers, $dean_name);
     }
-    // For leaders: always add dean/principal of the teacher's department; coordinators only if assigned
+    // For leaders: also add the dean/principal of the teacher's department
     if ($is_leader) {
         $teacher_dept = $t['teacher_department'] ?? $t['department'] ?? '';
         if (!empty($teacher_dept)) {
@@ -922,11 +919,12 @@ foreach ($eval_teachers as $t) {
             $dept_dean_stmt->execute([':dept' => $teacher_dept]);
             while ($dd_name = $dept_dean_stmt->fetchColumn()) {
                 if (!in_array($dd_name, $all_observers)) {
+                    $all_observers[] = $dd_name;
                 }
             }
         }
     }
-    // If President/VP scheduled this teacher, show them + department dean/principal + assigned coordinators
+    // If President/VP scheduled this teacher, show them + department evaluators
     $sched_by_id = $t['scheduled_by'] ?? null;
     if ($sched_by_id) {
         $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
@@ -934,20 +932,20 @@ foreach ($eval_teachers as $t) {
         $sb_name = $sb_stmt->fetchColumn();
         if ($sb_name) {
             $sched_dept = $t['scheduled_department'] ?? '';
-            if (!in_array($sb_name, $all_observers)) {
-                array_unshift($all_observers, $sb_name);
-            }
+            $dept_observers = [$sb_name];
             if (!empty($sched_dept)) {
-                $dept_obs_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' AND id != :setter_id ORDER BY name");
+                $dept_obs_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator') AND status = 'active' AND id != :setter_id ORDER BY name");
                 $dept_obs_stmt->execute([':dept' => $sched_dept, ':setter_id' => $sched_by_id]);
                 while ($dn = $dept_obs_stmt->fetchColumn()) {
-                    if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
+                    if (!in_array($dn, $dept_observers)) $dept_observers[] = $dn;
                 }
             }
+            // Exclude the teacher themselves
             $teacher_name = $t['name'] ?? '';
-            $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
+            $dept_observers = array_values(array_filter($dept_observers, function($n) use ($teacher_name) {
                 return $n !== $teacher_name;
             }));
+            $all_observers = $dept_observers;
             $observer_map[$tid] = $all_observers;
             continue;
         }
@@ -1023,20 +1021,7 @@ foreach ($scheduled_teachers as $t) {
     if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
         array_unshift($all_observers, $dean_name);
     }
-    // For leaders: always add dean/principal of the teacher's department; coordinators only if assigned
-    if ($is_leader) {
-        $teacher_dept = $t['teacher_department'] ?? '';
-        $sched_dept = $t['scheduled_department'] ?? $teacher_dept;
-        $dept_to_show = !empty($sched_dept) ? $sched_dept : $teacher_dept;
-        if (!empty($dept_to_show)) {
-            $dept_dean_stmt2 = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
-            $dept_dean_stmt2->execute([':dept' => $dept_to_show]);
-            while ($dn = $dept_dean_stmt2->fetchColumn()) {
-                if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
-            }
-        }
-    }
-    // If President/VP scheduled this teacher, show them + department dean/principal + assigned coordinators
+    // If President/VP scheduled this teacher, show them + department evaluators
     $sched_by_id = $t['scheduled_by'] ?? null;
     if ($sched_by_id) {
         $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
@@ -1044,21 +1029,20 @@ foreach ($scheduled_teachers as $t) {
         $sb_name = $sb_stmt->fetchColumn();
         if ($sb_name) {
             $sched_dept = $t['scheduled_department'] ?? '';
-            if (!in_array($sb_name, $all_observers)) {
-                array_unshift($all_observers, $sb_name);
-            }
+            $dept_observers = [$sb_name];
             if (!empty($sched_dept)) {
-                $dept_obs_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' AND id != :setter_id ORDER BY name");
+                $dept_obs_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator') AND status = 'active' AND id != :setter_id ORDER BY name");
                 $dept_obs_stmt->execute([':dept' => $sched_dept, ':setter_id' => $sched_by_id]);
                 while ($dn = $dept_obs_stmt->fetchColumn()) {
-                    if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
+                    if (!in_array($dn, $dept_observers)) $dept_observers[] = $dn;
                 }
             }
+            // Exclude the teacher themselves
             $teacher_name = $t['name'] ?? '';
-            $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
+            $dept_observers = array_values(array_filter($dept_observers, function($n) use ($teacher_name) {
                 return $n !== $teacher_name;
             }));
-            $observer_map[$tid] = $all_observers;
+            $all_observers = $dept_observers;
             $observer_map[$tid] = $all_observers;
             continue;
         }
@@ -1670,12 +1654,11 @@ try {
                                 <tr>
                                     <td>
                                         <?php if ($has_schedule && !$is_done): ?>
-                                            <?php if ($is_leader): ?>
-                                                <?php $is_opted = isset($leader_opted_teachers[$tid]); ?>
-                                                <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $is_opted ? 'You are an observer' : 'Check to join as observer'; ?>">
-                                            <?php else: ?>
-                                                <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
-                                            <?php endif; ?>
+                                            <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
+                                        <?php endif; ?>
+                                        <?php if ($is_leader && $has_schedule && !$is_done): ?>
+                                            <?php $is_opted = isset($leader_opted_teachers[$tid]); ?>
+                                            <input type="checkbox" class="form-check-input observer-opt-check no-print" value="<?php echo (int)$tid; ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:4px;vertical-align:middle;accent-color:green;" title="<?php echo $is_opted ? 'You are an observer' : 'Check to join as observer'; ?>">
                                         <?php endif; ?>
                                         <?php echo $counter++ . '. ' . htmlspecialchars($t['name']); ?>
                                     </td>
@@ -2086,8 +2069,6 @@ function cancelSelectedSchedules() {
     teacherInput.name = 'teacher_ids';
     teacherInput.value = JSON.stringify(ids);
     form.appendChild(teacherInput);
-    // Preserve current query params so the redirect keeps filters
-    form.action = window.location.href;
     document.body.appendChild(form);
     form.submit();
 }

@@ -346,18 +346,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 $schedule_badge_text = 'Schedule required';
                                 $can_evaluate_now = false;
                             }
-
-                            // President/VP can only evaluate teachers they've accepted as observer
-                            $leader_not_accepted = false;
-                            if ($is_leader && !isset($leader_accepted_teachers[(int)$teacher_row['id']])) {
-                                $leader_not_accepted = true;
-                                $can_evaluate_now = false;
-                                if (!$all_done) {
-                                    $schedule_badge_class = 'bg-secondary';
-                                    $schedule_badge_text = 'Accept as observer first';
-                                    $schedule_block_message = 'You must accept as observer in the Observation Plan before you can evaluate this teacher.';
-                                }
-                            }
                         ?>
                         <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'Schedule required for next evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? '', ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
                             <div class="d-flex justify-content-between align-items-center">

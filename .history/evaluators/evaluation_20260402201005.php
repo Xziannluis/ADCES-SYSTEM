@@ -49,20 +49,13 @@ $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
 // plus any teachers assigned to them via teacher_assignments.
 // No role exclusion: deans/principals/coordinators who also teach CAN be evaluated.
 if ($is_leader) {
-    // President/VP see ALL active teachers, but can only evaluate those they've accepted as observer
-    $query = "SELECT DISTINCT t.* FROM teachers t WHERE t.status = 'active' AND (t.user_id IS NULL OR t.user_id != :current_user_id) ORDER BY t.department, t.name ASC";
+    // President/VP see only teachers they've accepted as observer (via teacher_assignments)
+    $query = "SELECT DISTINCT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id WHERE t.status = 'active' AND (t.user_id IS NULL OR t.user_id != :current_user_id) ORDER BY t.department, t.name ASC";
     $stmt = $db->prepare($query);
+    $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $stmt->execute();
     $teachers = $stmt;
-
-    // Build set of teacher IDs the leader has accepted as observer
-    $leader_accepted_teachers = [];
-    $acc_stmt = $db->prepare("SELECT teacher_id FROM teacher_assignments WHERE evaluator_id = :eid");
-    $acc_stmt->execute([':eid' => $_SESSION['user_id']]);
-    while ($acc_row = $acc_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $leader_accepted_teachers[(int)$acc_row['teacher_id']] = true;
-    }
 } elseif (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
     // Coordinators see teachers assigned to them (cross-department through assignments)
     $assignedPrograms = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
@@ -345,18 +338,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 $schedule_badge_class = 'bg-secondary';
                                 $schedule_badge_text = 'Schedule required';
                                 $can_evaluate_now = false;
-                            }
-
-                            // President/VP can only evaluate teachers they've accepted as observer
-                            $leader_not_accepted = false;
-                            if ($is_leader && !isset($leader_accepted_teachers[(int)$teacher_row['id']])) {
-                                $leader_not_accepted = true;
-                                $can_evaluate_now = false;
-                                if (!$all_done) {
-                                    $schedule_badge_class = 'bg-secondary';
-                                    $schedule_badge_text = 'Accept as observer first';
-                                    $schedule_block_message = 'You must accept as observer in the Observation Plan before you can evaluate this teacher.';
-                                }
                             }
                         ?>
                         <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'Schedule required for next evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? '', ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
