@@ -12,7 +12,7 @@ require_once '../includes/program_assignments.php';
 
 $db = (new Database())->getConnection();
 
-// Load form settings from database (fallback for old evaluations without snapshot)
+// Load form settings from database
 $_formSettings = [];
 try {
     $fsStmt = $db->query("SELECT setting_key, setting_value FROM form_settings");
@@ -52,17 +52,6 @@ if (!$eval) {
     exit();
 }
 
-// Use per-evaluation snapshot of form settings if available (so past evaluations are not affected by changes)
-if (!empty($eval['fs_form_code_no'])) {
-    $_fs = [
-        'form_code_no'   => htmlspecialchars($eval['fs_form_code_no']),
-        'issue_status'   => htmlspecialchars($eval['fs_issue_status']),
-        'revision_no'    => htmlspecialchars($eval['fs_revision_no']),
-        'date_effective' => htmlspecialchars($eval['fs_date_effective']),
-        'approved_by'    => htmlspecialchars($eval['fs_approved_by']),
-    ];
-}
-
 // If this is a PEAC evaluation, redirect to the PEAC view page
 if (($eval['evaluation_form_type'] ?? 'iso') === 'peac') {
     header('Location: view_evaluation_peac.php?id=' . $evaluationId);
@@ -95,7 +84,10 @@ if (!$isTeacherBeingEvaluated && in_array($_SESSION['role'] ?? '', ['subject_coo
 
 // Teachers can only view evaluations about themselves
 if (($_SESSION['role'] ?? '') === 'teacher') {
-    if (!$isTeacherBeingEvaluated) {
+    $teacherCheck = $db->prepare("SELECT id FROM teachers WHERE user_id = :uid LIMIT 1");
+    $teacherCheck->execute([':uid' => $_SESSION['user_id']]);
+    $myTeacher = $teacherCheck->fetch(PDO::FETCH_ASSOC);
+    if (!$myTeacher || (int)$eval['teacher_id'] !== (int)$myTeacher['id']) {
         http_response_code(403);
         echo 'Access denied.';
         exit();

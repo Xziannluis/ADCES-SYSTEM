@@ -947,19 +947,20 @@ foreach ($eval_teachers as $t) {
             }
         }
     }
-    // If President/VP scheduled this teacher, show them + owning dept dean/principal
+    // If President/VP scheduled this teacher, show them + department dean/principal + assigned coordinators
     $sched_by_id = $t['scheduled_by'] ?? null;
     if ($sched_by_id) {
         $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
         $sb_stmt->execute([':id' => $sched_by_id]);
         $sb_name = $sb_stmt->fetchColumn();
         if ($sb_name) {
+            $sched_dept = $t['scheduled_department'] ?? '';
             if (!in_array($sb_name, $all_observers)) {
                 array_unshift($all_observers, $sb_name);
             }
-            if (!empty($owning_dept)) {
+            if (!empty($sched_dept)) {
                 $dept_obs_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' AND id != :setter_id ORDER BY name");
-                $dept_obs_stmt->execute([':dept' => $owning_dept, ':setter_id' => $sched_by_id]);
+                $dept_obs_stmt->execute([':dept' => $sched_dept, ':setter_id' => $sched_by_id]);
                 while ($dn = $dept_obs_stmt->fetchColumn()) {
                     if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
                 }
@@ -1098,19 +1099,20 @@ foreach ($scheduled_teachers as $t) {
             if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
         }
     }
-    // If President/VP scheduled this teacher, show them + owning dept dean/principal
+    // If President/VP scheduled this teacher, show them + department dean/principal + assigned coordinators
     $sched_by_id = $t['scheduled_by'] ?? null;
     if ($sched_by_id) {
         $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
         $sb_stmt->execute([':id' => $sched_by_id]);
         $sb_name = $sb_stmt->fetchColumn();
         if ($sb_name) {
+            $sched_dept = $t['scheduled_department'] ?? '';
             if (!in_array($sb_name, $all_observers)) {
                 array_unshift($all_observers, $sb_name);
             }
-            if (!empty($owning_dept)) {
+            if (!empty($sched_dept)) {
                 $dept_obs_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' AND id != :setter_id ORDER BY name");
-                $dept_obs_stmt->execute([':dept' => $owning_dept, ':setter_id' => $sched_by_id]);
+                $dept_obs_stmt->execute([':dept' => $sched_dept, ':setter_id' => $sched_by_id]);
                 while ($dn = $dept_obs_stmt->fetchColumn()) {
                     if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
                 }
@@ -1119,6 +1121,7 @@ foreach ($scheduled_teachers as $t) {
             $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
                 return $n !== $teacher_name;
             }));
+            $observer_map[$tid] = $all_observers;
             $observer_map[$tid] = $all_observers;
             continue;
         }

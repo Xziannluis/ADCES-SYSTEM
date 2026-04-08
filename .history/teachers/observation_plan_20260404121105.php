@@ -132,7 +132,6 @@ if (!empty($_SESSION['error'])) { $error_message = $_SESSION['error']; unset($_S
 $semester = $_GET['semester'] ?? '1st';
 $academic_year = $_GET['academic_year'] ?? '';
 $filter_month = $_GET['month'] ?? '';
-$filter_status = $_GET['status'] ?? '';
 
 if (empty($academic_year)) {
     $month = (int)date('n');
@@ -277,21 +276,6 @@ if (!empty($filter_month)) {
     });
 }
 
-// Filter by status
-if (!empty($filter_status)) {
-    if ($filter_status === 'completed') {
-        $eval_groups = array_filter($eval_groups, function($group) {
-            return true; // all eval_groups are completed
-        });
-        $show_upcoming = false;
-    } elseif ($filter_status === 'upcoming') {
-        $eval_groups = []; // hide completed, only show upcoming
-    } elseif ($filter_status === 'signed') {
-        $eval_groups = []; // hide completed evals
-        if (!isset($signed_map['upcoming'])) $show_upcoming = false; // only show if signed
-    }
-}
-
 // Count unsigned items (only upcoming schedules need signing, not completed evaluations)
 $unsigned_count = 0;
 if ($show_upcoming && !isset($signed_map['upcoming'])) $unsigned_count++;
@@ -427,7 +411,7 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
                                 <option value="2nd" <?php echo $semester === '2nd' ? 'selected' : ''; ?>>2nd Semester</option>
                             </select>
                         </div>
-                        <div class="col-md-2">
+                        <div class="col-md-3">
                             <label class="form-label fw-bold">Month</label>
                             <select name="month" class="form-select">
                                 <option value="">All Months</option>
@@ -436,15 +420,6 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
                                 foreach ($months as $num => $name): ?>
                                 <option value="<?php echo $num; ?>" <?php echo $filter_month == $num ? 'selected' : ''; ?>><?php echo $name; ?></option>
                                 <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label fw-bold">Status</label>
-                            <select name="status" class="form-select">
-                                <option value="" <?php echo $filter_status === '' ? 'selected' : ''; ?>>All Status</option>
-                                <option value="upcoming" <?php echo $filter_status === 'upcoming' ? 'selected' : ''; ?>>Upcoming</option>
-                                <option value="completed" <?php echo $filter_status === 'completed' ? 'selected' : ''; ?>>Completed</option>
-                                <option value="signed" <?php echo $filter_status === 'signed' ? 'selected' : ''; ?>>Signed</option>
                             </select>
                         </div>
                         <div class="col-md-2">
@@ -488,95 +463,48 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
                         </thead>
                         <tbody>
                             <?php
-                                $upcoming_signed = isset($signed_map['upcoming']);
+                                // Build map of which observers have completed their evaluation
+                                $completed_observers = [];
+                                foreach ($evaluations as $ev) {
+                                    $completed_observers[$ev['evaluator_name']] = true;
+                                }
+                                $all_observers_done = (count($completed_observers) >= count($all_observer_names) && count($all_observer_names) > 0);
 
-                                // Render completed evaluation groups (each observation date = one row)
-                                foreach ($eval_groups as $date_key => $group):
-                                    $is_current = ($schedule_date_key === $date_key);
-                                    $first_ev = $group[0];
-
-                                    // Use schedule data if this is the current schedule, else evaluation data
-                                    if ($is_current && $has_matching_schedule) {
-                                        $focus_raw = $teacher_data['evaluation_focus'] ?? '';
-                                        $ts = strtotime($teacher_data['evaluation_schedule']);
-                                        $row_date = date('M d, Y', $ts);
-                                        $row_day_time = date('D', $ts) . '<br>' . date('g:i A', $ts);
-                                        $row_subject_area = $teacher_data['evaluation_subject_area'] ?? '';
-                                        $row_subject = $teacher_data['evaluation_subject'] ?? '';
-                                        $row_room = $teacher_data['evaluation_room'] ?? '';
-                                        $row_semester_display = ($teacher_data['evaluation_semester'] ?? '') . ' Semester';
-                                        $row_observers = $all_observer_names;
-                                    } else {
-                                        $focus_raw = $first_ev['evaluation_focus'] ?? '';
-                                        $row_date = !empty($first_ev['observation_date']) ? date('M d, Y', strtotime($first_ev['observation_date'])) : '';
-                                        $row_day_time = !empty($first_ev['observation_date']) ? date('D', strtotime($first_ev['observation_date'])) : '';
-                                        $row_subject_area = $first_ev['subject_area'] ?? '';
-                                        $row_subject = $first_ev['subject_observed'] ?? '';
-                                        $row_room = $first_ev['observation_room'] ?? '';
-                                        $row_semester_display = ($first_ev['semester'] ?? '') . ' Semester';
-                                        $row_observers = array_values(array_unique(array_column($group, 'evaluator_name')));
-                                    }
-
+                                // Determine data source: use schedule if available, else first evaluation
+                                $use_schedule_data = $has_matching_schedule;
+                                if ($use_schedule_data) {
+                                    $focus_raw = $teacher_data['evaluation_focus'] ?? '';
                                     $focus_arr = [];
                                     if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
                                     $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
-
-                                    // Status for this group
-                                    $completed_evaluators = array_unique(array_column($group, 'evaluator_name'));
-                                    if ($is_current) {
-                                        $all_done = count($completed_evaluators) >= count($all_observer_names) && count($all_observer_names) > 0;
-                                        if ($all_done) {
-                                            $status_badge = '<span class="badge bg-success">Completed</span>';
-                                        } elseif (count($completed_evaluators) > 0) {
-                                            $status_badge = '<span class="badge bg-info">In Progress</span>';
-                                        } else {
-                                            $status_badge = '<span class="badge bg-info">Upcoming</span>';
-                                        }
-                                    } else {
-                                        $status_badge = '<span class="badge bg-success">Completed</span>';
-                                    }
+                                    $ts = strtotime($teacher_data['evaluation_schedule']);
+                                    $row_date = date('M d, Y', $ts);
+                                    $row_day_time = date('D', $ts) . '<br>' . date('g:i A', $ts);
+                                    $row_subject_area = $teacher_data['evaluation_subject_area'] ?? '';
+                                    $row_subject = $teacher_data['evaluation_subject'] ?? '';
+                                    $row_room = $teacher_data['evaluation_room'] ?? '';
+                                    $row_semester_display = ($teacher_data['evaluation_semester'] ?? '') . ' Semester';
+                                } else {
+                                    $first_ev = $evaluations[0];
+                                    $focus_raw = $first_ev['evaluation_focus'] ?? '';
+                                    $focus_arr = [];
+                                    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
+                                    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
+                                    $row_date = !empty($first_ev['observation_date']) ? date('M d, Y', strtotime($first_ev['observation_date'])) : '';
+                                    $row_day_time = !empty($first_ev['observation_date']) ? date('D', strtotime($first_ev['observation_date'])) : '';
+                                    $row_subject_area = $first_ev['subject_area'] ?? '';
+                                    $row_subject = $first_ev['subject_observed'] ?? '';
+                                    $row_room = $first_ev['observation_room'] ?? '';
+                                    $row_semester_display = ($first_ev['semester'] ?? '') . ' Semester';
+                                }
+                                $upcoming_signed = isset($signed_map['upcoming']);
                             ?>
                             <tr>
                                 <td class="text-center">
-                                    <i class="fas fa-check-circle text-success" title="Evaluation completed"></i>
-                                </td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_semester_display); ?></td>
-                                <td style="font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_date); ?></td>
-                                <td class="text-center"><?php echo $row_day_time; ?></td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_subject_area); ?></td>
-                                <td><?php echo htmlspecialchars($row_subject); ?></td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_room); ?></td>
-                                <td style="font-size:0.85rem;">
-                                    <?php foreach ($row_observers as $i => $obs_name): ?>
-                                        <?php echo htmlspecialchars($obs_name); ?>
-                                        <?php if ($i < count($row_observers) - 1): ?><br><?php endif; ?>
-                                    <?php endforeach; ?>
-                                </td>
-                                <td class="text-center"><?php echo $status_badge; ?></td>
-                            </tr>
-                            <?php endforeach; ?>
-
-                            <?php if ($show_upcoming): ?>
-                            <?php
-                                $focus_raw = $teacher_data['evaluation_focus'] ?? '';
-                                $focus_arr = [];
-                                if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-                                $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
-                                $ts = strtotime($teacher_data['evaluation_schedule']);
-                                $row_date = date('M d, Y', $ts);
-                                $row_day_time = date('D', $ts) . '<br>' . date('g:i A', $ts);
-                                $row_subject_area = $teacher_data['evaluation_subject_area'] ?? '';
-                                $row_subject = $teacher_data['evaluation_subject'] ?? '';
-                                $row_room = $teacher_data['evaluation_room'] ?? '';
-                                $row_semester_display = ($teacher_data['evaluation_semester'] ?? '') . ' Semester';
-                            ?>
-                            <tr>
-                                <td class="text-center">
-                                    <?php if (!$upcoming_signed): ?>
+                                    <?php if ($show_upcoming && !$upcoming_signed && count($completed_observers) === 0): ?>
                                         <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" style="width:20px;height:20px;">
                                     <?php else: ?>
-                                        <i class="fas fa-check-circle text-success" title="Signed on <?php echo date('M d, Y g:i A', strtotime($signed_map['upcoming']['acknowledged_at'])); ?>"></i>
+                                        <i class="fas fa-check-circle text-success" title="<?php echo $upcoming_signed ? 'Signed on ' . date('M d, Y g:i A', strtotime($signed_map['upcoming']['acknowledged_at'])) : 'Evaluation in progress'; ?>"></i>
                                     <?php endif; ?>
                                 </td>
                                 <td class="text-center"><?php echo htmlspecialchars($row_semester_display); ?></td>
@@ -593,14 +521,17 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
                                     <?php endforeach; ?>
                                 </td>
                                 <td class="text-center">
-                                    <?php if ($upcoming_signed): ?>
+                                    <?php if ($all_observers_done): ?>
+                                        <span class="badge bg-success">Completed</span>
+                                    <?php elseif (count($completed_observers) > 0): ?>
+                                        <span class="badge bg-info">In Progress</span>
+                                    <?php elseif ($upcoming_signed): ?>
                                         <span class="badge bg-success">Signed</span>
                                     <?php else: ?>
                                         <span class="badge bg-info">Upcoming</span>
                                     <?php endif; ?>
                                 </td>
                             </tr>
-                            <?php endif; ?>
                         </tbody>
                     </table>
                 </div>

@@ -69,7 +69,10 @@ if (!$isTeacherBeingEvaluated && in_array($_SESSION['role'] ?? '', ['subject_coo
 
 // Teachers can only view evaluations about themselves
 if (($_SESSION['role'] ?? '') === 'teacher') {
-    if (!$isTeacherBeingEvaluated) {
+    $teacherCheck = $db->prepare("SELECT id FROM teachers WHERE user_id = :uid LIMIT 1");
+    $teacherCheck->execute([':uid' => $_SESSION['user_id']]);
+    $myTeacher = $teacherCheck->fetch(PDO::FETCH_ASSOC);
+    if (!$myTeacher || (int)$eval['teacher_id'] !== (int)$myTeacher['id']) {
         http_response_code(403);
         echo 'Access denied.';
         exit();

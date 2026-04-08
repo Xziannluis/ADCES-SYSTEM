@@ -884,82 +884,69 @@ foreach ($eval_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', strtotime($obs_date));
     }
 
-    // Get observers — based on the department that owns this schedule/evaluation
-    // Determine the "owning" department: scheduled_department > evaluator's dept > teacher's primary dept
-    $sched_dept_val = $t['scheduled_department'] ?? '';
-    $teacher_primary_dept = $t['teacher_department'] ?? '';
-    $is_secondary_dept = !empty($raw_department) && $teacher_primary_dept !== $raw_department;
-
-    // For leaders: find which department this evaluation belongs to
+    // Get observers
     if ($is_leader) {
-        // Determine owning dept: use scheduled_department if set, otherwise detect from evaluator's department
-        $owning_dept = '';
-        if (!empty($sched_dept_val)) {
-            $owning_dept = $sched_dept_val;
-        } else {
-            // Check the evaluator's department from the evaluation record
-            $eval_dept_stmt = $db->prepare("SELECT DISTINCT u.department FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem AND u.department IS NOT NULL LIMIT 1");
-            $eval_dept_stmt->execute([':tid' => $tid, ':ay' => $academic_year, ':sem' => $semester]);
-            $owning_dept = $eval_dept_stmt->fetchColumn() ?: $teacher_primary_dept;
-        }
-        if (empty($owning_dept)) $owning_dept = $teacher_primary_dept;
-
-        // Show evaluators from the owning department
+        // Leaders see all evaluators who have evaluated this teacher
         $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester ORDER BY u.name";
         $obs_stmt = $db->prepare($obs_query);
         $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester]);
         $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
-
-        // Show assigned coordinators from the owning department only
-        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
-        $assign_stmt = $db->prepare($assign_query);
-        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $owning_dept]);
-        $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     } else {
         $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
         $obs_stmt = $db->prepare($obs_query);
         $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
         $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
-
-        if ($is_secondary_dept) {
-            $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
-            $assign_stmt = $db->prepare($assign_query);
-            $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
-        } else {
-            $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
-            $assign_stmt = $db->prepare($assign_query);
-            $assign_stmt->execute([':teacher_id' => $tid]);
-        }
-        $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     }
+
+    // If teacher is from a different primary department (secondary dept view), only include observers from current department
+    $is_secondary_dept = !empty($raw_department) && ($t['teacher_department'] ?? '') !== $raw_department;
+    if ($is_secondary_dept) {
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
+    } else {
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid]);
+    }
+    $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
 
     $all_observers = array_unique(array_merge($observers, $assigned));
     if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
         array_unshift($all_observers, $dean_name);
     }
-    // For leaders: add dean/principal of the owning department
-    if ($is_leader && !empty($owning_dept)) {
-        $dept_dean_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
-        $dept_dean_stmt->execute([':dept' => $owning_dept]);
-        while ($dd_name = $dept_dean_stmt->fetchColumn()) {
-            if (!in_array($dd_name, $all_observers)) {
-                $all_observers[] = $dd_name;
+    // For leaders: always add dean/principal of the teacher's department; coordinators only if assigned
+    if ($is_leader) {
+        $teacher_dept = $t['teacher_department'] ?? $t['department'] ?? '';
+        // If filtering by a specific department and teacher's primary dept differs, use filtered dept
+        $leader_dean_dept = $teacher_dept;
+        if (!empty($raw_department) && $raw_department !== $teacher_dept) {
+            $leader_dean_dept = $raw_department;
+        }
+        if (!empty($leader_dean_dept)) {
+            $dept_dean_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
+            $dept_dean_stmt->execute([':dept' => $leader_dean_dept]);
+            while ($dd_name = $dept_dean_stmt->fetchColumn()) {
+                if (!in_array($dd_name, $all_observers)) {
+                    $all_observers[] = $dd_name;
+                }
             }
         }
     }
-    // If President/VP scheduled this teacher, show them + owning dept dean/principal
+    // If President/VP scheduled this teacher, show them + department dean/principal + assigned coordinators
     $sched_by_id = $t['scheduled_by'] ?? null;
     if ($sched_by_id) {
         $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
         $sb_stmt->execute([':id' => $sched_by_id]);
         $sb_name = $sb_stmt->fetchColumn();
         if ($sb_name) {
+            $sched_dept = $t['scheduled_department'] ?? '';
             if (!in_array($sb_name, $all_observers)) {
                 array_unshift($all_observers, $sb_name);
             }
-            if (!empty($owning_dept)) {
+            if (!empty($sched_dept)) {
                 $dept_obs_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' AND id != :setter_id ORDER BY name");
-                $dept_obs_stmt->execute([':dept' => $owning_dept, ':setter_id' => $sched_by_id]);
+                $dept_obs_stmt->execute([':dept' => $sched_dept, ':setter_id' => $sched_by_id]);
                 while ($dn = $dept_obs_stmt->fetchColumn()) {
                     if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
                 }
@@ -1061,22 +1048,9 @@ foreach ($scheduled_teachers as $t) {
         $schedule_data[$tid]['day_time'] = date('D', $ts) . "\n" . date('g:ia', $ts);
     }
 
-    // Observers: use owning department (the dept that set the schedule)
-    // For scheduled teachers: scheduled_department -> teacher's primary department
-    $owning_dept = $t['scheduled_department'] ?? ($t['teacher_department'] ?? '');
+    // If teacher is from a different primary department (secondary dept view), only include observers from current department
     $is_secondary_dept = !empty($raw_department) && ($t['teacher_department'] ?? '') !== $raw_department;
-    if ($is_leader) {
-        // For leaders: show assigned coordinators from the owning department
-        if (!empty($owning_dept)) {
-            $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
-            $assign_stmt = $db->prepare($assign_query);
-            $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $owning_dept]);
-        } else {
-            $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
-            $assign_stmt = $db->prepare($assign_query);
-            $assign_stmt->execute([':teacher_id' => $tid]);
-        }
-    } elseif ($is_secondary_dept) {
+    if ($is_secondary_dept) {
         $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
         $assign_stmt = $db->prepare($assign_query);
         $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
@@ -1090,27 +1064,33 @@ foreach ($scheduled_teachers as $t) {
     if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
         array_unshift($all_observers, $dean_name);
     }
-    // For leaders: add dean/principal of the owning department
-    if ($is_leader && !empty($owning_dept)) {
-        $dept_dean_stmt2 = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
-        $dept_dean_stmt2->execute([':dept' => $owning_dept]);
-        while ($dn = $dept_dean_stmt2->fetchColumn()) {
-            if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
+    // For leaders: always add dean/principal of the teacher's department; coordinators only if assigned
+    if ($is_leader) {
+        $teacher_dept = $t['teacher_department'] ?? '';
+        $sched_dept = $t['scheduled_department'] ?? $teacher_dept;
+        $dept_to_show = !empty($sched_dept) ? $sched_dept : $teacher_dept;
+        if (!empty($dept_to_show)) {
+            $dept_dean_stmt2 = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
+            $dept_dean_stmt2->execute([':dept' => $dept_to_show]);
+            while ($dn = $dept_dean_stmt2->fetchColumn()) {
+                if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
+            }
         }
     }
-    // If President/VP scheduled this teacher, show them + owning dept dean/principal
+    // If President/VP scheduled this teacher, show them + department dean/principal + assigned coordinators
     $sched_by_id = $t['scheduled_by'] ?? null;
     if ($sched_by_id) {
         $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
         $sb_stmt->execute([':id' => $sched_by_id]);
         $sb_name = $sb_stmt->fetchColumn();
         if ($sb_name) {
+            $sched_dept = $t['scheduled_department'] ?? '';
             if (!in_array($sb_name, $all_observers)) {
                 array_unshift($all_observers, $sb_name);
             }
-            if (!empty($owning_dept)) {
+            if (!empty($sched_dept)) {
                 $dept_obs_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' AND id != :setter_id ORDER BY name");
-                $dept_obs_stmt->execute([':dept' => $owning_dept, ':setter_id' => $sched_by_id]);
+                $dept_obs_stmt->execute([':dept' => $sched_dept, ':setter_id' => $sched_by_id]);
                 while ($dn = $dept_obs_stmt->fetchColumn()) {
                     if (!in_array($dn, $all_observers)) $all_observers[] = $dn;
                 }
@@ -1119,6 +1099,7 @@ foreach ($scheduled_teachers as $t) {
             $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
                 return $n !== $teacher_name;
             }));
+            $observer_map[$tid] = $all_observers;
             $observer_map[$tid] = $all_observers;
             continue;
         }

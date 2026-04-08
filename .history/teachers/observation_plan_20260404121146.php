@@ -132,7 +132,6 @@ if (!empty($_SESSION['error'])) { $error_message = $_SESSION['error']; unset($_S
 $semester = $_GET['semester'] ?? '1st';
 $academic_year = $_GET['academic_year'] ?? '';
 $filter_month = $_GET['month'] ?? '';
-$filter_status = $_GET['status'] ?? '';
 
 if (empty($academic_year)) {
     $month = (int)date('n');
@@ -277,21 +276,6 @@ if (!empty($filter_month)) {
     });
 }
 
-// Filter by status
-if (!empty($filter_status)) {
-    if ($filter_status === 'completed') {
-        $eval_groups = array_filter($eval_groups, function($group) {
-            return true; // all eval_groups are completed
-        });
-        $show_upcoming = false;
-    } elseif ($filter_status === 'upcoming') {
-        $eval_groups = []; // hide completed, only show upcoming
-    } elseif ($filter_status === 'signed') {
-        $eval_groups = []; // hide completed evals
-        if (!isset($signed_map['upcoming'])) $show_upcoming = false; // only show if signed
-    }
-}
-
 // Count unsigned items (only upcoming schedules need signing, not completed evaluations)
 $unsigned_count = 0;
 if ($show_upcoming && !isset($signed_map['upcoming'])) $unsigned_count++;
@@ -427,7 +411,7 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
                                 <option value="2nd" <?php echo $semester === '2nd' ? 'selected' : ''; ?>>2nd Semester</option>
                             </select>
                         </div>
-                        <div class="col-md-2">
+                        <div class="col-md-3">
                             <label class="form-label fw-bold">Month</label>
                             <select name="month" class="form-select">
                                 <option value="">All Months</option>
@@ -436,15 +420,6 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
                                 foreach ($months as $num => $name): ?>
                                 <option value="<?php echo $num; ?>" <?php echo $filter_month == $num ? 'selected' : ''; ?>><?php echo $name; ?></option>
                                 <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="col-md-2">
-                            <label class="form-label fw-bold">Status</label>
-                            <select name="status" class="form-select">
-                                <option value="" <?php echo $filter_status === '' ? 'selected' : ''; ?>>All Status</option>
-                                <option value="upcoming" <?php echo $filter_status === 'upcoming' ? 'selected' : ''; ?>>Upcoming</option>
-                                <option value="completed" <?php echo $filter_status === 'completed' ? 'selected' : ''; ?>>Completed</option>
-                                <option value="signed" <?php echo $filter_status === 'signed' ? 'selected' : ''; ?>>Signed</option>
                             </select>
                         </div>
                         <div class="col-md-2">

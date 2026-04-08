@@ -12,7 +12,7 @@ require_once '../includes/program_assignments.php';
 
 $db = (new Database())->getConnection();
 
-// Load form settings from database (fallback for old evaluations without snapshot)
+// Load form settings from database
 $_formSettings = [];
 try {
     $fsStmt = $db->query("SELECT setting_key, setting_value FROM form_settings");
@@ -50,17 +50,6 @@ if (!$eval) {
     http_response_code(404);
     echo 'Evaluation not found.';
     exit();
-}
-
-// Use per-evaluation snapshot of form settings if available (so past evaluations are not affected by changes)
-if (!empty($eval['fs_form_code_no'])) {
-    $_fs = [
-        'form_code_no'   => htmlspecialchars($eval['fs_form_code_no']),
-        'issue_status'   => htmlspecialchars($eval['fs_issue_status']),
-        'revision_no'    => htmlspecialchars($eval['fs_revision_no']),
-        'date_effective' => htmlspecialchars($eval['fs_date_effective']),
-        'approved_by'    => htmlspecialchars($eval['fs_approved_by']),
-    ];
 }
 
 // If this is a PEAC evaluation, redirect to the PEAC view page
