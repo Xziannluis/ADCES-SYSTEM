@@ -388,8 +388,6 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                                                 <div class="coordinator-row">
                                                 <div class="coordinator-main">
                                                     <strong><?php echo htmlspecialchars($coord['name']); ?></strong>
-                                                    <span class="text-muted ms-2"><?php echo ucfirst(str_replace('_',' ',$coord['role'])); ?></span>
-                                                    <div class="text-muted small"><?php echo htmlspecialchars($coord['department']); ?></div>
                                                 </div>
                                                 <div class="btn-group coordinator-actions">
                                                     <a href="assign_teachers.php?evaluator_id=<?php echo $coord['id']; ?>" class="btn btn-sm btn-outline-info">View Teachers</a>

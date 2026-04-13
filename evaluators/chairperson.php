@@ -223,15 +223,6 @@ try {
                                         <li class="list-group-item d-flex justify-content-between align-items-center">
                                             <div>
                                                 <strong><?php echo htmlspecialchars($assignment['name']); ?></strong>
-                                                <div class="text-muted small">
-                                                    <?php echo htmlspecialchars($assignment['department']); ?>
-                                                    <?php if(!empty($assignment['subject'])): ?>
-                                                        • <?php echo htmlspecialchars($assignment['subject']); ?>
-                                                    <?php endif; ?>
-                                                    <?php if(!empty($assignment['grade_level'])): ?>
-                                                        • Grade <?php echo htmlspecialchars($assignment['grade_level']); ?>
-                                                    <?php endif; ?>
-                                                </div>
                                             </div>
                                             <a href="evaluation.php" class="btn btn-sm btn-outline-primary">Evaluate</a>
                                         </li>

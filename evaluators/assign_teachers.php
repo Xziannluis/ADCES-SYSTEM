@@ -583,7 +583,6 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                     <li class="teacher-item">
                                         <div>
                                             <strong><?php echo htmlspecialchars($assignment['teacher_name']); ?></strong>
-                                            <small class="text-muted ms-2"><?php echo htmlspecialchars($assignment['department']); ?></small>
                                         </div>
                                         <?php if(in_array($_SESSION['role'], ['dean', 'principal'])): ?>
                                         <form method="POST" style="display: inline;">
