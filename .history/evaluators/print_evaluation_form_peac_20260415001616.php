@@ -1,7 +1,7 @@
 <?php
 require_once '../auth/session-check.php';
 
-if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president', 'teacher'])) {
+if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'])) {
     header('Location: ../login.php');
     exit();
 }
@@ -181,10 +181,12 @@ $autoPrint = !empty($_GET['auto_print']);
         .sig-section .sig-title { font-weight: 700; font-size: 11px; margin: 8px 0 2px; }
         .sig-section .cert-text { margin: 0 0 8px; font-size: 10px; }
         .sig-row { display: flex; gap: 40px; margin-bottom: 6px; }
-        .sig-col { flex: 1; }
-        .sig-img { height: 50px; display: flex; align-items: flex-end; justify-content: center; }
+        .sig-col { flex: 1; position: relative; }
+        .sig-name-container { position: relative; height: 50px; display: flex; align-items: center; justify-content: center; }
+        .sig-name-container .sig-name { font-weight: 700; font-size: 10.5px; position: relative; z-index: 1; }
+        .sig-img { position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 2; }
         .sig-img img { max-height: 46px; max-width: 100%; object-fit: contain; }
-        .sig-name-line { border-top: 1px solid #000; text-align: center; padding-top: 2px; font-weight: 700; font-size: 10.5px; }
+        .sig-line { border-top: 1px solid #000; margin-bottom: 2px; }
         .sig-caption { text-align: center; font-size: 8.5px; color: #333; }
 
         /* Footer */
@@ -316,6 +318,7 @@ foreach ($sections as $section):
     </tr>
     <?php endforeach; ?>
 </table>
+<div class="avg-row-inline">Average:<span class="avg-line"><?php echo number_format($section['avg'], 1); ?></span></div>
 <?php endforeach; ?>
 
 <!-- Computation Formula -->
@@ -402,17 +405,20 @@ $avgComputed = $totalIndicators > 0 ? round($totalSum / $totalIndicators, 2) : 0
     ?>
     <div class="sig-row">
         <div class="sig-col">
-            <div class="sig-img">
-                <?php if ($raterSig !== '' && strpos($raterSig, 'data:image/') === 0): ?>
-                    <img src="<?php echo h($raterSig); ?>" alt="Rater signature" />
-                <?php endif; ?>
+            <div class="sig-name-container">
+                <div class="sig-name"><?php echo h($raterPrinted); ?></div>
+                <div class="sig-img">
+                    <?php if ($raterSig !== '' && strpos($raterSig, 'data:image/') === 0): ?>
+                        <img src="<?php echo h($raterSig); ?>" alt="Rater signature" />
+                    <?php endif; ?>
+                </div>
             </div>
-            <div class="sig-name-line"><?php echo h($raterPrinted); ?></div>
+            <div class="sig-line"></div>
             <div class="sig-caption">Signature over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
-            <div class="sig-name-line"></div>
+            <div style="height: 50px; display: flex; align-items: center; justify-content: center; font-weight: 600;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
+            <div class="sig-line"></div>
             <div class="sig-caption">Date</div>
         </div>
     </div>
@@ -426,16 +432,19 @@ $avgComputed = $totalIndicators > 0 ? round($totalSum / $totalIndicators, 2) : 0
     ?>
     <div class="sig-row">
         <div class="sig-col">
-            <div class="sig-img">
-                <?php if ($facultySig !== '' && strpos($facultySig, 'data:image/') === 0): ?>
-                    <img src="<?php echo h($facultySig); ?>" alt="Faculty signature" />
-                <?php endif; ?>
+            <div class="sig-name-container">
+                <div class="sig-name"><?php echo h($facultyPrinted); ?></div>
+                <div class="sig-img">
+                    <?php if ($facultySig !== '' && strpos($facultySig, 'data:image/') === 0): ?>
+                        <img src="<?php echo h($facultySig); ?>" alt="Faculty signature" />
+                    <?php endif; ?>
+                </div>
             </div>
-            <div class="sig-name-line"><?php echo h($facultyPrinted); ?></div>
+            <div class="sig-line"></div>
             <div class="sig-caption">Signature of Faculty over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
+            <div style="height: 20px; text-align: center; font-weight: 600;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
             <div class="sig-name-line"></div>
             <div class="sig-caption">Date</div>
         </div>

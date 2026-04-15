@@ -1,6 +1,10 @@
 <?php
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 require_once '../auth/session-check.php';
 
+// Allow evaluators and teachers to view print forms
 if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president', 'teacher'])) {
     header('Location: ../login.php');
     exit();
@@ -172,14 +176,18 @@ $autoPrint = !empty($_GET['auto_print']);
         .eval-table td.rating-cell { text-align: center; width: 22px; }
         .eval-table td.comments-cell { width: 16%; font-size: 9px; }
         .eval-table .cat-header td { font-weight: 700; background: #f5f5f5; }
-        .avg-row td { border: 1px solid #000; padding: 3px 6px; font-weight: 700; font-size: 10px; text-align: right; }
-        .avg-line { display: inline-block; width: 60px; border-bottom: 1px solid #000; text-align: center; margin-left: 6px; }
+        .avg-row { text-align: left; font-weight: 700; font-size: 10px; margin: 4px 0 8px; }
+        /* Boxed average for each domain */
+        .avg-box { display: inline-flex; align-items: center; gap: 10px; border: 1px solid #000; padding: 6px 10px; min-width: 160px; background: #fff; }
+        .avg-box .avg-label { font-weight: 700; }
+        .avg-box .avg-value { font-weight: 700; min-width: 40px; text-align: center; }
 
-        /* Total average row in table */
-        .total-avg-table { width: 100%; border-collapse: collapse; margin: 4px 0; }
-        .total-avg-table tr { border: 1.5px solid #000; }
-        .total-avg-table td { border: none; padding: 6px 10px; font-weight: 700; font-size: 10px; text-align: left; }
-        .total-avg-table .avg-line { display: inline-block; width: 80px; border-bottom: 1px solid #000; text-align: center; margin-left: 8px; }
+        /* Total average + interpretation */
+        /* Full-width box row for Total Average */
+        .total-avg-row { margin: 8px 0; }
+        .total-avg-box { border: 2px solid #000; padding: 8px; box-sizing: border-box; width: 100%; display:flex; align-items:center; justify-content:flex-start; gap:12px; background:#fff; }
+        .total-avg-box .total-label { font-weight: 700; font-size: 12px; }
+        .total-avg-box .total-value { border: 1px solid #000; padding: 6px 12px; font-weight:700; min-width:44px; text-align:center; }
         .interpretation-box { font-size: 9.5px; margin-bottom: 4px; }
         .interpretation-box table td { padding: 0 6px; }
         .interpretation-box td:first-child { font-weight: 600; white-space: nowrap; }
@@ -196,10 +204,12 @@ $autoPrint = !empty($_GET['auto_print']);
         .sig-section h6 { font-size: 11px; font-weight: 700; margin: 0 0 2px; }
         .sig-section p.cert { margin: 0 0 6px; font-size: 9px; font-style: italic; }
         .sig-row { display: flex; gap: 30px; margin-bottom: 4px; }
-        .sig-col { flex: 1; }
-        .sig-img { height: 50px; display: flex; align-items: flex-end; justify-content: center; }
+        .sig-col { flex: 1; position: relative; }
+        .sig-name-container { position: relative; height: 50px; display: flex; align-items: center; justify-content: center; }
+        .sig-name-container .sig-name { font-weight: 600; font-size: 10px; position: relative; z-index: 1; }
+        .sig-img { position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 2; }
         .sig-img img { max-height: 46px; max-width: 100%; object-fit: contain; }
-        .sig-line { border-top: 1px solid #000; text-align: center; padding-top: 2px; font-weight: 600; font-size: 10px; }
+        .sig-line { border-top: 1px solid #000; margin-bottom: 2px; }
         .sig-caption { text-align: center; font-size: 8.5px; color: #444; }
         .sig-date-row { display: flex; gap: 30px; margin-top: 2px; }
         .sig-date-col { flex: 1; font-size: 10px; }
@@ -372,18 +382,19 @@ foreach ($domains as $domain):
         <td class="comments-cell"><?php echo h($comment); ?></td>
     </tr>
     <?php endforeach; ?>
-    <tr class="avg-row">
-        <td colspan="7">Average:<span class="avg-line"><?php echo number_format($domain['avg'], 1); ?></span></td>
-    </tr>
 </table>
+<div class="avg-row"><span class="avg-box"><span class="avg-label">Average:</span> <span class="avg-line"><?php echo number_format($domain['avg'], 1); ?></span></span></div>
 <?php endforeach; ?>
 
 <!-- Total Average + Interpretation -->
-<table class="total-avg-table">
-    <tr>
-        <td style="padding: 6px 10px; text-align: left;">Total Average:<span class="avg-line"><?php echo number_format($overallAvg, 1); ?></span></td>
-    </tr>
-</table>
+<div class="total-avg-row">
+    <div class="total-avg-box">
+        <div style="display:flex; align-items:center;">
+            <div class="total-label">Total Average:</div>
+            <div class="total-value"><?php echo number_format($overallAvg, 1); ?></div>
+        </div>
+    </div>
+</div>
 <div style="font-weight: 700; font-size: 10px; margin: 2px 0 4px; padding-left: 20px;">Interpretation: <?php echo h($interpretationText); ?></div>
 <div class="interpretation-box">
     <strong>Interpretation of Over-all Rating</strong>
@@ -433,16 +444,19 @@ foreach ($domains as $domain):
     ?>
     <div class="sig-row">
         <div class="sig-col">
-            <div class="sig-img">
-                <?php if ($raterSig !== '' && strpos($raterSig, 'data:image/') === 0): ?>
-                    <img src="<?php echo h($raterSig); ?>" alt="Rater signature" />
-                <?php endif; ?>
+            <div class="sig-name-container">
+                <div class="sig-name"><?php echo h($raterPrinted ?: ''); ?></div>
+                <div class="sig-img">
+                    <?php if ($raterSig !== '' && strpos($raterSig, 'data:image/') === 0): ?>
+                        <img src="<?php echo h($raterSig); ?>" alt="Rater signature" />
+                    <?php endif; ?>
+                </div>
             </div>
-            <div class="sig-line"><?php echo h($raterPrinted ?: ''); ?></div>
+            <div class="sig-line"></div>
             <div class="sig-caption">Signature over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
+            <div style="height: 50px; display: flex; align-items: center; justify-content: center; font-weight: 600;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
             <div class="sig-line"></div>
             <div class="sig-caption">Date</div>
         </div>
@@ -457,16 +471,19 @@ foreach ($domains as $domain):
     ?>
     <div class="sig-row">
         <div class="sig-col">
-            <div class="sig-img">
-                <?php if ($facultySig !== '' && strpos($facultySig, 'data:image/') === 0): ?>
-                    <img src="<?php echo h($facultySig); ?>" alt="Faculty signature" />
-                <?php endif; ?>
+            <div class="sig-name-container">
+                <div class="sig-name"><?php echo h($facultyPrinted ?: ''); ?></div>
+                <div class="sig-img">
+                    <?php if ($facultySig !== '' && strpos($facultySig, 'data:image/') === 0): ?>
+                        <img src="<?php echo h($facultySig); ?>" alt="Faculty signature" />
+                    <?php endif; ?>
+                </div>
             </div>
-            <div class="sig-line"><?php echo h($facultyPrinted ?: ''); ?></div>
+            <div class="sig-line"></div>
             <div class="sig-caption">Signature of Faculty over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
+            <div style="height: 50px; display: flex; align-items: center; justify-content: center; font-weight: 600;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
             <div class="sig-line"></div>
             <div class="sig-caption">Date</div>
         </div>

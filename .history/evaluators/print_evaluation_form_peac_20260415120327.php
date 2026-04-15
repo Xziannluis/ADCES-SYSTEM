@@ -316,6 +316,7 @@ foreach ($sections as $section):
     </tr>
     <?php endforeach; ?>
 </table>
+<div class="avg-row-inline">Average:<span class="avg-line"><?php echo number_format($section['avg'], 1); ?></span></div>
 <?php endforeach; ?>
 
 <!-- Computation Formula -->

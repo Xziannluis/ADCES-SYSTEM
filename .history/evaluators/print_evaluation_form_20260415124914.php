@@ -172,14 +172,13 @@ $autoPrint = !empty($_GET['auto_print']);
         .eval-table td.rating-cell { text-align: center; width: 22px; }
         .eval-table td.comments-cell { width: 16%; font-size: 9px; }
         .eval-table .cat-header td { font-weight: 700; background: #f5f5f5; }
-        .avg-row td { border: 1px solid #000; padding: 3px 6px; font-weight: 700; font-size: 10px; text-align: right; }
-        .avg-line { display: inline-block; width: 60px; border-bottom: 1px solid #000; text-align: center; margin-left: 6px; }
+        .avg-row td { border: 1px solid #000; padding: 3px 6px; font-weight: 700; font-size: 10px; text-align: center; }
+        .avg-line { display: inline-block; width: 80px; border-bottom: 1px solid #000; text-align: center; }
 
         /* Total average row in table */
         .total-avg-table { width: 100%; border-collapse: collapse; margin: 4px 0; }
-        .total-avg-table tr { border: 1.5px solid #000; }
-        .total-avg-table td { border: none; padding: 6px 10px; font-weight: 700; font-size: 10px; text-align: left; }
-        .total-avg-table .avg-line { display: inline-block; width: 80px; border-bottom: 1px solid #000; text-align: center; margin-left: 8px; }
+        .total-avg-table td { border: 1px solid #000; padding: 4px 8px; font-weight: 700; font-size: 10px; }
+        .total-avg-table .avg-line { display: inline-block; width: 100px; border-bottom: 1px solid #000; text-align: center; margin-left: 10px; }
         .interpretation-box { font-size: 9.5px; margin-bottom: 4px; }
         .interpretation-box table td { padding: 0 6px; }
         .interpretation-box td:first-child { font-weight: 600; white-space: nowrap; }

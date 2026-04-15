@@ -172,14 +172,13 @@ $autoPrint = !empty($_GET['auto_print']);
         .eval-table td.rating-cell { text-align: center; width: 22px; }
         .eval-table td.comments-cell { width: 16%; font-size: 9px; }
         .eval-table .cat-header td { font-weight: 700; background: #f5f5f5; }
-        .avg-row td { border: 1px solid #000; padding: 3px 6px; font-weight: 700; font-size: 10px; text-align: right; }
-        .avg-line { display: inline-block; width: 60px; border-bottom: 1px solid #000; text-align: center; margin-left: 6px; }
+        .avg-row td { border: 1px solid #000; padding: 3px 6px; font-weight: 700; font-size: 10px; text-align: left; }
+        .avg-row td.avg-value { text-align: right; }
+        .avg-line { display: inline-block; width: 80px; border-bottom: 1px solid #000; text-align: center; }
 
-        /* Total average row in table */
-        .total-avg-table { width: 100%; border-collapse: collapse; margin: 4px 0; }
-        .total-avg-table tr { border: 1.5px solid #000; }
-        .total-avg-table td { border: none; padding: 6px 10px; font-weight: 700; font-size: 10px; text-align: left; }
-        .total-avg-table .avg-line { display: inline-block; width: 80px; border-bottom: 1px solid #000; text-align: center; margin-left: 8px; }
+        /* Total average + interpretation */
+        .total-avg-row { margin: 2px 0 2px; }
+        .total-avg-row .avg-line { display: inline-block; width: 100px; border-bottom: 1px solid #000; text-align: center; }
         .interpretation-box { font-size: 9.5px; margin-bottom: 4px; }
         .interpretation-box table td { padding: 0 6px; }
         .interpretation-box td:first-child { font-weight: 600; white-space: nowrap; }
@@ -379,11 +378,7 @@ foreach ($domains as $domain):
 <?php endforeach; ?>
 
 <!-- Total Average + Interpretation -->
-<table class="total-avg-table">
-    <tr>
-        <td style="padding: 6px 10px; text-align: left;">Total Average:<span class="avg-line"><?php echo number_format($overallAvg, 1); ?></span></td>
-    </tr>
-</table>
+<div style="font-weight: 700; font-size: 10px; margin: 4px 0 2px;">Total Average:<span class="avg-line"><?php echo number_format($overallAvg, 1); ?></span></div>
 <div style="font-weight: 700; font-size: 10px; margin: 2px 0 4px; padding-left: 20px;">Interpretation: <?php echo h($interpretationText); ?></div>
 <div class="interpretation-box">
     <strong>Interpretation of Over-all Rating</strong>

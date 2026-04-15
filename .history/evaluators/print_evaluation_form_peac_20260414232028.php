@@ -1,7 +1,7 @@
 <?php
 require_once '../auth/session-check.php';
 
-if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president', 'teacher'])) {
+if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'])) {
     header('Location: ../login.php');
     exit();
 }
@@ -316,6 +316,7 @@ foreach ($sections as $section):
     </tr>
     <?php endforeach; ?>
 </table>
+<div class="avg-row-inline">Average:<span class="avg-line"><?php echo number_format($section['avg'], 1); ?></span></div>
 <?php endforeach; ?>
 
 <!-- Computation Formula -->
@@ -402,12 +403,12 @@ $avgComputed = $totalIndicators > 0 ? round($totalSum / $totalIndicators, 2) : 0
     ?>
     <div class="sig-row">
         <div class="sig-col">
+            <div class="sig-name-line"><?php echo h($raterPrinted); ?></div>
             <div class="sig-img">
                 <?php if ($raterSig !== '' && strpos($raterSig, 'data:image/') === 0): ?>
                     <img src="<?php echo h($raterSig); ?>" alt="Rater signature" />
                 <?php endif; ?>
             </div>
-            <div class="sig-name-line"><?php echo h($raterPrinted); ?></div>
             <div class="sig-caption">Signature over printed name</div>
         </div>
         <div class="sig-col">
