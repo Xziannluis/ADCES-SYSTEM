@@ -449,8 +449,7 @@ foreach ($domains as $domain):
             <div class="sig-caption">Signature over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
+            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
             <div class="sig-line" style="width: 80px;"></div>
             <div class="sig-caption">Date</div>
         </div>
@@ -475,8 +474,7 @@ foreach ($domains as $domain):
             <div class="sig-caption">Signature of Faculty over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
+            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
             <div class="sig-line" style="width: 80px;"></div>
             <div class="sig-caption">Date</div>
         </div>

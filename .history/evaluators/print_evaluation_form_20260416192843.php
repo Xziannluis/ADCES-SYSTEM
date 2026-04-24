@@ -449,8 +449,7 @@ foreach ($domains as $domain):
             <div class="sig-caption">Signature over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
+            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
             <div class="sig-line" style="width: 80px;"></div>
             <div class="sig-caption">Date</div>
         </div>
@@ -475,8 +474,7 @@ foreach ($domains as $domain):
             <div class="sig-caption">Signature of Faculty over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
+            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
             <div class="sig-line" style="width: 80px;"></div>
             <div class="sig-caption">Date</div>
         </div>
@@ -484,7 +482,7 @@ foreach ($domains as $domain):
 </div>
 
 <!-- Form Code Box -->
-<div style="border: 1.5px solid #000; border-radius: 4px; padding: 0; margin-top: 12px; margin-bottom: 12px; max-width: 300px; font-size: 8.5px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
+<div style="border: 1.5px solid #1a237e; border-radius: 4px; padding: 0; margin-top: 12px; margin-bottom: 12px; max-width: 300px; font-size: 8.5px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
     <table style="width: 100%; border-collapse: collapse;">
         <tr>
             <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; width: 40%; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Form Code No.</td>

@@ -172,9 +172,10 @@ $autoPrint = !empty($_GET['auto_print']);
         .eval-table td.rating-cell { text-align: center; width: 22px; }
         .eval-table td.comments-cell { width: 16%; font-size: 9px; }
         .eval-table .cat-header td { font-weight: 700; background: #f5f5f5; }
-        .eval-table .avg-row td { padding: 3px 6px; font-weight: 700; font-size: 10px; border-top: 1px solid #000; border-bottom: none; border-left: none; border-right: none; text-align: center; }
-        .eval-table .avg-row td.avg-left { border-left: 1.5px solid #000; text-align: left; width: 18px; }
-        .eval-table .avg-row td.avg-right { border-right: 1.5px solid #000; }
+        .eval-table .avg-row td { padding: 3px 6px; font-weight: 700; font-size: 10px; border: none; border-top: 1px solid #000 !important; }
+        .eval-table .avg-row td:first-child { border-left: 1.5px solid #000 !important; }
+        .eval-table .avg-row td:last-child { border-right: 1.5px solid #000 !important; }
+        .eval-table .avg-row td.avg-label { padding: 3px 6px; }
         .avg-line { display: inline-block; width: 60px; border-bottom: 1px solid #000; text-align: center; margin-left: 6px; }
 
         /* Total average row in table */
@@ -199,11 +200,9 @@ $autoPrint = !empty($_GET['auto_print']);
         .sig-section p.cert { margin: 0 0 6px; font-size: 9px; font-style: italic; }
         .sig-row { display: flex; gap: 30px; margin-bottom: 4px; }
         .sig-col { flex: 1; }
-        .sig-col:last-child { flex: 1.5; }
-        .sig-img { height: 50px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 4px; }
+        .sig-img { height: 50px; display: flex; align-items: flex-end; justify-content: center; }
         .sig-img img { max-height: 46px; max-width: 100%; object-fit: contain; }
-        .sig-name { text-align: center; font-weight: 600; font-size: 10px; margin: 4px 0; }
-        .sig-line { border-top: 1px solid #000; text-align: center; padding-top: 0; font-weight: 600; font-size: 10px; width: 120px; margin: 0 auto; }
+        .sig-line { border-top: 1px solid #000; text-align: center; padding-top: 2px; font-weight: 600; font-size: 10px; }
         .sig-caption { text-align: center; font-size: 8.5px; color: #444; }
         .sig-date-row { display: flex; gap: 30px; margin-top: 2px; }
         .sig-date-col { flex: 1; font-size: 10px; }
@@ -377,9 +376,14 @@ foreach ($domains as $domain):
     </tr>
     <?php endforeach; ?>
     <tr class="avg-row">
-        <td class="avg-left">Average:</td>
-        <td colspan="6"><span class="avg-line"><?php echo number_format($domain['avg'], 1); ?></span></td>
-        <td class="avg-right"></td>
+        <td class="num">Average:</td>
+        <td><span class="avg-line"><?php echo number_format($domain['avg'], 1); ?></span></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
     </tr>
 </table>
 <?php endforeach; ?>
@@ -444,14 +448,12 @@ foreach ($domains as $domain):
                     <img src="<?php echo h($raterSig); ?>" alt="Rater signature" />
                 <?php endif; ?>
             </div>
-            <div class="sig-name"><?php echo h($raterPrinted ?: ''); ?></div>
-            <div class="sig-line"></div>
+            <div class="sig-line"><?php echo h($raterPrinted ?: ''); ?></div>
             <div class="sig-caption">Signature over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
-            <div class="sig-line" style="width: 80px;"></div>
+            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
+            <div class="sig-line"></div>
             <div class="sig-caption">Date</div>
         </div>
     </div>
@@ -470,21 +472,19 @@ foreach ($domains as $domain):
                     <img src="<?php echo h($facultySig); ?>" alt="Faculty signature" />
                 <?php endif; ?>
             </div>
-            <div class="sig-name"><?php echo h($facultyPrinted ?: ''); ?></div>
-            <div class="sig-line"></div>
+            <div class="sig-line"><?php echo h($facultyPrinted ?: ''); ?></div>
             <div class="sig-caption">Signature of Faculty over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
-            <div class="sig-line" style="width: 80px;"></div>
+            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
+            <div class="sig-line"></div>
             <div class="sig-caption">Date</div>
         </div>
     </div>
 </div>
 
 <!-- Form Code Box -->
-<div style="border: 1.5px solid #000; border-radius: 4px; padding: 0; margin-top: 12px; margin-bottom: 12px; max-width: 300px; font-size: 8.5px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
+<div style="border: 1.5px solid #1a237e; border-radius: 4px; padding: 0; margin-top: 12px; margin-bottom: 12px; max-width: 300px; font-size: 8.5px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
     <table style="width: 100%; border-collapse: collapse;">
         <tr>
             <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; width: 40%; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Form Code No.</td>

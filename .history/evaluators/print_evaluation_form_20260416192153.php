@@ -197,13 +197,12 @@ $autoPrint = !empty($_GET['auto_print']);
         .sig-section { margin-top: 6px; page-break-inside: avoid; font-size: 10px; }
         .sig-section h6 { font-size: 11px; font-weight: 700; margin: 0 0 2px; }
         .sig-section p.cert { margin: 0 0 6px; font-size: 9px; font-style: italic; }
-        .sig-row { display: flex; gap: 30px; margin-bottom: 4px; }
-        .sig-col { flex: 1; }
-        .sig-col:last-child { flex: 1.5; }
-        .sig-img { height: 50px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 4px; }
-        .sig-img img { max-height: 46px; max-width: 100%; object-fit: contain; }
-        .sig-name { text-align: center; font-weight: 600; font-size: 10px; margin: 4px 0; }
-        .sig-line { border-top: 1px solid #000; text-align: center; padding-top: 0; font-weight: 600; font-size: 10px; width: 120px; margin: 0 auto; }
+        .sig-row { display: flex; gap: 60px; margin-bottom: 4px; }
+        .sig-col { flex: 1; min-width: 120px; }
+        .sig-col:last-child { flex: 0 0 auto; min-width: 100px; }
+        .sig-img { height: 40px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 8px; }
+        .sig-img img { max-height: 36px; max-width: 100%; object-fit: contain; }
+        .sig-line { border-top: 1px solid #000; text-align: center; padding-top: 0; font-weight: 600; font-size: 10px; width: 100%; }
         .sig-caption { text-align: center; font-size: 8.5px; color: #444; }
         .sig-date-row { display: flex; gap: 30px; margin-top: 2px; }
         .sig-date-col { flex: 1; font-size: 10px; }
@@ -444,14 +443,13 @@ foreach ($domains as $domain):
                     <img src="<?php echo h($raterSig); ?>" alt="Rater signature" />
                 <?php endif; ?>
             </div>
-            <div class="sig-name"><?php echo h($raterPrinted ?: ''); ?></div>
-            <div class="sig-line"></div>
+            <div class="sig-line" style="width: 120px; margin: 0 auto;"></div>
+            <div style="text-align: center; font-weight: 600; font-size: 10px; margin-top: 2px;"><?php echo h($raterPrinted ?: ''); ?></div>
             <div class="sig-caption">Signature over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
-            <div class="sig-line" style="width: 80px;"></div>
+            <div style="height: auto; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; min-height: 40px;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
+            <div class="sig-line" style="width: 80px; margin: 0 auto;"></div>
             <div class="sig-caption">Date</div>
         </div>
     </div>
@@ -470,21 +468,19 @@ foreach ($domains as $domain):
                     <img src="<?php echo h($facultySig); ?>" alt="Faculty signature" />
                 <?php endif; ?>
             </div>
-            <div class="sig-name"><?php echo h($facultyPrinted ?: ''); ?></div>
-            <div class="sig-line"></div>
+            <div class="sig-line" style="width: 120px; margin: 0 auto;"></div>
             <div class="sig-caption">Signature of Faculty over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
-            <div class="sig-line" style="width: 80px;"></div>
+            <div style="height: auto; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; min-height: 40px;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
+            <div class="sig-line" style="width: 80px; margin: 0 auto;"></div>
             <div class="sig-caption">Date</div>
         </div>
     </div>
 </div>
 
 <!-- Form Code Box -->
-<div style="border: 1.5px solid #000; border-radius: 4px; padding: 0; margin-top: 12px; margin-bottom: 12px; max-width: 300px; font-size: 8.5px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
+<div style="border: 1.5px solid #1a237e; border-radius: 4px; padding: 0; margin-top: 12px; margin-bottom: 12px; max-width: 300px; font-size: 8.5px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
     <table style="width: 100%; border-collapse: collapse;">
         <tr>
             <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; width: 40%; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Form Code No.</td>
