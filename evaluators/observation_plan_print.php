@@ -233,9 +233,9 @@ foreach ($eval_teachers as $t) {
         ];
     }
 
-    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester ORDER BY u.name";
+    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
     $obs_stmt = $db->prepare($obs_query);
-    $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester]);
+    $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
     $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
     $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
@@ -244,7 +244,8 @@ foreach ($eval_teachers as $t) {
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
 
     $all_observers = array_unique(array_merge($observers, $assigned));
-    if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
+    // Only add current dean if they belong to the same department as the teachers
+    if (!empty($dean_name) && !in_array($dean_name, $all_observers) && $_SESSION['department'] === $raw_department) {
         array_unshift($all_observers, $dean_name);
     }
     $observer_map[$row_key] = $all_observers;
@@ -317,7 +318,8 @@ foreach ($scheduled_teachers as $t) {
     $assign_stmt->execute([':teacher_id' => $tid]);
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     $all_observers = $assigned;
-    if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
+    // Only add current dean if they belong to the same department as the teachers
+    if (!empty($dean_name) && !in_array($dean_name, $all_observers) && $_SESSION['department'] === $raw_department) {
         array_unshift($all_observers, $dean_name);
     }
     $observer_map[$tid] = $all_observers;

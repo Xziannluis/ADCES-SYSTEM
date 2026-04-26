@@ -36,9 +36,8 @@ $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
 $raw_department = $is_leader ? (string)($_GET['department'] ?? '') : (string)($_SESSION['department'] ?? '');
 $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
 
-$scoped_evaluator_id = in_array($_SESSION['role'], ['dean', 'principal', 'president', 'vice_president'], true)
-    ? null
-    : ($_SESSION['user_id'] ?? null);
+// President/Vice-president should only see their own evaluations (filter by evaluator_id)
+$scoped_evaluator_id = $_SESSION['user_id'] ?? null;
 
 // Available teachers (for label lookup)
 $available_teachers = [];

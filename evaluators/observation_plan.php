@@ -515,10 +515,16 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
         }
 
         // Add assigned coordinators (unless current user is a coordinator — then only deans observe)
+        // Only include coordinators from the teacher's department(s)
         if (!in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
-            foreach ($my_observers as $obs) {
-                if ($obs['name'] === ($_SESSION['name'] ?? '')) continue; // exclude self
-                if (!in_array($obs['name'], $my_observer_names)) $my_observer_names[] = $obs['name'];
+            // Filter observers by teacher's department(s)
+            $ph_depts_obs = implode(',', array_fill(0, count($my_all_depts), '?'));
+            $filtered_obs_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :tid AND u.department IN ($ph_depts_obs) ORDER BY u.name";
+            $filtered_obs_stmt = $db->prepare($filtered_obs_query);
+            $filtered_obs_stmt->execute(array_merge([$my_teacher_id], $my_all_depts));
+            while ($obs_name = $filtered_obs_stmt->fetchColumn()) {
+                if ($obs_name === ($_SESSION['name'] ?? '')) continue; // exclude self
+                if (!in_array($obs_name, $my_observer_names)) $my_observer_names[] = $obs_name;
             }
         }
         // If President/VP scheduled this teacher, show them + department evaluators
@@ -544,10 +550,10 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                 }));
             }
         }
-        // If NOT scheduled by president/VP, add president/VP who have evaluated this teacher
+        // If NOT scheduled by president/VP, add president/VP who have ACCEPTED as observers (via teacher_assignments)
         if (empty($my_sched_by) || empty($sb_name)) {
-            $pv_stmt = $db->prepare("SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem AND u.role IN ('president','vice_president') ORDER BY u.name");
-            $pv_stmt->execute([':tid' => $my_teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
+            $pv_stmt = $db->prepare("SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :tid AND u.role IN ('president','vice_president') AND u.status = 'active' ORDER BY u.name");
+            $pv_stmt->execute([':tid' => $my_teacher_id]);
             while ($pv_name = $pv_stmt->fetchColumn()) {
                 if (!in_array($pv_name, $my_observer_names)) {
                     $my_observer_names[] = $pv_name;
@@ -904,14 +910,14 @@ foreach ($eval_teachers as $t) {
         }
         if (empty($owning_dept)) $owning_dept = $teacher_primary_dept;
 
-        // Show evaluators from the owning department
-        $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester ORDER BY u.name";
+        // Show evaluators from the owning department only (exclude other departments)
+        $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :dept AND u.role NOT IN ('president', 'vice_president') ORDER BY u.name";
         $obs_stmt = $db->prepare($obs_query);
-        $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester]);
+        $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':dept' => $owning_dept]);
         $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-        // Show assigned coordinators from the owning department only
-        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
+        // Show assigned observers from the owning department (coordinators) + presidents/VPs who have accepted as observers
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :dept OR u.role IN ('president', 'vice_president')) ORDER BY u.name";
         $assign_stmt = $db->prepare($assign_query);
         $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $owning_dept]);
         $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -934,7 +940,8 @@ foreach ($eval_teachers as $t) {
     }
 
     $all_observers = array_unique(array_merge($observers, $assigned));
-    if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
+    // Only add current dean if they belong to the same department as the teachers
+    if (!empty($dean_name) && !in_array($dean_name, $all_observers) && $_SESSION['department'] === $raw_department) {
         array_unshift($all_observers, $dean_name);
     }
     // For leaders: add dean/principal of the owning department
@@ -1087,7 +1094,8 @@ foreach ($scheduled_teachers as $t) {
     }
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     $all_observers = $assigned;
-    if (!empty($dean_name) && !in_array($dean_name, $all_observers)) {
+    // Only add current dean if they belong to the same department as the teachers
+    if (!empty($dean_name) && !in_array($dean_name, $all_observers) && $_SESSION['department'] === $raw_department) {
         array_unshift($all_observers, $dean_name);
     }
     // For leaders: add dean/principal of the owning department
@@ -1914,14 +1922,18 @@ try {
                             </select>
                         </div>
 
-                        <?php if ($is_leader): ?>
-                        <!-- Department for evaluation (president/VP only) -->
+                        <?php
+                        // Show department field for ALL evaluators (leaders, deans, principals, coordinators)
+                        $show_dept_field = in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president']);
+                        ?>
+                        <?php if ($show_dept_field): ?>
+                        <!-- Department for evaluation -->
                         <div class="mb-3" id="modal_department_group">
                             <label class="form-label fw-bold">Department <span class="text-danger">*</span></label>
                             <select class="form-select" name="scheduled_department" id="modal_scheduled_department" required>
                                 <option value="">-- Select department --</option>
                             </select>
-                            <small class="text-muted">Select which department this evaluation is for.</small>
+                            <small class="text-muted">Select the department this evaluation is for.</small>
                         </div>
                         <?php endif; ?>
 
@@ -2044,6 +2056,48 @@ try {
     </div>
 
 <script>
+// Available departments for current user based on their role
+const userRole = '<?php echo htmlspecialchars($_SESSION['role']); ?>';
+const userDept = '<?php echo htmlspecialchars($_SESSION['department'] ?? ''); ?>';
+const allDepartments = ['ELEM', 'JHS', 'SHS', 'CCIS', 'CAS', 'CTEAS', 'CBM', 'CTHM', 'CCJE'];
+
+// Determine which departments the current user can set schedules for
+let availableDepartments = [];
+if (userRole === 'president' || userRole === 'vice_president') {
+    // Leaders can set for any department
+    availableDepartments = allDepartments;
+} else if (userRole === 'dean' || userRole === 'principal' || userRole === 'chairperson' || userRole === 'subject_coordinator' || userRole === 'grade_level_coordinator') {
+    // Other evaluators can only set for their own department
+    availableDepartments = userDept ? [userDept] : [];
+}
+
+// Map departments to display names
+const departmentMap = {
+    'CCIS': 'College of Computing and Information Sciences',
+    'CBM': 'College of Business and Management',
+    'CAS': 'College of Arts and Sciences',
+    'CCJE': 'College of Criminal Justice Education',
+    'CTHM': 'College of Tourism and Hospitality Management',
+    'CTEAS': 'College of Teacher Education, Arts and Sciences',
+    'ELEM': 'Elementary Department',
+    'JHS': 'Junior High School Department',
+    'SHS': 'Senior High School Department'
+};
+
+function populateDepartmentDropdown() {
+    const deptSelect = document.getElementById('modal_scheduled_department');
+    if (!deptSelect) return;
+    
+    // Clear and populate with available departments
+    deptSelect.innerHTML = '<option value="">-- Select department --</option>';
+    availableDepartments.forEach(dept => {
+        const option = document.createElement('option');
+        option.value = dept;
+        option.textContent = departmentMap[dept] || dept;
+        deptSelect.appendChild(option);
+    });
+}
+
 function openPrintPlan() {
     const params = new URLSearchParams(window.location.search);
     params.set('auto_print', '1');
@@ -2089,11 +2143,9 @@ function openScheduleModal() {
     document.getElementById('isoFocusCheckboxes').style.display = '';
     document.getElementById('peacFocusCheckboxes').style.display = 'none';
 
-    // Reset department dropdown for leaders
-    const deptSelect = document.getElementById('modal_scheduled_department');
-    if (deptSelect) {
-        deptSelect.innerHTML = '<option value="">-- Select department --</option>';
-    }
+    // Populate department dropdown for current user
+    populateDepartmentDropdown();
+
     // Hide PEAC/Both for leaders until department is selected
     updateFormTypeVisibility();
     updateSubjectLabels();
