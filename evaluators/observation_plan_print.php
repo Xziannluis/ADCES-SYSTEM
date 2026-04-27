@@ -57,7 +57,8 @@ if ($is_leader) {
                      e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
                      e.subject_area as eval_subject_area, e.evaluation_focus as eval_focus,
-                     e.semester as eval_semester
+                     e.semester as eval_semester,
+                     t.scheduled_by, t.scheduled_department
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
               WHERE e.academic_year = :academic_year
@@ -79,12 +80,15 @@ if ($is_leader) {
                      e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
                      e.subject_area as eval_subject_area, e.evaluation_focus as eval_focus,
-                     e.semester as eval_semester
+                     e.semester as eval_semester,
+                     t.scheduled_by, t.scheduled_department
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
               LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :assigned_evaluator_id
+              LEFT JOIN users tu ON tu.id = t.user_id
               WHERE (t.department = :department OR ta.evaluator_id IS NOT NULL OR e.evaluator_id = :evaluator_id)
               AND (t.user_id IS NULL OR t.user_id != :current_user_id)
+              AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
               AND e.academic_year = :academic_year
               AND e.semester = :semester
               ORDER BY t.name ASC";
@@ -102,7 +106,8 @@ if ($is_leader) {
                      e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
                      e.subject_area as eval_subject_area, e.evaluation_focus as eval_focus,
-                     e.semester as eval_semester
+                     e.semester as eval_semester,
+                     t.scheduled_by, t.scheduled_department
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
               WHERE (t.department = :department OR e.evaluator_id = :evaluator_id)
@@ -124,7 +129,8 @@ $eval_teachers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 if ($is_leader) {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
-                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
+                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                           t.scheduled_by, t.scheduled_department
                     FROM teachers t
                     WHERE t.status = 'active'
                       AND t.evaluation_schedule IS NOT NULL
@@ -142,15 +148,18 @@ if ($is_leader) {
 } elseif ($is_coordinator) {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
-                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
+                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                           t.scheduled_by, t.scheduled_department
                     FROM teachers t
                     LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :assigned_evaluator_id
+                    LEFT JOIN users tu ON tu.id = t.user_id
                     WHERE (t.department = :department OR ta.evaluator_id IS NOT NULL)
                       AND t.status = 'active'
                       AND t.evaluation_schedule IS NOT NULL
                       AND t.evaluation_schedule != ''
                       AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                       AND (t.user_id IS NULL OR t.user_id != :current_user_id)
+                      AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
                     ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
     $sched_stmt->bindParam(':assigned_evaluator_id', $_SESSION['user_id']);
@@ -160,7 +169,8 @@ if ($is_leader) {
 } else {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
-                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
+                           t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                           t.scheduled_by, t.scheduled_department
                     FROM teachers t
                     WHERE t.department = :department
                       AND t.status = 'active'
@@ -233,21 +243,78 @@ foreach ($eval_teachers as $t) {
         ];
     }
 
-    $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
-    $obs_stmt = $db->prepare($obs_query);
-    $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
-    $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
+    $teacher_primary_dept = $t['teacher_department'] ?? '';
+    $owning_dept = $t['scheduled_department'] ?? '';
+    if ($owning_dept === '') {
+        $owning_dept = ($teacher_primary_dept !== '') ? $teacher_primary_dept : $raw_department;
+    }
 
-    $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
-    $assign_stmt = $db->prepare($assign_query);
-    $assign_stmt->execute([':teacher_id' => $tid]);
+    if ($owning_dept !== '') {
+        $obs_query = "SELECT DISTINCT u.name
+                      FROM evaluations e
+                      JOIN users u ON e.evaluator_id = u.id
+                      WHERE e.teacher_id = :teacher_id
+                        AND e.academic_year = :academic_year
+                        AND e.semester = :semester
+                        AND u.department = :department
+                      ORDER BY u.name";
+        $obs_stmt = $db->prepare($obs_query);
+        $obs_stmt->execute([
+            ':teacher_id' => $tid,
+            ':academic_year' => $academic_year,
+            ':semester' => $semester,
+            ':department' => $owning_dept
+        ]);
+        $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
+
+        $assign_query = "SELECT DISTINCT u.name
+                         FROM teacher_assignments ta
+                         JOIN users u ON ta.evaluator_id = u.id
+                         WHERE ta.teacher_id = :teacher_id
+                         ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid]);
+    } else {
+        $obs_query = "SELECT DISTINCT u.name
+                      FROM evaluations e
+                      JOIN users u ON e.evaluator_id = u.id
+                      WHERE e.teacher_id = :teacher_id
+                        AND e.academic_year = :academic_year
+                        AND e.semester = :semester
+                      ORDER BY u.name";
+        $obs_stmt = $db->prepare($obs_query);
+        $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester]);
+        $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
+
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid]);
+    }
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
 
     $all_observers = array_unique(array_merge($observers, $assigned));
-    // Only add current dean if they belong to the same department as the teachers
-    if (!empty($dean_name) && !in_array($dean_name, $all_observers) && $_SESSION['department'] === $raw_department) {
-        array_unshift($all_observers, $dean_name);
+    if ($owning_dept !== '') {
+        $dept_dean_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :department AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
+        $dept_dean_stmt->execute([':department' => $owning_dept]);
+        while ($dn = $dept_dean_stmt->fetchColumn()) {
+            if (!in_array($dn, $all_observers, true)) {
+                $all_observers[] = $dn;
+            }
+        }
     }
+    $sched_by_id = $t['scheduled_by'] ?? null;
+    if (!empty($sched_by_id)) {
+        $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
+        $sb_stmt->execute([':id' => $sched_by_id]);
+        $sb_name = $sb_stmt->fetchColumn();
+        if ($sb_name && !in_array($sb_name, $all_observers, true)) {
+            array_unshift($all_observers, $sb_name);
+        }
+    }
+    $teacher_name = $t['name'] ?? '';
+    $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
+        return $n !== $teacher_name;
+    }));
     $observer_map[$row_key] = $all_observers;
     $observer_map_by_tid[$tid] = $all_observers;
 }
@@ -313,15 +380,37 @@ foreach ($scheduled_teachers as $t) {
         'room' => $t['evaluation_room'] ?? '',
     ];
 
+    $owning_dept = $t['scheduled_department'] ?? '';
+    if ($owning_dept === '') {
+        $owning_dept = ($t['teacher_department'] ?? '') ?: $raw_department;
+    }
     $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
     $assign_stmt = $db->prepare($assign_query);
     $assign_stmt->execute([':teacher_id' => $tid]);
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     $all_observers = $assigned;
-    // Only add current dean if they belong to the same department as the teachers
-    if (!empty($dean_name) && !in_array($dean_name, $all_observers) && $_SESSION['department'] === $raw_department) {
-        array_unshift($all_observers, $dean_name);
+    if ($owning_dept !== '') {
+        $dept_dean_stmt2 = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :department AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
+        $dept_dean_stmt2->execute([':department' => $owning_dept]);
+        while ($dn = $dept_dean_stmt2->fetchColumn()) {
+            if (!in_array($dn, $all_observers, true)) {
+                $all_observers[] = $dn;
+            }
+        }
     }
+    $sched_by_id = $t['scheduled_by'] ?? null;
+    if (!empty($sched_by_id)) {
+        $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
+        $sb_stmt->execute([':id' => $sched_by_id]);
+        $sb_name = $sb_stmt->fetchColumn();
+        if ($sb_name && !in_array($sb_name, $all_observers, true)) {
+            array_unshift($all_observers, $sb_name);
+        }
+    }
+    $teacher_name = $t['name'] ?? '';
+    $all_observers = array_values(array_filter($all_observers, function($n) use ($teacher_name) {
+        return $n !== $teacher_name;
+    }));
     $observer_map[$tid] = $all_observers;
 }
 
@@ -361,14 +450,29 @@ if ($filter_status === 'done') {
 $dean_role_display = ucfirst(str_replace('_', ' ', $_SESSION['role']));
 
 $dean_signature = '';
+$dean_signature_user_id = (int)($_SESSION['user_id'] ?? 0);
+if ($is_leader && $raw_department !== '') {
+    try {
+        $dept_lead_stmt = $db->prepare("SELECT id, name, role FROM users WHERE department = :department AND role IN ('dean','principal') AND status = 'active' ORDER BY role = 'dean' DESC, name ASC LIMIT 1");
+        $dept_lead_stmt->execute([':department' => $raw_department]);
+        $dept_lead = $dept_lead_stmt->fetch(PDO::FETCH_ASSOC);
+        if ($dept_lead) {
+            $dean_name = $dept_lead['name'] ?? $dean_name;
+            $dean_role_display = ucfirst(str_replace('_', ' ', $dept_lead['role'] ?? 'dean'));
+            $dean_signature_user_id = (int)($dept_lead['id'] ?? 0);
+        }
+    } catch (Exception $e) {}
+}
 try {
-    $sig_query = "SELECT rater_signature FROM evaluations WHERE evaluator_id = :evaluator_id AND rater_signature IS NOT NULL AND rater_signature != '' ORDER BY created_at DESC LIMIT 1";
-    $sig_stmt = $db->prepare($sig_query);
-    $sig_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
-    $sig_stmt->execute();
-    $sig_row = $sig_stmt->fetch(PDO::FETCH_ASSOC);
-    if ($sig_row) {
-        $dean_signature = $sig_row['rater_signature'];
+    if ($dean_signature_user_id > 0) {
+        $sig_query = "SELECT rater_signature FROM evaluations WHERE evaluator_id = :evaluator_id AND rater_signature IS NOT NULL AND rater_signature != '' ORDER BY created_at DESC LIMIT 1";
+        $sig_stmt = $db->prepare($sig_query);
+        $sig_stmt->bindValue(':evaluator_id', $dean_signature_user_id, PDO::PARAM_INT);
+        $sig_stmt->execute();
+        $sig_row = $sig_stmt->fetch(PDO::FETCH_ASSOC);
+        if ($sig_row) {
+            $dean_signature = $sig_row['rater_signature'];
+        }
     }
 } catch (Exception $e) {}
 ?>

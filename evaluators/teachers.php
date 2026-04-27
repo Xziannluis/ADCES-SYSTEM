@@ -351,9 +351,15 @@ if ($is_leader) {
     $stmt->execute();
     $teachers = $stmt;
 } elseif (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
-    // Coordinators see teachers assigned to them
+    // Coordinators see assigned teachers, but must not evaluate higher leadership roles.
     $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
-    $assigned_query = "SELECT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id AND t.status = 'active'";
+    $assigned_query = "SELECT DISTINCT t.*
+                       FROM teachers t
+                       JOIN teacher_assignments ta ON ta.teacher_id = t.id
+                       LEFT JOIN users tu ON tu.id = t.user_id
+                       WHERE ta.evaluator_id = :evaluator_id
+                         AND t.status = 'active'
+                         AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))";
     $assigned_query .= " ORDER BY t.name";
     $stmt = $db->prepare($assigned_query);
     $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);

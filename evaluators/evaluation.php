@@ -66,7 +66,14 @@ if ($is_leader) {
 } elseif (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
     // Coordinators see teachers assigned to them (cross-department through assignments)
     $assignedPrograms = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
-    $assigned_query = "SELECT DISTINCT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id AND t.status = 'active' AND (t.user_id IS NULL OR t.user_id != :current_user_id)";
+    $assigned_query = "SELECT DISTINCT t.*
+                       FROM teachers t
+                       JOIN teacher_assignments ta ON ta.teacher_id = t.id
+                       LEFT JOIN users tu ON tu.id = t.user_id
+                       WHERE ta.evaluator_id = :evaluator_id
+                         AND t.status = 'active'
+                         AND (t.user_id IS NULL OR t.user_id != :current_user_id)
+                         AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))";
     $assigned_query .= " ORDER BY t.name";
     $stmt = $db->prepare($assigned_query);
     $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);

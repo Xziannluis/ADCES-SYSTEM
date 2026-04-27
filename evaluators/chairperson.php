@@ -60,13 +60,18 @@ if ($hasEvaluatorAssignments) {
 // Get assigned teachers count
 $assigned_teachers_count = 0;
 if ($hasTeacherAssignments) {
-    $teachers_count_query = "SELECT COUNT(*) as teacher_count FROM teacher_assignments WHERE evaluator_id = :evaluator_id";
+    $teachers_count_query = "SELECT COUNT(*) as teacher_count
+                             FROM teacher_assignments ta
+                             JOIN teachers t ON ta.teacher_id = t.id
+                             LEFT JOIN users tu ON tu.id = t.user_id
+                             WHERE ta.evaluator_id = :evaluator_id
+                               AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))";
     if (!empty($program_subjects)) {
         $placeholders = [];
         foreach ($program_subjects as $i => $subject) {
             $placeholders[] = ":subject{$i}";
         }
-        $teachers_count_query .= " AND subject IN (" . implode(',', $placeholders) . ")";
+        $teachers_count_query .= " AND ta.subject IN (" . implode(',', $placeholders) . ")";
     }
     $teachers_count_stmt = $db->prepare($teachers_count_query);
     $teachers_count_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
@@ -85,7 +90,9 @@ if ($hasTeacherAssignments) {
     $assigned_list_query = "SELECT ta.subject, ta.grade_level, t.name, t.department
         FROM teacher_assignments ta
         JOIN teachers t ON ta.teacher_id = t.id
-        WHERE ta.evaluator_id = :evaluator_id";
+        LEFT JOIN users tu ON tu.id = t.user_id
+        WHERE ta.evaluator_id = :evaluator_id
+          AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))";
     if (!empty($program_subjects)) {
         $placeholders = [];
         foreach ($program_subjects as $i => $subject) {

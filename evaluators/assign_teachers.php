@@ -144,6 +144,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
 
+    // Prevent assigning leadership accounts as teacher-assignees for coordinators
+    try {
+        $lead_check = $db->prepare(
+            "SELECT u.role
+             FROM teachers t
+             LEFT JOIN users u ON u.id = t.user_id
+             WHERE t.id = :teacher_id
+             LIMIT 1"
+        );
+        $lead_check->execute([':teacher_id' => $teacher_id]);
+        $linked_role = $lead_check->fetchColumn();
+        if (in_array($linked_role, ['dean', 'principal', 'president', 'vice_president'], true)) {
+            $_SESSION['error'] = "This account is leadership and cannot be assigned as a coordinator's teacher.";
+            header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
+            exit();
+        }
+    } catch (Throwable $e) {}
+
     // Check if assignment already exists
     $check_query = "SELECT id FROM teacher_assignments WHERE evaluator_id = :evaluator_id AND teacher_id = :teacher_id";
     $check_stmt = $db->prepare($check_query);
@@ -441,17 +459,15 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                         $exclude = false;
                                         $target_dept_for_exclude = $coordinator_info['department'] ?? $_SESSION['department'];
                                         if (!empty($teacher_row['user_id'])) {
-                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE id = :uid AND role IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator') AND department = :dept AND status = 'active' LIMIT 1");
+                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE id = :uid AND role IN ('dean','principal','president','vice_president') AND status = 'active' LIMIT 1");
                                             $eval_query->bindParam(':uid', $teacher_row['user_id']);
-                                            $eval_query->bindParam(':dept', $target_dept_for_exclude);
                                             $eval_query->execute();
                                             if ($eval_query->fetchColumn()) {
                                                 $exclude = true;
                                             }
                                         } else {
-                                            // Fallback: match by name within the target department
-                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE role IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator') AND department = :dept AND name = :name AND status = 'active' LIMIT 1");
-                                            $eval_query->bindParam(':dept', $target_dept_for_exclude);
+                                            // Fallback: match by name for leadership roles
+                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE role IN ('dean','principal','president','vice_president') AND name = :name AND status = 'active' LIMIT 1");
                                             $eval_query->bindParam(':name', $teacher_row['name']);
                                             $eval_query->execute();
                                             if ($eval_query->fetchColumn()) {

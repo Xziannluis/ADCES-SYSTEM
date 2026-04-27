@@ -34,8 +34,11 @@ $supervisor_info = $supervisor_stmt->fetch(PDO::FETCH_ASSOC);
 $assigned_teachers_count = 0;
 $teachers_count_query = "
     SELECT COUNT(*) as teacher_count 
-    FROM teacher_assignments 
-    WHERE evaluator_id = :evaluator_id
+    FROM teacher_assignments ta
+    JOIN teachers t ON ta.teacher_id = t.id
+    LEFT JOIN users tu ON tu.id = t.user_id
+    WHERE ta.evaluator_id = :evaluator_id
+      AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
 ";
 $teachers_count_stmt = $db->prepare($teachers_count_query);
 $teachers_count_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
@@ -47,7 +50,9 @@ $assigned_teachers = [];
 $assigned_list_query = "SELECT ta.subject, ta.grade_level, t.name, t.department
     FROM teacher_assignments ta
     JOIN teachers t ON ta.teacher_id = t.id
+    LEFT JOIN users tu ON tu.id = t.user_id
     WHERE ta.evaluator_id = :evaluator_id
+      AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
     ORDER BY t.name";
 $assigned_list_stmt = $db->prepare($assigned_list_query);
 $assigned_list_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);

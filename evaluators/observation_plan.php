@@ -237,12 +237,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $post_semester = in_array($post_semester, ['1st', '2nd']) ? $post_semester : null;
     $form_type = trim($_POST['evaluation_form_type'] ?? 'iso');
     $form_type = in_array($form_type, ['iso', 'peac', 'both']) ? $form_type : 'iso';
-    // PEAC is exclusive to JHS department
+    // Requested department from schedule modal (validated below)
     $scheduled_department = trim($_POST['scheduled_department'] ?? '');
-    $peac_check_dept = !empty($scheduled_department) ? $scheduled_department : ($_SESSION['department'] ?? '');
-    if (($form_type === 'peac' || $form_type === 'both') && $peac_check_dept !== 'JHS') {
-        $form_type = 'iso';
-    }
 
     $valid_focus = ['communications', 'management', 'assessment', 'teacher_actions', 'student_learning_actions'];
     $focus = array_values(array_intersect($focus, $valid_focus));
@@ -260,18 +256,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $stmt->bindParam(':form_type', $form_type);
         $is_leader_role = in_array($_SESSION['role'], ['president', 'vice_president']);
         $stmt->bindValue(':scheduled_by', $is_leader_role ? $_SESSION['user_id'] : null, $is_leader_role ? PDO::PARAM_INT : PDO::PARAM_NULL);
-        // Always store scheduled_department: leaders use selected dept, deans/coordinators use their own dept
-        if ($is_leader_role && !empty($scheduled_department)) {
+        // Resolve teacher departments (primary + secondary)
+        $teacher_dept_stmt = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
+        $teacher_dept_stmt->bindParam(':id', $teacher_id);
+        $teacher_dept_stmt->execute();
+        $teacher_primary_dept = trim((string)$teacher_dept_stmt->fetchColumn());
+        $teacher_all_depts = [];
+        if ($teacher_primary_dept !== '') $teacher_all_depts[] = $teacher_primary_dept;
+        try {
+            if ($db) {
+                $teacher_sec_stmt = $db->prepare("SELECT department FROM teacher_departments WHERE teacher_id = :id");
+                $teacher_sec_stmt->execute([':id' => $teacher_id]);
+                while ($sec_dept = $teacher_sec_stmt->fetchColumn()) {
+                    $sec_dept = trim((string)$sec_dept);
+                    if ($sec_dept !== '' && !in_array($sec_dept, $teacher_all_depts, true)) {
+                        $teacher_all_depts[] = $sec_dept;
+                    }
+                }
+            }
+        } catch (Exception $e) {}
+
+        // For non-leaders: allow selected department when evaluator is assigned to this teacher
+        // or when selected department matches evaluator's home department.
+        $is_assigned_to_teacher = false;
+        if (!$is_leader_role) {
+            try {
+                $assign_chk = $db->prepare("SELECT 1 FROM teacher_assignments WHERE teacher_id = :tid AND evaluator_id = :eid LIMIT 1");
+                $assign_chk->execute([':tid' => $teacher_id, ':eid' => $_SESSION['user_id']]);
+                $is_assigned_to_teacher = (bool)$assign_chk->fetchColumn();
+            } catch (Exception $e) {}
+        }
+
+        $user_dept = trim((string)($_SESSION['department'] ?? ''));
+        $can_use_selected_dept =
+            $scheduled_department !== '' &&
+            in_array($scheduled_department, $teacher_all_depts, true) &&
+            (
+                $is_leader_role ||
+                $scheduled_department === $user_dept ||
+                $is_assigned_to_teacher
+            );
+
+        if ($can_use_selected_dept) {
             $sched_dept_val = $scheduled_department;
         } else {
-            // Use the teacher's department so the correct dean can see the schedule
-            $teacher_dept_stmt = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
-            $teacher_dept_stmt->bindParam(':id', $teacher_id);
-            $teacher_dept_stmt->execute();
-            $teacher_dept_val = $teacher_dept_stmt->fetchColumn();
-            $sched_dept_val = ($teacher_dept_val !== false && trim($teacher_dept_val) !== '')
-                ? trim($teacher_dept_val)
-                : ($_SESSION['department'] ?? null);
+            // Fallback to teacher's primary department
+            $sched_dept_val = $teacher_primary_dept !== '' ? $teacher_primary_dept : ($user_dept !== '' ? $user_dept : null);
+        }
+
+        // PEAC is exclusive to JHS department
+        if (($form_type === 'peac' || $form_type === 'both') && $sched_dept_val !== 'JHS') {
+            $form_type = 'iso';
+            $stmt->bindParam(':form_type', $form_type);
         }
         $stmt->bindValue(':scheduled_department', $sched_dept_val);
         $stmt->bindParam(':id', $teacher_id);
@@ -656,8 +692,10 @@ if ($is_leader) {
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
               LEFT JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :assigned_evaluator_id
+              LEFT JOIN users tu ON tu.id = t.user_id
               WHERE (ta.evaluator_id IS NOT NULL OR e.evaluator_id = :evaluator_id)
               AND (t.user_id IS NULL OR t.user_id != :current_user_id)
+              AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
               AND e.academic_year = :academic_year
               AND e.semester = :semester
               ORDER BY t.name ASC";
@@ -751,10 +789,12 @@ if ($is_leader) {
                            t.scheduled_by, t.scheduled_department
                     FROM teachers t
                     JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :assigned_evaluator_id
+                    LEFT JOIN users tu ON tu.id = t.user_id
                     WHERE t.status = 'active'
                       AND t.evaluation_schedule IS NOT NULL
                       AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                       AND (t.user_id IS NULL OR t.user_id != :current_user_id)
+                      AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
                       AND t.id NOT IN (
                           SELECT DISTINCT e2.teacher_id FROM evaluations e2
                           WHERE e2.academic_year = :academic_year AND e2.semester = :semester
@@ -891,22 +931,24 @@ foreach ($eval_teachers as $t) {
     }
 
     // Get observers — based on the department that owns this schedule/evaluation
-    // Determine the "owning" department: scheduled_department > evaluator's dept > teacher's primary dept
+    // Determine the "owning" department: scheduled_department > teacher's primary dept > evaluator's dept
     $sched_dept_val = $t['scheduled_department'] ?? '';
     $teacher_primary_dept = $t['teacher_department'] ?? '';
     $is_secondary_dept = !empty($raw_department) && $teacher_primary_dept !== $raw_department;
 
     // For leaders: find which department this evaluation belongs to
     if ($is_leader) {
-        // Determine owning dept: use scheduled_department if set, otherwise detect from evaluator's department
+        // Determine owning dept: use scheduled_department first, then teacher's primary dept
         $owning_dept = '';
         if (!empty($sched_dept_val)) {
             $owning_dept = $sched_dept_val;
+        } elseif (!empty($teacher_primary_dept)) {
+            $owning_dept = $teacher_primary_dept;
         } else {
-            // Check the evaluator's department from the evaluation record
+            // Fallback for legacy rows with missing teacher/scheduled department
             $eval_dept_stmt = $db->prepare("SELECT DISTINCT u.department FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem AND u.department IS NOT NULL LIMIT 1");
             $eval_dept_stmt->execute([':tid' => $tid, ':ay' => $academic_year, ':sem' => $semester]);
-            $owning_dept = $eval_dept_stmt->fetchColumn() ?: $teacher_primary_dept;
+            $owning_dept = $eval_dept_stmt->fetchColumn() ?: '';
         }
         if (empty($owning_dept)) $owning_dept = $teacher_primary_dept;
 
@@ -916,10 +958,10 @@ foreach ($eval_teachers as $t) {
         $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':dept' => $owning_dept]);
         $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-        // Show assigned observers from the owning department (coordinators) + presidents/VPs who have accepted as observers
-        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :dept OR u.role IN ('president', 'vice_president')) ORDER BY u.name";
+        // Show all explicitly assigned observers (cross-department assignments are valid)
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
         $assign_stmt = $db->prepare($assign_query);
-        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $owning_dept]);
+        $assign_stmt->execute([':teacher_id' => $tid]);
         $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     } else {
         $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
@@ -1074,15 +1116,9 @@ foreach ($scheduled_teachers as $t) {
     $is_secondary_dept = !empty($raw_department) && ($t['teacher_department'] ?? '') !== $raw_department;
     if ($is_leader) {
         // For leaders: show assigned coordinators from the owning department
-        if (!empty($owning_dept)) {
-            $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
-            $assign_stmt = $db->prepare($assign_query);
-            $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $owning_dept]);
-        } else {
-            $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
-            $assign_stmt = $db->prepare($assign_query);
-            $assign_stmt->execute([':teacher_id' => $tid]);
-        }
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid]);
     } elseif ($is_secondary_dept) {
         $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
         $assign_stmt = $db->prepare($assign_query);
@@ -1202,7 +1238,7 @@ if ($is_leader) {
     $st_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                         t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                         t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
-                        t.evaluation_form_type
+                        t.evaluation_form_type, t.scheduled_department
                  FROM teachers t
                  WHERE t.status = 'active'
                    AND (t.user_id IS NULL OR t.user_id != :current_user_id)
@@ -1213,11 +1249,13 @@ if ($is_leader) {
     $st_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                         t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                         t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
-                        t.evaluation_form_type
+                        t.evaluation_form_type, t.scheduled_department
                  FROM teachers t
                  JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id
+                 LEFT JOIN users tu ON tu.id = t.user_id
                  WHERE t.status = 'active'
                    AND (t.user_id IS NULL OR t.user_id != :current_user_id)
+                   AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
                  ORDER BY t.name ASC";
     $st_stmt = $db->prepare($st_query);
     $st_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
@@ -1226,7 +1264,7 @@ if ($is_leader) {
     $st_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                         t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                         t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
-                        t.evaluation_form_type
+                        t.evaluation_form_type, t.scheduled_department
                  FROM teachers t
                  LEFT JOIN teacher_departments td ON td.teacher_id = t.id
                  WHERE (t.department = :department OR td.department = :department2)
@@ -1243,14 +1281,28 @@ $schedulable_teachers = $st_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Build teacher departments map for modal (primary + secondary departments per teacher)
 $teacher_depts_map = [];
+foreach ($schedulable_teachers as $st) {
+    $tid = (int)$st['id'];
+    $depts = [$st['teacher_department']];
+    if (isset($teacher_sec_depts[$tid])) {
+        $depts = array_unique(array_merge($depts, $teacher_sec_depts[$tid]));
+    }
+    $teacher_depts_map[$tid] = array_values(array_filter($depts));
+}
+
+// Departments current evaluator can schedule for in this modal
+$schedule_available_departments = [];
 if ($is_leader) {
-    foreach ($schedulable_teachers as $st) {
-        $tid = (int)$st['id'];
-        $depts = [$st['teacher_department']];
-        if (isset($teacher_sec_depts[$tid])) {
-            $depts = array_unique(array_merge($depts, $teacher_sec_depts[$tid]));
+    $schedule_available_departments = $all_departments;
+} else {
+    $self_dept = trim((string)($_SESSION['department'] ?? ''));
+    if ($self_dept !== '') $schedule_available_departments[] = $self_dept;
+    foreach ($teacher_depts_map as $depts) {
+        foreach ($depts as $d) {
+            if (!in_array($d, $schedule_available_departments, true)) {
+                $schedule_available_departments[] = $d;
+            }
         }
-        $teacher_depts_map[$tid] = array_values(array_filter($depts));
     }
 }
 
@@ -1348,6 +1400,19 @@ try {
         .print-only { display: none; }
         .no-print {}
 
+        /* Keep Set Schedule modal compact for leaders and evaluators */
+        #scheduleModal .modal-dialog {
+            max-width: 760px;
+            width: calc(100% - 1.5rem);
+            margin: 1rem auto;
+        }
+        #scheduleModal .modal-content {
+            max-height: calc(100vh - 2rem);
+        }
+        #scheduleModal .modal-body {
+            overflow-y: auto;
+        }
+
         @media print {
             @page {
                 size: landscape;
@@ -1392,6 +1457,16 @@ try {
             .plan-table th,
             .plan-table td {
                 border: 1.5px solid #000 !important;
+            }
+        }
+        @media (max-width: 768px) {
+            #scheduleModal .modal-dialog {
+                max-width: 100%;
+                width: calc(100% - 1rem);
+                margin: 0.5rem auto;
+            }
+            #scheduleModal .modal-content {
+                max-height: calc(100vh - 1rem);
             }
         }
     </style>
@@ -1910,8 +1985,9 @@ try {
                                     data-subject="<?php echo htmlspecialchars($st['evaluation_subject'] ?? '', ENT_QUOTES); ?>"
                                     data-semester="<?php echo htmlspecialchars($st['evaluation_semester'] ?? '', ENT_QUOTES); ?>"
                                     data-form-type="<?php echo htmlspecialchars($st['evaluation_form_type'] ?? 'iso', ENT_QUOTES); ?>"
+                                    data-scheduled-department="<?php echo htmlspecialchars($st['scheduled_department'] ?? '', ENT_QUOTES); ?>"
                                     <?php echo !empty($st['evaluation_schedule']) ? 'data-has-schedule="1"' : ''; ?>
-                                    <?php if ($is_leader && isset($teacher_depts_map[(int)$st['id']])): ?>
+                                    <?php if (isset($teacher_depts_map[(int)$st['id']])): ?>
                                     data-departments="<?php echo htmlspecialchars(json_encode($teacher_depts_map[(int)$st['id']]), ENT_QUOTES); ?>"
                                     <?php endif; ?>
                                 >
@@ -2062,14 +2138,7 @@ const userDept = '<?php echo htmlspecialchars($_SESSION['department'] ?? ''); ?>
 const allDepartments = ['ELEM', 'JHS', 'SHS', 'CCIS', 'CAS', 'CTEAS', 'CBM', 'CTHM', 'CCJE'];
 
 // Determine which departments the current user can set schedules for
-let availableDepartments = [];
-if (userRole === 'president' || userRole === 'vice_president') {
-    // Leaders can set for any department
-    availableDepartments = allDepartments;
-} else if (userRole === 'dean' || userRole === 'principal' || userRole === 'chairperson' || userRole === 'subject_coordinator' || userRole === 'grade_level_coordinator') {
-    // Other evaluators can only set for their own department
-    availableDepartments = userDept ? [userDept] : [];
-}
+let availableDepartments = <?php echo json_encode(array_values($schedule_available_departments)); ?>;
 
 // Map departments to display names
 const departmentMap = {
@@ -2278,6 +2347,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const subject = opt.dataset.subject || '';
             const semester = opt.dataset.semester || '';
             const formType = opt.dataset.formType || 'iso';
+            const scheduledDept = opt.dataset.scheduledDepartment || '';
 
             document.getElementById('modal_evaluation_room').value = room;
             document.getElementById('modal_evaluation_subject_area').value = subjectArea;
@@ -2285,8 +2355,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Set form type radio
             document.getElementById('modal_form_iso').checked = (formType === 'iso');
-            document.getElementById('modal_form_peac').checked = (formType === 'peac');
-            document.getElementById('modal_form_both').checked = (formType === 'both');
+            const peacRadio = document.getElementById('modal_form_peac');
+            const bothRadio = document.getElementById('modal_form_both');
+            if (peacRadio) peacRadio.checked = (formType === 'peac');
+            if (bothRadio) bothRadio.checked = (formType === 'both');
             // Toggle focus visibility
             document.getElementById('focusObservationGroup').style.display = '';
             document.getElementById('isoFocusCheckboxes').style.display = (formType === 'peac') ? 'none' : '';
@@ -2341,16 +2413,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 deptSelect.innerHTML = '<option value="">-- Select department --</option>';
                 const deptsJson = opt.dataset.departments || '[]';
                 try {
-                    const depts = JSON.parse(deptsJson);
-                    depts.forEach(d => {
+                    const teacherDepts = JSON.parse(deptsJson);
+                    let finalDepts = Array.isArray(teacherDepts) ? teacherDepts.filter(d => availableDepartments.includes(d)) : [];
+                    if (finalDepts.length === 0) finalDepts = availableDepartments.slice();
+                    finalDepts.forEach(d => {
                         const o = document.createElement('option');
                         o.value = d;
-                        o.textContent = d;
+                        o.textContent = departmentMap[d] || d;
                         deptSelect.appendChild(o);
                     });
-                    // Auto-select if only one department
-                    if (depts.length === 1) {
-                        deptSelect.value = depts[0];
+                    // Prefer existing scheduled department if still valid
+                    if (scheduledDept && finalDepts.includes(scheduledDept)) {
+                        deptSelect.value = scheduledDept;
+                    } else if (finalDepts.length === 1) {
+                        deptSelect.value = finalDepts[0];
                     }
                 } catch(e) {}
                 // Update PEAC/Both visibility based on department

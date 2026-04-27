@@ -39,7 +39,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // Get inactive teachers for current department
 if (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
     $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
-    $query = "SELECT t.* FROM teachers t JOIN teacher_assignments ta ON ta.teacher_id = t.id WHERE ta.evaluator_id = :evaluator_id AND t.status = 'inactive'";
+    $query = "SELECT DISTINCT t.*
+              FROM teachers t
+              JOIN teacher_assignments ta ON ta.teacher_id = t.id
+              LEFT JOIN users tu ON tu.id = t.user_id
+              WHERE ta.evaluator_id = :evaluator_id
+                AND t.status = 'inactive'
+                AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))";
     if (!empty($programs)) {
         $placeholders = [];
         foreach ($programs as $idx => $dept) {
