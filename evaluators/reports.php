@@ -8,6 +8,7 @@ if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_co
 require_once '../config/database.php';
 require_once '../models/Evaluation.php';
 require_once '../models/Teacher.php';
+require_once '../includes/program_assignments.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -30,7 +31,32 @@ $department_map = [
 ];
 
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
-$raw_department = $is_leader ? (string)($_GET['department'] ?? '') : (string)($_SESSION['department'] ?? '');
+$is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
+$all_departments = array_keys($department_map);
+$session_department = trim((string)($_SESSION['department'] ?? ''));
+$requested_department = trim((string)($_GET['department'] ?? ''));
+$available_filter_departments = [];
+if ($is_leader) {
+    $available_filter_departments = $all_departments;
+    $raw_department = in_array($requested_department, $available_filter_departments, true) ? $requested_department : '';
+} elseif ($is_coordinator) {
+    $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $session_department);
+    foreach ($programs as $p) {
+        $p = trim((string)$p);
+        if (in_array($p, $all_departments, true) && !in_array($p, $available_filter_departments, true)) {
+            $available_filter_departments[] = $p;
+        }
+    }
+    if (empty($available_filter_departments) && $session_department !== '' && in_array($session_department, $all_departments, true)) {
+        $available_filter_departments[] = $session_department;
+    }
+    $raw_department = in_array($requested_department, $available_filter_departments, true)
+        ? $requested_department
+        : ($available_filter_departments[0] ?? $session_department);
+} else {
+    $available_filter_departments = $session_department !== '' ? [$session_department] : [];
+    $raw_department = $session_department;
+}
 $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
 
 $scoped_evaluator_id = $_SESSION['user_id'] ?? null;
@@ -194,6 +220,13 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             padding: 10px 8px;
             border: 1px solid #ddd;
             vertical-align: top;
+        }
+        .report-table th.form-type-col,
+        .report-table td.form-type-col {
+            white-space: nowrap;
+            min-width: 90px;
+            text-align: center;
+            word-break: normal;
         }
         .report-table td ul {
             margin: 0;
@@ -535,8 +568,10 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                     <div class="col-md-2">
                         <label for="department" class="form-label">Department</label>
                         <select class="form-select" id="department" name="department">
+                            <?php if ($is_leader): ?>
                             <option value="">All Departments</option>
-                            <?php foreach ($department_map as $code => $name): ?>
+                            <?php endif; ?>
+                            <?php foreach (($is_leader ? $all_departments : $available_filter_departments) as $code): ?>
                                 <option value="<?php echo htmlspecialchars($code); ?>" <?php echo $raw_department === $code ? 'selected' : ''; ?>><?php echo htmlspecialchars($code); ?></option>
                             <?php endforeach; ?>
                         </select>
@@ -639,15 +674,15 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                     <table class="report-table">
                         <thead>
                             <tr>
-                                <th width="10%">Date</th>
-                                <th width="10%">Name of Teacher Observed</th>
-                                <th width="10%">Subject/Class Schedule</th>
+                                <th width="9%">Date</th>
+                                <th width="11%">Name of Teacher Observed</th>
+                                <th width="11%">Subject/Class Schedule</th>
                                 <th width="20%">Strength</th>
-                                <th width="15%">Areas for Improvement</th>
-                                <th width="15%">Recommendation/s</th>
-                                <th width="10%">Agreement</th>
-                                <th width="10%">Ratings</th>
-                                <th width="8%" class="no-print">Form Type</th>
+                                <th width="14%">Areas for Improvement</th>
+                                <th width="14%">Recommendation/s</th>
+                                <th width="7%">Agreement</th>
+                                <th width="8%">Ratings</th>
+                                <th width="6%" class="no-print form-type-col">Form Type</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -801,7 +836,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                             </span>
                                         </div>
                                     </td>
-                                    <td class="no-print text-center">
+                                    <td class="no-print text-center form-type-col">
                                         <?php $ft = $eval['evaluation_form_type'] ?? 'iso'; ?>
                                         <span class="badge <?php echo $ft === 'peac' ? 'bg-success' : 'bg-primary'; ?>"><?php echo strtoupper($ft); ?></span>
                                     </td>

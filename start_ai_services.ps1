@@ -21,6 +21,11 @@ try {
 # ── 2. Find a working Python interpreter ──
 $systemPython = $null
 
+# If project virtualenv already exists, prefer it and skip PATH discovery.
+if (Test-Path $pythonExe) {
+    Write-Host "Using existing virtual environment Python: $pythonExe" -ForegroundColor Cyan
+}
+
 # Try 'py' launcher first (most reliable on Windows)
 try {
     $pyVersion = & py -3 --version 2>&1
@@ -31,7 +36,7 @@ try {
 } catch { }
 
 # Try 'python' command
-if (-not $systemPython) {
+if ((-not (Test-Path $pythonExe)) -and (-not $systemPython)) {
     try {
         $pyVersion = & python --version 2>&1
         if ($pyVersion -match 'Python \d') {
@@ -42,7 +47,7 @@ if (-not $systemPython) {
 }
 
 # Try 'python3' command
-if (-not $systemPython) {
+if ((-not (Test-Path $pythonExe)) -and (-not $systemPython)) {
     try {
         $pyVersion = & python3 --version 2>&1
         if ($pyVersion -match 'Python \d') {
@@ -52,7 +57,7 @@ if (-not $systemPython) {
     } catch { }
 }
 
-if (-not $systemPython) {
+if ((-not (Test-Path $pythonExe)) -and (-not $systemPython)) {
     Write-Host '' -ForegroundColor Red
     Write-Host '====================================================' -ForegroundColor Red
     Write-Host '  Python is NOT installed on this computer.' -ForegroundColor Red
@@ -86,9 +91,13 @@ if (-not (Test-Path $pythonExe)) {
 # ── 4. Install / update dependencies ──
 if (Test-Path $requirementsFile) {
     Write-Host 'Installing Python dependencies (this may take a few minutes the first time)...' -ForegroundColor Cyan
-    & $pythonExe -m pip install --upgrade pip --quiet 2>&1 | Out-Null
-    & $pythonExe -m pip install -r $requirementsFile --quiet
-    Write-Host 'Dependencies installed.' -ForegroundColor Green
+    try {
+        & $pythonExe -m pip install --upgrade pip --quiet 2>&1 | Out-Null
+        & $pythonExe -m pip install -r $requirementsFile --quiet
+        Write-Host 'Dependencies installed.' -ForegroundColor Green
+    } catch {
+        Write-Host 'Dependency install skipped (offline/unreachable). Continuing with existing environment...' -ForegroundColor Yellow
+    }
 } else {
     Write-Host "Warning: requirements.txt not found at $requirementsFile" -ForegroundColor Yellow
 }

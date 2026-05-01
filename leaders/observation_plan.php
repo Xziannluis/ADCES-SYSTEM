@@ -147,6 +147,23 @@ $scheduled_teachers = $sched_stmt->fetchAll(PDO::FETCH_ASSOC);
 // Build combined teachers list and data maps
 $eval_data = [];
 $observer_map = [];
+$enforce_observer_for_teacher = function(array $observer_list, string $teacher_name): array {
+    $required_observer = 'RONNIEL G. BABANO';
+    $is_arvin = strcasecmp(trim($teacher_name), 'ARVIN CLARK VICENTE') === 0;
+
+    if (!$is_arvin) {
+        return $observer_list;
+    }
+
+    foreach ($observer_list as $name) {
+        if (strcasecmp(trim((string) $name), $required_observer) === 0) {
+            return $observer_list;
+        }
+    }
+
+    $observer_list[] = $required_observer;
+    return $observer_list;
+};
 $schedule_data = [];
 $dean_name = $_SESSION['name'] ?? '';
 $seen_ids = [];
@@ -246,6 +263,7 @@ foreach ($eval_teachers as $t) {
         $sb_name = $sb_stmt->fetchColumn();
         if ($sb_name) {
             $observer_map[$tid] = [$sb_name];
+            $observer_map[$tid] = $enforce_observer_for_teacher($observer_map[$tid], (string) ($t['name'] ?? ''));
             continue;
         }
     }
@@ -270,6 +288,7 @@ foreach ($eval_teachers as $t) {
         }));
         if (!empty($dean_only)) $observer_map[$tid] = $dean_only;
     }
+    $observer_map[$tid] = $enforce_observer_for_teacher($observer_map[$tid], (string) ($t['name'] ?? ''));
 }
 
 // Process scheduled-only teachers
@@ -325,6 +344,7 @@ foreach ($scheduled_teachers as $t) {
         $sb_name = $sb_stmt->fetchColumn();
         if ($sb_name) {
             $observer_map[$tid] = [$sb_name];
+            $observer_map[$tid] = $enforce_observer_for_teacher($observer_map[$tid], (string) ($t['name'] ?? ''));
             continue;
         }
     }
@@ -349,6 +369,7 @@ foreach ($scheduled_teachers as $t) {
         }));
         if (!empty($dean_only)) $observer_map[$tid] = $dean_only;
     }
+    $observer_map[$tid] = $enforce_observer_for_teacher($observer_map[$tid], (string) ($t['name'] ?? ''));
 }
 
 // Filter by month if selected

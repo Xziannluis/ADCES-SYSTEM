@@ -13,6 +13,7 @@ if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_co
 require_once '../config/database.php';
 require_once '../models/Evaluation.php';
 require_once '../models/Teacher.php';
+require_once '../includes/program_assignments.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -33,7 +34,32 @@ $department_map = [
 ];
 
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
-$raw_department = $is_leader ? (string)($_GET['department'] ?? '') : (string)($_SESSION['department'] ?? '');
+$is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
+$all_departments = array_keys($department_map);
+$session_department = trim((string)($_SESSION['department'] ?? ''));
+$requested_department = trim((string)($_GET['department'] ?? ''));
+$available_filter_departments = [];
+if ($is_leader) {
+    $available_filter_departments = $all_departments;
+    $raw_department = in_array($requested_department, $available_filter_departments, true) ? $requested_department : '';
+} elseif ($is_coordinator) {
+    $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $session_department);
+    foreach ($programs as $p) {
+        $p = trim((string)$p);
+        if (in_array($p, $all_departments, true) && !in_array($p, $available_filter_departments, true)) {
+            $available_filter_departments[] = $p;
+        }
+    }
+    if (empty($available_filter_departments) && $session_department !== '' && in_array($session_department, $all_departments, true)) {
+        $available_filter_departments[] = $session_department;
+    }
+    $raw_department = in_array($requested_department, $available_filter_departments, true)
+        ? $requested_department
+        : ($available_filter_departments[0] ?? $session_department);
+} else {
+    $available_filter_departments = $session_department !== '' ? [$session_department] : [];
+    $raw_department = $session_department;
+}
 $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
 
 // President/Vice-president should only see their own evaluations (filter by evaluator_id)

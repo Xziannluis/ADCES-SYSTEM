@@ -63,6 +63,14 @@ if ($is_leader) {
     while ($acc_row = $acc_stmt->fetch(PDO::FETCH_ASSOC)) {
         $leader_accepted_teachers[(int)$acc_row['teacher_id']] = true;
     }
+    // Backward compatibility: leader who set the schedule is treated as accepted observer.
+    try {
+        $sched_by_me_stmt = $db->prepare("SELECT id FROM teachers WHERE scheduled_by = :eid AND evaluation_schedule IS NOT NULL");
+        $sched_by_me_stmt->execute([':eid' => $_SESSION['user_id']]);
+        while ($sched_tid = $sched_by_me_stmt->fetchColumn()) {
+            $leader_accepted_teachers[(int)$sched_tid] = true;
+        }
+    } catch (Exception $e) {}
 } elseif (in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
     // Coordinators see teachers assigned to them (cross-department through assignments)
     $assignedPrograms = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
@@ -1426,6 +1434,13 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             document.getElementById('teacherSelection').classList.add('d-none');
             document.getElementById('evaluationFormContainer').classList.remove('d-none');
             document.getElementById('selected_teacher_id').value = teacherId;
+            // Ensure user starts at the top of the form instead of keeping old list scroll position
+            const formTop = document.getElementById('evaluationFormContainer');
+            if (formTop) {
+                formTop.scrollIntoView({ behavior: 'auto', block: 'start' });
+            } else {
+                window.scrollTo(0, 0);
+            }
 
             const teacherItem = document.querySelector(`.teacher-item[data-teacher-id="${teacherId}"]`);
 

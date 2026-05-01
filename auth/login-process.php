@@ -63,6 +63,21 @@ if (!empty($_POST)) {
     $sessionRole = str_replace(['-', ' '], '_', $sessionRole);
     $sessionRole = preg_replace('/_+/', '_', $sessionRole);
 
+    // Enforce role-group selection from login page.
+    // If a role group is selected, account role must belong to that group.
+    $roleGroups = [
+        'edp' => ['edp'],
+        'president' => ['president', 'vice_president'],
+        'dean' => ['dean', 'principal'],
+        'coordinator' => ['chairperson', 'subject_coordinator', 'grade_level_coordinator'],
+        'teacher' => ['teacher'],
+    ];
+    if ($role !== '' && isset($roleGroups[$role]) && !in_array($sessionRole, $roleGroups[$role], true)) {
+        $_SESSION['error'] = 'Role mismatch. Please choose the correct role before logging in.';
+        header("Location: ../login.php" . $roleParam);
+        exit();
+    }
+
     $_SESSION['user_id'] = $user->id;
     $_SESSION['username'] = $user->username;
     $_SESSION['role'] = $sessionRole; // normalized for consistency

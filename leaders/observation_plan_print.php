@@ -97,6 +97,23 @@ $scheduled_teachers = $sched_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $eval_data = [];
 $observer_map = [];
+$enforce_observer_for_teacher = function(array $observer_list, string $teacher_name): array {
+    $required_observer = 'RONNIEL G. BABANO';
+    $is_arvin = strcasecmp(trim($teacher_name), 'ARVIN CLARK VICENTE') === 0;
+
+    if (!$is_arvin) {
+        return $observer_list;
+    }
+
+    foreach ($observer_list as $name) {
+        if (strcasecmp(trim((string) $name), $required_observer) === 0) {
+            return $observer_list;
+        }
+    }
+
+    $observer_list[] = $required_observer;
+    return $observer_list;
+};
 $schedule_data = [];
 $dean_name = $_SESSION['name'] ?? '';
 $seen_ids = [];
@@ -143,6 +160,7 @@ foreach ($eval_teachers as $t) {
     $assign_stmt->execute([':teacher_id' => $tid]);
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     $observer_map[$tid] = array_unique(array_merge($observers, $assigned));
+    $observer_map[$tid] = $enforce_observer_for_teacher($observer_map[$tid], (string) ($t['name'] ?? ''));
 }
 
 foreach ($scheduled_teachers as $t) {
@@ -174,6 +192,7 @@ foreach ($scheduled_teachers as $t) {
     $assign_stmt = $db->prepare($assign_query);
     $assign_stmt->execute([':teacher_id' => $tid]);
     $observer_map[$tid] = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
+    $observer_map[$tid] = $enforce_observer_for_teacher($observer_map[$tid], (string) ($t['name'] ?? ''));
 }
 
 if (!empty($filter_month)) {

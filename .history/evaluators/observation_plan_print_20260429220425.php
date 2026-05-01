@@ -11,7 +11,6 @@ if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_co
 
 require_once '../config/database.php';
 require_once '../models/Teacher.php';
-require_once '../includes/program_assignments.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -30,33 +29,10 @@ $department_map = [
 ];
 
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
-$is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
-$all_departments = array_keys($department_map);
-$session_department = trim((string)($_SESSION['department'] ?? ''));
-$requested_department = trim((string)($_GET['department'] ?? ''));
-$available_filter_departments = [];
-if ($is_leader) {
-    $available_filter_departments = $all_departments;
-    $raw_department = in_array($requested_department, $available_filter_departments, true) ? $requested_department : '';
-} elseif ($is_coordinator) {
-    $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $session_department);
-    foreach ($programs as $p) {
-        $p = trim((string)$p);
-        if (in_array($p, $all_departments, true) && !in_array($p, $available_filter_departments, true)) {
-            $available_filter_departments[] = $p;
-        }
-    }
-    if (empty($available_filter_departments) && $session_department !== '' && in_array($session_department, $all_departments, true)) {
-        $available_filter_departments[] = $session_department;
-    }
-    $raw_department = in_array($requested_department, $available_filter_departments, true)
-        ? $requested_department
-        : ($available_filter_departments[0] ?? $session_department);
-} else {
-    $available_filter_departments = $session_department !== '' ? [$session_department] : [];
-    $raw_department = $session_department;
-}
+$raw_department = $is_leader ? (string)($_GET['department'] ?? '') : (string)($_SESSION['department'] ?? '');
 $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
+
+$is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
 
 $semester = $_GET['semester'] ?? '1st';
 $academic_year = $_GET['academic_year'] ?? '';
@@ -76,7 +52,7 @@ if (empty($academic_year)) {
 if ($is_leader) {
     // Leaders see ALL evaluated teachers across all departments (or filtered by GET department)
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                     t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                     t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                      e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
@@ -88,30 +64,18 @@ if ($is_leader) {
               WHERE e.academic_year = :academic_year
               AND e.semester = :semester";
     if ($raw_department !== '') {
-        $query .= " AND (
-                        (
-                            t.scheduled_department IS NOT NULL
-                            AND t.scheduled_department <> ''
-                            AND t.scheduled_department = :department_sched
-                        )
-                        OR
-                        (
-                            (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                            AND t.department = :department_primary
-                        )
-                      )";
+        $query .= " AND t.department = :department";
     }
     $query .= " ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
     if ($raw_department !== '') {
-        $stmt->bindParam(':department_sched', $raw_department);
-        $stmt->bindParam(':department_primary', $raw_department);
+        $stmt->bindParam(':department', $raw_department);
     }
 } elseif ($is_coordinator) {
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                     t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                     t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                      e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
@@ -137,7 +101,7 @@ if ($is_leader) {
     $stmt->bindParam(':semester', $semester);
 } else {
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                     t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                     t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                      e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
@@ -146,26 +110,13 @@ if ($is_leader) {
                      t.scheduled_by, t.scheduled_department
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
-              WHERE (
-                    (
-                        t.scheduled_department IS NOT NULL
-                        AND t.scheduled_department <> ''
-                        AND t.scheduled_department = :department_sched
-                    )
-                    OR
-                    (
-                        (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                        AND t.department = :department_primary
-                    )
-                    OR e.evaluator_id = :evaluator_id
-              )
+              WHERE (t.department = :department OR e.evaluator_id = :evaluator_id)
               AND (t.user_id IS NULL OR t.user_id != :current_user_id)
               AND e.academic_year = :academic_year
               AND e.semester = :semester
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':department_sched', $raw_department);
-    $stmt->bindParam(':department_primary', $raw_department);
+    $stmt->bindParam(':department', $raw_department);
     $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $stmt->bindParam(':academic_year', $academic_year);
@@ -177,7 +128,7 @@ $eval_teachers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // Scheduled-only teachers (also picks up re-scheduled teachers who already have evaluations)
 if ($is_leader) {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                           t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                           t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                            t.scheduled_by, t.scheduled_department
                     FROM teachers t
@@ -186,29 +137,17 @@ if ($is_leader) {
                       AND t.evaluation_schedule != ''
                       AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')";
     if ($raw_department !== '') {
-        $sched_query .= " AND (
-                            (
-                                t.scheduled_department IS NOT NULL
-                                AND t.scheduled_department <> ''
-                                AND t.scheduled_department = :department_sched
-                            )
-                            OR
-                            (
-                                (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                                AND t.department = :department_primary
-                            )
-                          )";
+        $sched_query .= " AND t.department = :department";
     }
     $sched_query .= " ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
     $sched_stmt->bindParam(':filter_semester', $semester);
     if ($raw_department !== '') {
-        $sched_stmt->bindParam(':department_sched', $raw_department);
-        $sched_stmt->bindParam(':department_primary', $raw_department);
+        $sched_stmt->bindParam(':department', $raw_department);
     }
 } elseif ($is_coordinator) {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                           t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                           t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                            t.scheduled_by, t.scheduled_department
                     FROM teachers t
@@ -229,22 +168,11 @@ if ($is_leader) {
     $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
 } else {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                           t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                           t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                            t.scheduled_by, t.scheduled_department
                     FROM teachers t
-                    WHERE (
-                        (
-                            t.scheduled_department IS NOT NULL
-                            AND t.scheduled_department <> ''
-                            AND t.scheduled_department = :department_sched
-                        )
-                        OR
-                        (
-                            (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                            AND t.department = :department_primary
-                        )
-                    )
+                    WHERE t.department = :department
                       AND t.status = 'active'
                       AND t.evaluation_schedule IS NOT NULL
                       AND t.evaluation_schedule != ''
@@ -252,8 +180,7 @@ if ($is_leader) {
                       AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                     ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
-    $sched_stmt->bindParam(':department_sched', $raw_department);
-    $sched_stmt->bindParam(':department_primary', $raw_department);
+    $sched_stmt->bindParam(':department', $raw_department);
     $sched_stmt->bindParam(':filter_semester', $semester);
     $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
 }
@@ -410,23 +337,22 @@ foreach ($eval_teachers as $t) {
     $observer_map_by_tid[$tid] = $all_observers;
 }
 
-// For teachers with evaluations who ALSO have a NEW schedule (different datetime), add a second row
+// For teachers with evaluations who ALSO have a NEW schedule (different date), add a second row
 foreach ($eval_teachers as $t) {
     $tid = $t['id'];
     $sched_dt = $t['evaluation_schedule'] ?? '';
     $obs_date = $t['observation_date'] ?? '';
     if (empty($sched_dt)) continue;
 
-    $sched_dt_key = date('Y-m-d H:i', strtotime($sched_dt));
-    $obs_dt_key = !empty($obs_date) ? date('Y-m-d H:i', strtotime($obs_date)) : '';
-    if ($sched_dt_key === $obs_dt_key) continue;
+    $sched_date_only = date('Y-m-d', strtotime($sched_dt));
+    if ($sched_date_only === $obs_date) continue;
 
     $sched_key = $tid . '_sched';
     if (isset($seen_ids[$sched_key])) continue;
     $seen_ids[$sched_key] = true;
 
     $teachers_list[] = array_merge($t, ['_row_key' => $sched_key]);
-    $eval_data[$sched_key] = ['date' => $sched_dt_key, 'done' => false, 'faculty_signature' => '', 'eval_id' => null];
+    $eval_data[$sched_key] = ['date' => $sched_date_only, 'done' => false, 'faculty_signature' => '', 'eval_id' => null];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
     $focus_arr = [];
@@ -454,7 +380,7 @@ foreach ($scheduled_teachers as $t) {
     $teachers_list[] = array_merge($t, ['_row_key' => $tid]);
 
     $sched_dt = $t['evaluation_schedule'] ?? '';
-    $sched_date = !empty($sched_dt) ? date('Y-m-d H:i', strtotime($sched_dt)) : '';
+    $sched_date = !empty($sched_dt) ? date('Y-m-d', strtotime($sched_dt)) : '';
     $eval_data[$tid] = ['date' => $sched_date, 'done' => false, 'faculty_signature' => '', 'eval_id' => null];
 
     $focus_raw = $t['evaluation_focus'] ?? '';

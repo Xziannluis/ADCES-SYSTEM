@@ -8,7 +8,6 @@ if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_co
 require_once '../config/database.php';
 require_once '../models/Teacher.php';
 require_once '../includes/mailer.php';
-require_once '../includes/program_assignments.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -95,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $cancelled = 0;
     foreach ($teacher_ids as $teacher_id) {
         if ($teacher_id <= 0) continue;
-        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_schedule_end = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
+        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':id', $teacher_id);
         if ($stmt->execute()) {
@@ -508,29 +507,11 @@ $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
 $is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
 
 $all_departments = ['ELEM', 'JHS', 'SHS', 'CCIS', 'CAS', 'CTEAS', 'CBM', 'CTHM', 'CCJE'];
-$session_department = trim((string)($_SESSION['department'] ?? ''));
-$requested_department = trim((string)($_GET['department'] ?? ''));
-$available_filter_departments = [];
 if ($is_leader) {
-    $available_filter_departments = $all_departments;
-    $raw_department = in_array($requested_department, $available_filter_departments, true) ? $requested_department : '';
-} elseif ($is_coordinator) {
-    $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $session_department);
-    foreach ($programs as $p) {
-        $p = trim((string)$p);
-        if (in_array($p, $all_departments, true) && !in_array($p, $available_filter_departments, true)) {
-            $available_filter_departments[] = $p;
-        }
-    }
-    if (empty($available_filter_departments) && $session_department !== '' && in_array($session_department, $all_departments, true)) {
-        $available_filter_departments[] = $session_department;
-    }
-    $raw_department = in_array($requested_department, $available_filter_departments, true)
-        ? $requested_department
-        : ($available_filter_departments[0] ?? $session_department);
+    $filter_department = trim((string)($_GET['department'] ?? ''));
+    $raw_department = in_array($filter_department, $all_departments) ? $filter_department : '';
 } else {
-    $available_filter_departments = $session_department !== '' ? [$session_department] : [];
-    $raw_department = $session_department;
+    $raw_department = (string)($_SESSION['department'] ?? '');
 }
 $department_display = $raw_department === '' ? 'All Departments' : ($department_map[$raw_department] ?? $raw_department);
 
@@ -539,25 +520,6 @@ $semester = $_GET['semester'] ?? '1st';
 $academic_year = $_GET['academic_year'] ?? '';
 $filter_month = $_GET['month'] ?? '';
 $filter_status = $_GET['status'] ?? '';
-
-// Normalize department values (code <-> full label) so filters are consistent.
-$department_alias_to_code = [
-    'College of Computing and Information Sciences' => 'CCIS',
-    'College of Business and Management' => 'CBM',
-    'College of Arts and Sciences' => 'CAS',
-    'College of Criminal Justice Education' => 'CCJE',
-    'College of Tourism and Hospitality Management' => 'CTHM',
-    'College of Teacher Education, Arts and Sciences' => 'CTEAS',
-    'Elementary Department' => 'ELEM',
-    'Junior High School Department' => 'JHS',
-    'Senior High School Department' => 'SHS',
-];
-$normalize_dept = static function (string $dept) use ($department_alias_to_code): string {
-    $d = trim($dept);
-    if ($d === '') return '';
-    return $department_alias_to_code[$d] ?? $d;
-};
-$my_filter_department = $normalize_dept((string)($_GET['department_my'] ?? ''));
 
 // Auto-detect academic year if not set
 if (empty($academic_year)) {
@@ -585,38 +547,75 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
     $my_teacher_data = $t_stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($my_teacher_data) {
-        // Observer list for My Observation:
-        // use schedule owning department, and include President/VP only if accepted (assigned).
-        $my_sched_dept = $normalize_dept((string)($my_teacher_data['scheduled_department'] ?? ''));
-        if ($my_sched_dept === '') $my_sched_dept = $normalize_dept((string)($my_teacher_data['department'] ?? ''));
-        $obs_query = "SELECT DISTINCT u.name
-                      FROM teacher_assignments ta
-                      JOIN users u ON ta.evaluator_id = u.id
-                      WHERE ta.teacher_id = :tid
-                        AND (
-                            u.department = :dept
-                            OR u.role IN ('president','vice_president')
-                        )
-                        AND u.status = 'active'
-                      ORDER BY u.name";
+        // Get evaluators assigned to this teacher
+        $obs_query = "SELECT DISTINCT u.name, u.role FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :tid ORDER BY u.name";
         $obs_stmt = $db->prepare($obs_query);
-        $obs_stmt->execute([':tid' => $my_teacher_id, ':dept' => $my_sched_dept]);
-        $my_observer_names = $obs_stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        $obs_stmt->execute([':tid' => $my_teacher_id]);
+        $my_observers = $obs_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Always include dean/principal of the schedule-owning department.
-        if ($my_sched_dept !== '') {
-            $dean_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
-            $dean_stmt->execute([':dept' => $my_sched_dept]);
-            while ($dn = $dean_stmt->fetchColumn()) {
-                if (!in_array($dn, $my_observer_names, true)) {
-                    $my_observer_names[] = $dn;
+        // Get deans/principals from ALL departments this teacher belongs to (primary + secondary), excluding self
+        $my_all_depts = [$my_teacher_data['department']];
+        try {
+            $sec_stmt = $db->prepare("SELECT department FROM teacher_departments WHERE teacher_id = :tid");
+            $sec_stmt->execute([':tid' => $my_teacher_id]);
+            while ($sd = $sec_stmt->fetchColumn()) {
+                if (!in_array($sd, $my_all_depts)) $my_all_depts[] = $sd;
+            }
+        } catch (Exception $e) {}
+        $ph_depts = implode(',', array_fill(0, count($my_all_depts), '?'));
+        $dean_query = "SELECT DISTINCT name FROM users WHERE department IN ($ph_depts) AND role IN ('dean','principal') AND status = 'active' AND id != ? ORDER BY name";
+        $dean_stmt = $db->prepare($dean_query);
+        $dean_stmt->execute(array_merge($my_all_depts, [$_SESSION['user_id']]));
+        while ($dean_name_row = $dean_stmt->fetchColumn()) {
+            if (!in_array($dean_name_row, $my_observer_names)) $my_observer_names[] = $dean_name_row;
+        }
+
+        // Add assigned coordinators (unless current user is a coordinator — then only deans observe)
+        // Only include coordinators from the teacher's department(s)
+        if (!in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
+            // Filter observers by teacher's department(s)
+            $ph_depts_obs = implode(',', array_fill(0, count($my_all_depts), '?'));
+            $filtered_obs_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :tid AND u.department IN ($ph_depts_obs) ORDER BY u.name";
+            $filtered_obs_stmt = $db->prepare($filtered_obs_query);
+            $filtered_obs_stmt->execute(array_merge([$my_teacher_id], $my_all_depts));
+            while ($obs_name = $filtered_obs_stmt->fetchColumn()) {
+                if ($obs_name === ($_SESSION['name'] ?? '')) continue; // exclude self
+                if (!in_array($obs_name, $my_observer_names)) $my_observer_names[] = $obs_name;
+            }
+        }
+        // If President/VP scheduled this teacher, show them + department evaluators
+        $my_sched_by = $my_teacher_data['scheduled_by'] ?? null;
+        if ($my_sched_by) {
+            $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
+            $sb_stmt->execute([':id' => $my_sched_by]);
+            $sb_name = $sb_stmt->fetchColumn();
+            if ($sb_name) {
+                $my_observer_names = [$sb_name];
+                $my_sched_dept = $my_teacher_data['scheduled_department'] ?? '';
+                if (!empty($my_sched_dept)) {
+                    $dept_obs_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator') AND status = 'active' AND id != :setter_id ORDER BY name");
+                    $dept_obs_stmt->execute([':dept' => $my_sched_dept, ':setter_id' => $my_sched_by]);
+                    while ($dn = $dept_obs_stmt->fetchColumn()) {
+                        if (!in_array($dn, $my_observer_names)) $my_observer_names[] = $dn;
+                    }
+                }
+                // Exclude self from observer list
+                $my_own_name = $_SESSION['name'] ?? '';
+                $my_observer_names = array_values(array_filter($my_observer_names, function($n) use ($my_own_name) {
+                    return $n !== $my_own_name;
+                }));
+            }
+        }
+        // If NOT scheduled by president/VP, add president/VP who have ACCEPTED as observers (via teacher_assignments)
+        if (empty($my_sched_by) || empty($sb_name)) {
+            $pv_stmt = $db->prepare("SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :tid AND u.role IN ('president','vice_president') AND u.status = 'active' ORDER BY u.name");
+            $pv_stmt->execute([':tid' => $my_teacher_id]);
+            while ($pv_name = $pv_stmt->fetchColumn()) {
+                if (!in_array($pv_name, $my_observer_names)) {
+                    $my_observer_names[] = $pv_name;
                 }
             }
         }
-        $my_own_name = $_SESSION['name'] ?? '';
-        $my_observer_names = array_values(array_filter(array_unique($my_observer_names), function($n) use ($my_own_name) {
-            return trim((string)$n) !== trim((string)$my_own_name);
-        }));
 
         // Get completed evaluations
         $eval_query = "SELECT e.id, e.observation_date, e.status, e.subject_area, e.subject_observed, e.observation_room, e.semester, e.evaluation_focus, u.name as evaluator_name
@@ -626,25 +625,6 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
         $eval_stmt = $db->prepare($eval_query);
         $eval_stmt->execute([':tid' => $my_teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
         $my_evaluations = $eval_stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        // My Observation department filter (optional)
-        if ($my_filter_department !== '') {
-            $my_sched_dept_local = $normalize_dept((string)($my_teacher_data['scheduled_department'] ?? ''));
-            if ($my_sched_dept_local === '') $my_sched_dept_local = $normalize_dept((string)($my_teacher_data['department'] ?? ''));
-            if ($my_sched_dept_local !== $my_filter_department) {
-                $my_teacher_data['evaluation_schedule'] = null;
-                $my_teacher_data['evaluation_semester'] = null;
-            }
-            $my_evaluations = array_values(array_filter($my_evaluations, function($ev) use ($my_filter_department, $db) {
-                $eid = (int)($ev['id'] ?? 0);
-                if ($eid <= 0) return false;
-                $d = $db->prepare("SELECT u.department FROM evaluations e JOIN users u ON u.id = e.evaluator_id WHERE e.id = :eid LIMIT 1");
-                $d->execute([':eid' => $eid]);
-                $ev_dept = trim((string)$d->fetchColumn());
-                if ($ev_dept === '') return false;
-                return $ev_dept === $my_filter_department;
-            }));
-        }
 
         // Check acknowledgment/signature status — per-item
         $ack_stmt = $db->prepare("SELECT * FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem");
@@ -687,18 +667,7 @@ if ($is_leader) {
                   FROM teachers t
                   JOIN evaluations e ON e.teacher_id = t.id
                   LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-                  WHERE (
-                        (
-                            t.scheduled_department IS NOT NULL
-                            AND t.scheduled_department <> ''
-                            AND t.scheduled_department = :dept3
-                        )
-                        OR
-                        (
-                            (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                            AND (t.department = :dept1 OR td.department = :dept2)
-                        )
-                  )
+                  WHERE (t.department = :dept1 OR td.department = :dept2 OR t.scheduled_department = :dept3)
                   AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                   AND e.academic_year = :academic_year
                   AND e.semester = :semester
@@ -796,18 +765,7 @@ if ($is_leader) {
                         LEFT JOIN teacher_departments td ON td.teacher_id = t.id
                         WHERE t.status = 'active'
                           AND t.evaluation_schedule IS NOT NULL
-                          AND (
-                                (
-                                    t.scheduled_department IS NOT NULL
-                                    AND t.scheduled_department <> ''
-                                    AND t.scheduled_department = :filter_dept3
-                                )
-                                OR
-                                (
-                                    (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                                    AND (t.department = :filter_dept OR td.department = :filter_dept2)
-                                )
-                              )
+                          AND (t.department = :filter_dept OR td.department = :filter_dept2 OR t.scheduled_department = :filter_dept3)
                           AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                           AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                           AND NOT EXISTS (
@@ -815,8 +773,7 @@ if ($is_leader) {
                               WHERE e2.teacher_id = t.id
                                 AND e2.academic_year = :academic_year
                                 AND e2.semester = :semester
-                                AND e2.status = 'completed'
-                                AND DATE_FORMAT(e2.observation_date, '%Y-%m-%d %H:%i') = DATE_FORMAT(t.evaluation_schedule, '%Y-%m-%d %H:%i')
+                                AND DATE(e2.observation_date) = DATE(t.evaluation_schedule)
                           )
                         ORDER BY t.name ASC";
         $sched_stmt = $db->prepare($sched_query);
@@ -842,8 +799,7 @@ if ($is_leader) {
                               WHERE e2.teacher_id = t.id
                                 AND e2.academic_year = :academic_year
                                 AND e2.semester = :semester
-                                AND e2.status = 'completed'
-                                AND DATE_FORMAT(e2.observation_date, '%Y-%m-%d %H:%i') = DATE_FORMAT(t.evaluation_schedule, '%Y-%m-%d %H:%i')
+                                AND DATE(e2.observation_date) = DATE(t.evaluation_schedule)
                           )
                         ORDER BY t.name ASC";
         $sched_stmt = $db->prepare($sched_query);
@@ -854,7 +810,7 @@ if ($is_leader) {
     }
 } elseif ($is_coordinator) {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                           t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                           t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                            t.scheduled_by, t.scheduled_department
                     FROM teachers t
@@ -870,8 +826,7 @@ if ($is_leader) {
                           WHERE e2.teacher_id = t.id
                             AND e2.academic_year = :academic_year
                             AND e2.semester = :semester
-                            AND e2.status = 'completed'
-                            AND DATE_FORMAT(e2.observation_date, '%Y-%m-%d %H:%i') = DATE_FORMAT(t.evaluation_schedule, '%Y-%m-%d %H:%i')
+                            AND DATE(e2.observation_date) = DATE(t.evaluation_schedule)
                       )
                     ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
@@ -884,7 +839,7 @@ if ($is_leader) {
     // Dean/principal: show scheduled teachers in this department (primary or secondary)
     // Only show if the schedule was set FOR this department, or if no scheduled_department (legacy/own dept)
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                           t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                           t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                            t.scheduled_by, t.scheduled_department
                     FROM teachers t
@@ -900,8 +855,7 @@ if ($is_leader) {
                           WHERE e2.teacher_id = t.id
                             AND e2.academic_year = :academic_year
                             AND e2.semester = :semester
-                            AND e2.status = 'completed'
-                            AND DATE_FORMAT(e2.observation_date, '%Y-%m-%d %H:%i') = DATE_FORMAT(t.evaluation_schedule, '%Y-%m-%d %H:%i')
+                            AND DATE(e2.observation_date) = DATE(t.evaluation_schedule)
                       )
                     ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
@@ -1083,10 +1037,15 @@ foreach ($eval_teachers as $t) {
         $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
         $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-        // Non-leader views: show same-department observers plus accepted President/VP observers.
-        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :dept OR u.role IN ('president','vice_president')) ORDER BY u.name";
-        $assign_stmt = $db->prepare($assign_query);
-        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
+        if ($is_secondary_dept) {
+            $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
+            $assign_stmt = $db->prepare($assign_query);
+            $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
+        } else {
+            $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+            $assign_stmt = $db->prepare($assign_query);
+            $assign_stmt->execute([':teacher_id' => $tid]);
+        }
         $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     }
 
@@ -1208,9 +1167,9 @@ foreach ([] as $t) {
 foreach ($scheduled_teachers as $t) {
     $tid = $t['id'];
     $sched_dt = $t['evaluation_schedule'] ?? '';
-    $sched_date = !empty($sched_dt) ? date('Y-m-d H:i', strtotime($sched_dt)) : '';
+    $sched_date = !empty($sched_dt) ? date('Y-m-d', strtotime($sched_dt)) : '';
     $existing_eval_date = $eval_data[$tid]['date'] ?? '';
-    $existing_eval_date = !empty($existing_eval_date) ? date('Y-m-d H:i', strtotime($existing_eval_date)) : '';
+    $existing_eval_date = !empty($existing_eval_date) ? date('Y-m-d', strtotime($existing_eval_date)) : '';
 
     if (isset($seen_ids[$tid]) && $sched_date === $existing_eval_date) continue;
 
@@ -1236,42 +1195,25 @@ foreach ($scheduled_teachers as $t) {
     ];
     if (!empty($sched_dt)) {
         $ts = strtotime($sched_dt);
-        $day_str = date('D', $ts);
-        $start_time = date('g:ia', $ts);
-        $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
-        if (!empty($sched_dt_end)) {
-            $ts_end = strtotime($sched_dt_end);
-            $end_time = date('g:ia', $ts_end);
-            $schedule_data[$row_key]['day_time'] = $day_str . "\n" . $start_time . ' - ' . $end_time;
-        } else {
-            $schedule_data[$row_key]['day_time'] = $day_str . "\n" . $start_time;
-        }
-    }
-
-    $teacher_primary_dept = $t['teacher_department'] ?? '';
-    $owning_dept = $t['scheduled_department'] ?? '';
-    if (empty($owning_dept)) {
-        $owning_dept = $teacher_primary_dept;
-    }
-
-    if ($is_leader && !empty($owning_dept)) {
-        $assign_query = "SELECT DISTINCT u.name
-                         FROM teacher_assignments ta
-                         JOIN users u ON ta.evaluator_id = u.id
-                         WHERE ta.teacher_id = :teacher_id
-                           AND (u.department = :dept OR u.role IN ('president','vice_president'))
-                         ORDER BY u.name";
-        $assign_stmt = $db->prepare($assign_query);
-        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $owning_dept]);
-    } else {
-        $assign_query = "SELECT DISTINCT u.name
-                         FROM teacher_assignments ta
-                         JOIN users u ON ta.evaluator_id = u.id
-                         WHERE ta.teacher_id = :teacher_id
-                           AND (u.department = :dept OR u.role IN ('president','vice_president'))
-                         ORDER BY u.name";
+            $day_str = date('D', $ts);
+            $start_time = date('g:ia', $ts);
+            $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
+            if (!empty($sched_dt_end)) {
+                $ts_end = strtotime($sched_dt_end);
+                $end_time = date('g:ia', $ts_end);
+                $schedule_data[$row_key]['day_time'] = $day_str . "\n" . $start_time . ' - ' . $end_time;
+            } else {
+                $schedule_data[$row_key]['day_time'] = $day_str . "\n" . $start_time;
+            }
+        $assign_stmt->execute([':teacher_id' => $tid]);
+    } elseif ($is_secondary_dept) {
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND u.department = :dept ORDER BY u.name";
         $assign_stmt = $db->prepare($assign_query);
         $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
+    } else {
+        $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id ORDER BY u.name";
+        $assign_stmt = $db->prepare($assign_query);
+        $assign_stmt->execute([':teacher_id' => $tid]);
     }
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     $all_observers = $assigned;
@@ -1385,7 +1327,7 @@ $schedulable_teachers = [];
 if ($is_leader) {
     // President/VP: show ALL active teachers system-wide
     $st_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                        t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                        t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                         t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                         t.evaluation_form_type, t.scheduled_department
                  FROM teachers t
@@ -1396,7 +1338,7 @@ if ($is_leader) {
     $st_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
 } elseif ($is_coordinator) {
     $st_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                        t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                        t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                         t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                         t.evaluation_form_type, t.scheduled_department
                  FROM teachers t
@@ -1411,7 +1353,7 @@ if ($is_leader) {
     $st_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
 } else {
     $st_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
-                        t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
+                        t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                         t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                         t.evaluation_form_type, t.scheduled_department
                  FROM teachers t
@@ -1444,11 +1386,14 @@ $schedule_available_departments = [];
 if ($is_leader) {
     $schedule_available_departments = $all_departments;
 } else {
-    // Non-leader accounts (dean/principal/coordinators) can only schedule
-    // within their own department in this modal.
     $self_dept = trim((string)($_SESSION['department'] ?? ''));
-    if ($self_dept !== '') {
-        $schedule_available_departments[] = $self_dept;
+    if ($self_dept !== '') $schedule_available_departments[] = $self_dept;
+    foreach ($teacher_depts_map as $depts) {
+        foreach ($depts as $d) {
+            if (!in_array($d, $schedule_available_departments, true)) {
+                $schedule_available_departments[] = $d;
+            }
+        }
     }
 }
 
@@ -1631,12 +1576,6 @@ try {
                         <i class="fas fa-print me-2"></i>Print
                     </button>
                 </div>
-                <?php elseif ($view_mode === 'my_observation'): ?>
-                <div class="no-print">
-                    <button class="btn btn-primary" onclick="window.print()">
-                        <i class="fas fa-print me-2"></i>Print
-                    </button>
-                </div>
                 <?php endif; ?>
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
@@ -1660,10 +1599,8 @@ try {
                         <div class="col-md-2">
                             <label class="form-label fw-bold">Department</label>
                             <select name="department" class="form-select">
-                                <?php if ($is_leader): ?>
                                 <option value="" <?php echo $raw_department === '' ? 'selected' : ''; ?>>All Departments</option>
-                                <?php endif; ?>
-                                <?php foreach(($is_leader ? $all_departments : $available_filter_departments) as $dept): ?>
+                                <?php foreach($all_departments as $dept): ?>
                                 <option value="<?php echo htmlspecialchars($dept); ?>" <?php echo $raw_department === $dept ? 'selected' : ''; ?>><?php echo htmlspecialchars($dept); ?></option>
                                 <?php endforeach; ?>
                             </select>
@@ -1713,26 +1650,6 @@ try {
                                 <option value="done" <?php echo $filter_status === 'done' ? 'selected' : ''; ?>>Done</option>
                             </select>
                         </div>
-                        <?php if ($view_mode === 'my_observation' && $has_teacher_record): ?>
-                        <div class="col-md-2">
-                            <label class="form-label fw-bold">Department</label>
-                            <select name="department_my" class="form-select">
-                                <option value="" <?php echo $my_filter_department === '' ? 'selected' : ''; ?>>All Departments</option>
-                                <?php
-                                    $my_dept_opts = [];
-                                    $primary = $normalize_dept((string)($my_teacher_data['department'] ?? ''));
-                                    $sched_d = $normalize_dept((string)($my_teacher_data['scheduled_department'] ?? ''));
-                                    if ($primary !== '') $my_dept_opts[] = $primary;
-                                    if ($sched_d !== '' && !in_array($sched_d, $my_dept_opts, true)) $my_dept_opts[] = $sched_d;
-                                    foreach ($my_dept_opts as $dopt):
-                                ?>
-                                <option value="<?php echo htmlspecialchars($dopt); ?>" <?php echo $my_filter_department === $dopt ? 'selected' : ''; ?>>
-                                    <?php echo htmlspecialchars($department_map[$dopt] ?? $dopt); ?>
-                                </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <?php endif; ?>
                         <div class="col-md-2">
                             <button type="submit" class="btn btn-primary w-100"><i class="fas fa-filter me-1"></i>Filter</button>
                         </div>
@@ -1757,16 +1674,9 @@ try {
             <?php if ($view_mode === 'my_observation' && $has_teacher_record): ?>
             <!-- My Observation View -->
             <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
-                <?php
-                    $my_header_dept_code = $my_filter_department !== ''
-                        ? $my_filter_department
-                        : ($normalize_dept((string)($my_teacher_data['scheduled_department'] ?? '')) ?: $normalize_dept((string)($my_teacher_data['department'] ?? '')));
-                    $my_header_dept_display = $department_map[$my_header_dept_code] ?? ($my_header_dept_code ?: $department_display);
-                    $is_basiced_dept = in_array($my_header_dept_code, ['JHS', 'ELEM'], true);
-                ?>
                 <div class="text-center mb-3">
                     <h5 class="fw-bold">My Observation Plan</h5>
-                    <p class="text-muted mb-1"><?php echo htmlspecialchars($my_header_dept_display); ?></p>
+                    <p class="text-muted mb-1"><?php echo htmlspecialchars($department_display); ?></p>
                     <p class="text-muted"><?php echo htmlspecialchars($semester); ?> Semester SY <?php echo htmlspecialchars($academic_year); ?></p>
                 </div>
 
@@ -1828,8 +1738,8 @@ try {
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Focus of Observation</th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Date</th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Day &amp; Time</th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;"><?php echo $is_basiced_dept ? 'Grade Level/Section' : 'Subject Area'; ?></th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;"><?php echo $is_basiced_dept ? 'Subject of Instruction' : 'Subject'; ?></th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Grade Level/Section' : 'Subject Area'; ?></th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Room</th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Observers</th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Status</th>
@@ -1843,14 +1753,6 @@ try {
                                 if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
                                 $focus_display = array_map(function($f) use ($focus_labels_my) { return $focus_labels_my[$f] ?? $f; }, $focus_arr);
                                 $ts = strtotime($my_teacher_data['evaluation_schedule']);
-                                $my_day_time = date('D', $ts) . '<br>' . date('g:i A', $ts);
-                                $my_sched_end = $my_teacher_data['evaluation_schedule_end'] ?? '';
-                                if (!empty($my_sched_end)) {
-                                    $ts_end = strtotime($my_sched_end);
-                                    if ($ts_end) {
-                                        $my_day_time .= ' - ' . date('g:i A', $ts_end);
-                                    }
-                                }
                                 $upcoming_signed = isset($my_signed_map['upcoming']);
                             ?>
                             <tr>
@@ -1864,7 +1766,7 @@ try {
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($my_teacher_data['evaluation_semester'] ?? '') . ' Semester'); ?></td>
                                 <td style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo date('M d, Y', $ts); ?></td>
-                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $my_day_time; ?></td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo date('D', $ts) . '<br>' . date('g:i A', $ts); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_subject_area'] ?? ''); ?></td>
                                 <td style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_subject'] ?? ''); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_room'] ?? ''); ?></td>
@@ -2175,7 +2077,6 @@ try {
                                 <?php foreach ($schedulable_teachers as $st): ?>
                                 <option value="<?php echo (int)$st['id']; ?>"
                                     data-schedule="<?php echo htmlspecialchars($st['evaluation_schedule'] ?? '', ENT_QUOTES); ?>"
-                                    data-schedule-end="<?php echo htmlspecialchars($st['evaluation_schedule_end'] ?? '', ENT_QUOTES); ?>"
                                     data-room="<?php echo htmlspecialchars($st['evaluation_room'] ?? '', ENT_QUOTES); ?>"
                                     data-focus="<?php echo htmlspecialchars($st['evaluation_focus'] ?? '', ENT_QUOTES); ?>"
                                     data-subject-area="<?php echo htmlspecialchars($st['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>"
@@ -2285,7 +2186,7 @@ try {
                         <div class="mb-3">
                             <label class="form-label fw-bold">Evaluation Schedule <span class="text-danger">*</span></label>
                             <input type="hidden" id="modal_evaluation_schedule" name="evaluation_schedule" required>
-                            <input type="hidden" id="modal_evaluation_schedule_end" name="evaluation_schedule_end">
+                            <input type="hidden" id="modal_evaluation_schedule_end" name="evaluation_schedule_end" required>
                             <div class="row g-2 mb-2">
                                 <div class="col-7">
                                     <div class="input-group">
@@ -2304,7 +2205,7 @@ try {
                                 <div class="col-6">
                                     <div class="input-group">
                                         <span class="input-group-text"><i class="fas fa-clock"></i> End</span>
-                                        <input type="time" class="form-control" id="modal_evaluation_end_time" step="900">
+                                        <input type="time" class="form-control" id="modal_evaluation_end_time" step="900" required>
                                     </div>
                                 </div>
                             </div>
@@ -2594,38 +2495,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch(e) {}
             }
 
-            // Set date & time (start and end)
+            // Set date & time
             const dateInput = document.getElementById('modal_evaluation_date');
-            const startTimeInput = document.getElementById('modal_evaluation_start_time');
-            const endTimeInput = document.getElementById('modal_evaluation_end_time');
+            const timeInput = document.getElementById('modal_evaluation_time');
             if (schedule) {
                 const normalized = schedule.replace(' ', 'T');
                 const parsed = new Date(normalized);
                 if (!isNaN(parsed.getTime())) {
                     dateInput.value = parsed.toISOString().slice(0, 10);
-                    startTimeInput.value = parsed.toTimeString().slice(0, 5);
+                    timeInput.value = parsed.toTimeString().slice(0, 5);
                 } else if (normalized.includes('T')) {
                     const parts = normalized.split('T');
                     dateInput.value = parts[0] || '';
-                    startTimeInput.value = (parts[1] || '').slice(0, 5);
+                    timeInput.value = (parts[1] || '').slice(0, 5);
                 }
             } else {
                 dateInput.value = '';
-                startTimeInput.value = '';
-            }
-            // Set end time if available
-            const scheduleEnd = opt.dataset.scheduleEnd || '';
-            if (scheduleEnd) {
-                const normalized = scheduleEnd.replace(' ', 'T');
-                const parsed = new Date(normalized);
-                if (!isNaN(parsed.getTime())) {
-                    endTimeInput.value = parsed.toTimeString().slice(0, 5);
-                } else if (normalized.includes('T')) {
-                    const parts = normalized.split('T');
-                    endTimeInput.value = (parts[1] || '').slice(0, 5);
-                }
-            } else {
-                endTimeInput.value = '';
+                timeInput.value = '';
             }
 
             // Populate department selector for leaders

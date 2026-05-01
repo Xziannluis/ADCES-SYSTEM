@@ -89,6 +89,25 @@ $filter_academic_year = $_GET['academic_year'] ?? '';
 $filter_semester = $_GET['semester'] ?? '';
 $filter_month = $_GET['month'] ?? '';
 $filter_form_type = $_GET['form_type'] ?? '';
+$filter_department = trim((string)($_GET['department'] ?? ''));
+
+// Department options for filter: primary + secondary/additional departments
+$department_options = [];
+if (!empty($teacher_data['department'])) {
+    $department_options[] = $teacher_data['department'];
+}
+try {
+    $sec_dept_stmt = $db->prepare("SELECT department FROM teacher_departments WHERE teacher_id = :tid");
+    $sec_dept_stmt->execute([':tid' => $_SESSION['teacher_id']]);
+    while ($sec_dept = $sec_dept_stmt->fetchColumn()) {
+        $sec_dept = trim((string)$sec_dept);
+        if ($sec_dept !== '' && !in_array($sec_dept, $department_options, true)) {
+            $department_options[] = $sec_dept;
+        }
+    }
+} catch (Exception $e) {
+    // Keep dashboard functional if optional table is not present.
+}
 
 // Build filtered query
 $where_clauses = ['e.teacher_id = :teacher_id'];
@@ -110,8 +129,12 @@ if (!empty($filter_form_type)) {
     $where_clauses[] = 'e.evaluation_form_type = :form_type';
     $params[':form_type'] = $filter_form_type;
 }
+if (!empty($filter_department)) {
+    $where_clauses[] = 'u.department = :department';
+    $params[':department'] = $filter_department;
+}
 
-$query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role 
+$query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, u.department as evaluator_department
           FROM evaluations e
           JOIN users u ON e.evaluator_id = u.id
           WHERE " . implode(' AND ', $where_clauses) . "
@@ -305,7 +328,7 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
             <div class="content-area">
                 <h5 class="mb-3"><i class="fas fa-filter me-2"></i>Filter Evaluations</h5>
                 <form method="GET" id="filterForm" class="row g-3 align-items-end">
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label for="academic_year" class="form-label fw-semibold">Academic Year</label>
                         <select name="academic_year" id="academic_year" class="form-select">
                             <option value="">All Academic Years</option>
@@ -314,7 +337,7 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                             <option value="2027-2028" <?php echo ($filter_academic_year === '2027-2028') ? 'selected' : ''; ?>>2027-2028</option>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label for="semester" class="form-label fw-semibold">Semester</label>
                         <select name="semester" id="semester" class="form-select">
                             <option value="">All Semesters</option>
@@ -336,6 +359,17 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                             <option value="peac" <?php echo ($filter_form_type === 'peac') ? 'selected' : ''; ?>>PEAC</option>
                         </select>
                     </div>
+                    <div class="col-md-2">
+                        <label for="department" class="form-label fw-semibold">Department</label>
+                        <select name="department" id="department" class="form-select">
+                            <option value="">All Departments</option>
+                            <?php foreach ($department_options as $dept): ?>
+                                <option value="<?php echo htmlspecialchars($dept); ?>" <?php echo ($filter_department === $dept) ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($dept); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
                     <div class="col-md-2 d-flex gap-2">
                         <button type="submit" class="btn btn-primary"><i class="fas fa-search me-1"></i>Filter</button>
                         <a href="dashboard.php" class="btn btn-outline-secondary"><i class="fas fa-undo me-1"></i>Reset</a>
@@ -347,7 +381,7 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
             <div class="content-area">
                 <h4 class="mb-4">
                     <i class="fas fa-file-pdf me-2"></i>My Evaluations
-                    <?php if(!empty($filter_academic_year) || !empty($filter_semester) || !empty($filter_month) || !empty($filter_form_type)): ?>
+                    <?php if(!empty($filter_academic_year) || !empty($filter_semester) || !empty($filter_month) || !empty($filter_form_type) || !empty($filter_department)): ?>
                     <small class="text-muted fs-6">
                         (Filtered: <?php
                             $parts = [];
@@ -358,6 +392,7 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                 $parts[] = $monthNames[(int)$filter_month] ?? '';
                             }
                             if(!empty($filter_form_type)) $parts[] = strtoupper($filter_form_type);
+                            if(!empty($filter_department)) $parts[] = $filter_department;
                             echo htmlspecialchars(implode(' / ', $parts));
                         ?>)
                     </small>

@@ -4,6 +4,31 @@ session_start();
 // --- Auto-start AI service if not running ---
 require_once __DIR__ . '/includes/ai_autostart.php';
 
+// Show AI service startup hint on landing page when service is unavailable
+$ai_service_ok = false;
+$ai_health_url = 'http://127.0.0.1:8001/health';
+try {
+    if (function_exists('curl_init')) {
+        $ch = curl_init($ai_health_url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT_MS => 300,
+            CURLOPT_TIMEOUT_MS => 700,
+            CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+        ]);
+        $resp = curl_exec($ch);
+        $err = curl_errno($ch);
+        curl_close($ch);
+        $ai_service_ok = ($resp !== false && $err === 0);
+    }
+} catch (Throwable $e) {
+    $ai_service_ok = false;
+}
+$ai_start_cmd_ps1 = 'powershell -ExecutionPolicy Bypass -NoProfile -File "C:\\xampp\\htdocs\\ADCES-SYSTEM\\start_ai_services.ps1"';
+$ai_start_cmd_bat = 'C:\\xampp\\htdocs\\ADCES-SYSTEM\\start_ai_services.bat';
+$ai_lock_file = __DIR__ . '/ai_service/.ai_starting.lock';
+$ai_starting = file_exists($ai_lock_file) && (time() - filemtime($ai_lock_file) <= 60);
+
 // Redirect to login if not authenticated, otherwise to appropriate dashboard
     if(isset($_SESSION['user_id']) && isset($_SESSION['role'])) {
     	$role = $_SESSION['role'];
@@ -240,6 +265,37 @@ require_once __DIR__ . '/includes/ai_autostart.php';
             text-align: center;
         }
 
+        .ai-status-box {
+            width: 100%;
+            margin-bottom: 14px;
+            border-radius: 10px;
+            padding: 12px 14px;
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid #d7dee7;
+        }
+        .ai-status-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: #1a2a44;
+        }
+        .ai-status-note {
+            margin: 0;
+            font-size: 0.82rem;
+            color: #3f4d63;
+        }
+        .ai-cmd {
+            margin-top: 8px;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 0.78rem;
+            background: #f6f8fb;
+            border: 1px solid #dce3ee;
+            border-radius: 6px;
+            padding: 7px 8px;
+            color: #233142;
+            word-break: break-all;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             body { flex-direction: column; }
@@ -265,7 +321,6 @@ require_once __DIR__ . '/includes/ai_autostart.php';
         <div class="right-content">
             <h2>AI-Driven Classroom Evaluation System</h2>
             <p class="subtitle">Select your role to continue</p>
-
             <div class="roles-container">
                 <a href="login.php?role=edp" class="role-card">
                     <div class="role-icon bg-edp"><i class="fas fa-server"></i></div>

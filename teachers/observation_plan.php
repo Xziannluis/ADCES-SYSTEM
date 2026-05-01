@@ -133,6 +133,7 @@ $semester = $_GET['semester'] ?? '1st';
 $academic_year = $_GET['academic_year'] ?? '';
 $filter_month = $_GET['month'] ?? '';
 $filter_status = $_GET['status'] ?? '';
+$filter_department = trim((string)($_GET['department'] ?? ''));
 
 if (empty($academic_year)) {
     $month = (int)date('n');
@@ -167,66 +168,48 @@ if (($teacher_data['department'] ?? '') === 'JHS') {
     $focus_labels['student_learning_actions'] = 'Student Learning Actions';
 }
 
-// Get evaluators assigned to this teacher
-$obs_query = "SELECT DISTINCT u.name, u.role FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :tid ORDER BY u.name";
-$obs_stmt = $db->prepare($obs_query);
-$obs_stmt->execute([':tid' => $teacher_id]);
-$observers = $obs_stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Get deans/principals from ALL departments this teacher belongs to (primary + secondary), excluding self
-$t_all_depts = [$teacher_data['department']];
-try {
-    $sec_stmt = $db->prepare("SELECT department FROM teacher_departments WHERE teacher_id = :tid");
-    $sec_stmt->execute([':tid' => $teacher_id]);
-    while ($sd = $sec_stmt->fetchColumn()) {
-        if (!in_array($sd, $t_all_depts)) $t_all_depts[] = $sd;
-    }
-} catch (Exception $e) {}
-$ph_depts = implode(',', array_fill(0, count($t_all_depts), '?'));
-$dean_query = "SELECT DISTINCT name FROM users WHERE department IN ($ph_depts) AND role IN ('dean','principal') AND status = 'active' AND id != ? ORDER BY name";
-$dean_stmt = $db->prepare($dean_query);
-$dean_stmt->execute(array_merge($t_all_depts, [$_SESSION['user_id']]));
+// Build observer list based on the schedule's owning department.
+// Rule: use scheduled_department (fallback: teacher primary department),
+// then include observers assigned from that department + accepted President/VP.
+$owning_dept = trim((string)($teacher_data['scheduled_department'] ?? ''));
+if ($owning_dept === '') {
+    $owning_dept = trim((string)($teacher_data['department'] ?? ''));
+}
 
 $all_observer_names = [];
-while ($dean_name_row = $dean_stmt->fetchColumn()) {
-    $all_observer_names[] = $dean_name_row;
+if ($owning_dept !== '') {
+    $obs_query = "SELECT DISTINCT u.name
+                  FROM teacher_assignments ta
+                  JOIN users u ON ta.evaluator_id = u.id
+                  WHERE ta.teacher_id = :tid
+                    AND (
+                        u.department = :dept
+                        OR u.role IN ('president','vice_president')
+                    )
+                    AND u.status = 'active'
+                  ORDER BY u.name";
+    $obs_stmt = $db->prepare($obs_query);
+    $obs_stmt->execute([':tid' => $teacher_id, ':dept' => $owning_dept]);
+    $all_observer_names = $obs_stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
 }
-// If current user is a coordinator, only the deans observe them
-if (!in_array($_SESSION['role'] ?? '', ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
-    foreach ($observers as $obs) {
-        if ($obs['name'] === ($_SESSION['name'] ?? '')) continue; // exclude self
-        if (!in_array($obs['name'], $all_observer_names)) {
-            $all_observer_names[] = $obs['name'];
-        }
-    }
-}
-// If President/VP scheduled this teacher, only they are the observer
-$sched_by_id = $teacher_data['scheduled_by'] ?? null;
-if ($sched_by_id) {
-    $sb_stmt = $db->prepare("SELECT name FROM users WHERE id = :id AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
-    $sb_stmt->execute([':id' => $sched_by_id]);
-    $sb_name = $sb_stmt->fetchColumn();
-    if ($sb_name) {
-        $all_observer_names = [$sb_name];
-    }
-}
-// If NOT scheduled by president/VP, add president/VP who have evaluated this teacher
-if (empty($sched_by_id) || empty($sb_name)) {
-    $pv_eval_stmt = $db->prepare("SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem AND u.role IN ('president','vice_president') ORDER BY u.name");
-    $pv_eval_stmt->execute([':tid' => $teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
-    while ($pv_name = $pv_eval_stmt->fetchColumn()) {
-        if (!in_array($pv_name, $all_observer_names)) {
-            $all_observer_names[] = $pv_name;
-        }
-    }
-}
+
+// Never show the teacher's own name as observer
+$self_name = $_SESSION['name'] ?? '';
+$all_observer_names = array_values(array_filter(array_unique($all_observer_names), function($n) use ($self_name) {
+    return trim((string)$n) !== trim((string)$self_name);
+}));
 
 // Build observation plan data
 $has_schedule = !empty($teacher_data['evaluation_schedule']);
 $has_matching_schedule = $has_schedule && ($teacher_data['evaluation_semester'] === $semester || empty($teacher_data['evaluation_semester']));
+// Schedule ownership (used by department filter)
+$schedule_owning_dept = trim((string)($teacher_data['scheduled_department'] ?? ''));
+if ($schedule_owning_dept === '') {
+    $schedule_owning_dept = trim((string)($teacher_data['department'] ?? ''));
+}
 
 // Get completed evaluations for this semester
-$eval_query = "SELECT e.id, e.observation_date, e.status, e.subject_area, e.subject_observed, e.observation_room, e.semester, e.evaluation_focus, u.name as evaluator_name
+$eval_query = "SELECT e.id, e.observation_date, e.status, e.subject_area, e.subject_observed, e.observation_room, e.semester, e.evaluation_focus, u.name as evaluator_name, u.department as evaluator_department
                FROM evaluations e
                JOIN users u ON e.evaluator_id = u.id
                WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem
@@ -262,6 +245,19 @@ foreach ($evaluations as $ev) {
 // (its date does NOT overlap with any completed evaluation date)
 $schedule_date_key = $has_matching_schedule ? date('Y-m-d', strtotime($teacher_data['evaluation_schedule'])) : null;
 $show_upcoming = $has_matching_schedule && ($schedule_date_key === null || !isset($eval_groups[$schedule_date_key]));
+
+// Apply department filter (if selected)
+if ($filter_department !== '') {
+    $show_upcoming = $show_upcoming && ($schedule_owning_dept === $filter_department);
+    $eval_groups = array_filter($eval_groups, function($group) use ($filter_department) {
+        foreach ($group as $ev) {
+            if (($ev['evaluator_department'] ?? '') === $filter_department) {
+                return true;
+            }
+        }
+        return false;
+    });
+}
 
 // Apply month filter
 if (!empty($filter_month) && $has_matching_schedule) {
@@ -308,6 +304,22 @@ $department_map = [
     'SHS'   => 'Senior High School Department',
 ];
 $department_display = $department_map[$teacher_data['department']] ?? $teacher_data['department'];
+$filter_department_display = $department_display;
+if ($filter_department !== '') {
+    $filter_department_display = $department_map[$filter_department] ?? $filter_department;
+}
+
+// Department options in filter: teacher primary + secondary + current schedule owner
+$department_options = [];
+if (!empty($teacher_data['department'])) $department_options[] = $teacher_data['department'];
+if (!empty($schedule_owning_dept) && !in_array($schedule_owning_dept, $department_options, true)) $department_options[] = $schedule_owning_dept;
+try {
+    $sec_dept_stmt = $db->prepare("SELECT department FROM teacher_departments WHERE teacher_id = :tid");
+    $sec_dept_stmt->execute([':tid' => $teacher_id]);
+    while ($d = $sec_dept_stmt->fetchColumn()) {
+        if (!empty($d) && !in_array($d, $department_options, true)) $department_options[] = $d;
+    }
+} catch (Exception $e) {}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -412,7 +424,18 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
             <div class="card mb-3">
                 <div class="card-body">
                     <form method="GET" class="row g-2 align-items-end">
-                        <div class="col-md-4">
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">Department</label>
+                            <select name="department" class="form-select">
+                                <option value="" <?php echo $filter_department === '' ? 'selected' : ''; ?>>All Departments</option>
+                                <?php foreach ($department_options as $dept): ?>
+                                <option value="<?php echo htmlspecialchars($dept); ?>" <?php echo $filter_department === $dept ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($department_map[$dept] ?? $dept); ?>
+                                </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
                             <label class="form-label fw-bold">Academic Year</label>
                             <select name="academic_year" class="form-select">
                                 <option value="2025-2026" <?php echo $academic_year === '2025-2026' ? 'selected' : ''; ?>>2025-2026</option>
@@ -420,7 +443,7 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
                                 <option value="2027-2028" <?php echo $academic_year === '2027-2028' ? 'selected' : ''; ?>>2027-2028</option>
                             </select>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-2">
                             <label class="form-label fw-bold">Semester</label>
                             <select name="semester" class="form-select">
                                 <option value="1st" <?php echo $semester === '1st' ? 'selected' : ''; ?>>1st Semester</option>
@@ -447,6 +470,7 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
                                 <option value="signed" <?php echo $filter_status === 'signed' ? 'selected' : ''; ?>>Signed</option>
                             </select>
                         </div>
+                        <div class="w-100"></div>
                         <div class="col-md-2">
                             <button type="submit" class="btn btn-primary w-100"><i class="fas fa-filter me-1"></i>Filter</button>
                         </div>
@@ -458,7 +482,7 @@ $department_display = $department_map[$teacher_data['department']] ?? $teacher_d
             <div class="plan-card">
                 <div class="text-center mb-3">
                     <h5 class="fw-bold">Classroom Observation Plan</h5>
-                    <p class="text-muted mb-1"><?php echo htmlspecialchars($department_display); ?></p>
+                    <p class="text-muted mb-1"><?php echo htmlspecialchars($filter_department_display); ?></p>
                     <p class="text-muted"><?php echo htmlspecialchars($semester); ?> Semester SY <?php echo htmlspecialchars($academic_year); ?></p>
                 </div>
 
