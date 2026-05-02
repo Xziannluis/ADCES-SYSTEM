@@ -1646,12 +1646,6 @@ try {
                         <i class="fas fa-print me-2"></i>Print
                     </button>
                 </div>
-                <?php elseif ($view_mode === 'my_observation'): ?>
-                <div class="no-print">
-                    <button class="btn btn-primary" onclick="window.print()">
-                        <i class="fas fa-print me-2"></i>Print
-                    </button>
-                </div>
                 <?php endif; ?>
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
