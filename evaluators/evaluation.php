@@ -158,14 +158,20 @@ try {
         $ack_stmt = $db->prepare("SELECT DISTINCT teacher_id, academic_year, semester FROM observation_plan_acknowledgments");
         $ack_stmt->execute();
     } elseif (in_array($_SESSION['role'], ['dean', 'principal'])) {
-        // Deans/principals: check signatures matching their department OR
-        // where the teacher's own department matches (for cross-dept coordinator schedules)
+        // Deans/principals: check signatures matching their department, the
+        // teacher's own department, or the active scheduled department. Older
+        // upcoming signatures were saved under the teacher's primary
+        // department, so the scheduled-department check keeps those valid for
+        // the dean/principal who owns the active schedule.
         $ack_stmt = $db->prepare(
             "SELECT DISTINCT opa.teacher_id, opa.academic_year, opa.semester FROM observation_plan_acknowledgments opa
              LEFT JOIN teachers t ON t.id = opa.teacher_id
-             WHERE opa.department = :dept OR opa.department IS NULL OR t.department = :dept2"
+             WHERE opa.department = :dept
+                OR opa.department IS NULL
+                OR t.department = :dept2
+                OR t.scheduled_department = :dept3"
         );
-        $ack_stmt->execute([':dept' => $eval_viewer_dept, ':dept2' => $eval_viewer_dept]);
+        $ack_stmt->execute([':dept' => $eval_viewer_dept, ':dept2' => $eval_viewer_dept, ':dept3' => $eval_viewer_dept]);
     } elseif (in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator'])) {
         // Coordinators may have cross-dept teachers assigned to them,
         // so check any signature that exists for their assigned teachers

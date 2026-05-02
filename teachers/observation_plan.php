@@ -191,6 +191,27 @@ if ($owning_dept !== '') {
     $obs_stmt = $db->prepare($obs_query);
     $obs_stmt->execute([':tid' => $teacher_id, ':dept' => $owning_dept]);
     $all_observer_names = $obs_stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+
+    // Always include active dean/principal of the schedule-owning department
+    // even if they were not explicitly inserted in teacher_assignments.
+    try {
+        $dean_stmt = $db->prepare(
+            "SELECT DISTINCT name
+             FROM users
+             WHERE department = :dept
+               AND role IN ('dean','principal')
+               AND status = 'active'
+             ORDER BY name"
+        );
+        $dean_stmt->execute([':dept' => $owning_dept]);
+        while ($dn = $dean_stmt->fetchColumn()) {
+            if (!in_array($dn, $all_observer_names, true)) {
+                $all_observer_names[] = $dn;
+            }
+        }
+    } catch (Exception $e) {
+        // Keep page usable if user query fails unexpectedly.
+    }
 }
 
 // Never show the teacher's own name as observer
@@ -326,7 +347,7 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Observation Plan</title>
+    <title>My Evaluation Schedule</title>
     <?php include '../includes/header.php'; ?>
     <style>
         .plan-card {
@@ -405,7 +426,7 @@ try {
         <div class="dashboard-body-wrap">
         <div class="container-fluid" style="padding:24px;">
 
-            <h4 class="mb-3"><i class="fas fa-clipboard-list me-2"></i>My Observation Plan</h4>
+            <h4 class="mb-3"><i class="fas fa-clipboard-list me-2"></i>My Evaluation Schedule</h4>
 
             <?php if ($success_message): ?>
             <div class="alert alert-success alert-dismissible fade show" role="alert">
@@ -481,7 +502,7 @@ try {
             <!-- Observation Plan Details -->
             <div class="plan-card">
                 <div class="text-center mb-3">
-                    <h5 class="fw-bold">Classroom Observation Plan</h5>
+                    <h5 class="fw-bold">My Evaluation Schedule</h5>
                     <p class="text-muted mb-1"><?php echo htmlspecialchars($filter_department_display); ?></p>
                     <p class="text-muted"><?php echo htmlspecialchars($semester); ?> Semester SY <?php echo htmlspecialchars($academic_year); ?></p>
                 </div>
@@ -662,7 +683,7 @@ try {
                 <?php else: ?>
                 <div class="text-center py-5">
                     <i class="fas fa-clipboard fa-3x text-muted mb-3"></i>
-                    <h5 class="text-muted">No Observation Plan Yet</h5>
+                    <h5 class="text-muted">No Evaluation Schedule Yet</h5>
                     <p class="text-muted">No observation schedule has been set for you this <?php echo htmlspecialchars($semester); ?> Semester.</p>
                 </div>
                 <?php endif; ?>

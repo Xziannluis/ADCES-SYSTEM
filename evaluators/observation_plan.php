@@ -80,6 +80,18 @@ try {
 $success_message = '';
 $error_message = '';
 
+// Resolve active filter context (used to lock signed upcoming schedules).
+$lock_semester = trim((string)($_POST['filter_semester'] ?? ($_GET['semester'] ?? '1st')));
+if (!in_array($lock_semester, ['1st', '2nd'], true)) {
+    $lock_semester = '1st';
+}
+$lock_academic_year = trim((string)($_POST['filter_academic_year'] ?? ($_GET['academic_year'] ?? '')));
+if ($lock_academic_year === '') {
+    $m = (int)date('n');
+    $y = (int)date('Y');
+    $lock_academic_year = ($m >= 6) ? ($y . '-' . ($y + 1)) : (($y - 1) . '-' . $y);
+}
+
 // Cancel / clear evaluation schedule
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule') {
     $teacher_ids = [];
@@ -93,8 +105,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 
     $cancelled = 0;
+    $locked = 0;
     foreach ($teacher_ids as $teacher_id) {
         if ($teacher_id <= 0) continue;
+        // Once teacher has signed upcoming schedule, lock reschedule/cancel.
+        $lock_chk = $db->prepare("SELECT 1 FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL LIMIT 1");
+        $lock_chk->execute([':tid' => $teacher_id, ':ay' => $lock_academic_year, ':sem' => $lock_semester]);
+        if ($lock_chk->fetchColumn()) {
+            $locked++;
+            continue;
+        }
         $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_schedule_end = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':id', $teacher_id);
@@ -133,8 +153,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     if ($cancelled > 0) {
         $success_message = "Evaluation schedule cancelled for {$cancelled} teacher(s).";
+        if ($locked > 0) {
+            $success_message .= " {$locked} signed schedule(s) were locked and not cancelled.";
+        }
     } else {
-        $error_message = "Failed to cancel schedule.";
+        $error_message = ($locked > 0)
+            ? "Signed schedule(s) are locked and cannot be cancelled."
+            : "Failed to cancel schedule.";
     }
     $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
     if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
@@ -280,6 +305,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $focus_json = !empty($focus) ? json_encode($focus) : null;
 
     if (!empty($teacher_id)) {
+        // Clear stale acknowledgments when updating schedule (invalidates old unsigned schedules)
+        try {
+            $del_stale = $db->prepare("DELETE FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL");
+            $del_stale->execute([':tid' => (int)$teacher_id, ':ay' => $lock_academic_year, ':sem' => $lock_semester]);
+        } catch (Exception $e) {
+            error_log('Error clearing old acknowledgments: ' . $e->getMessage());
+        }
+        
         $query = "UPDATE teachers SET evaluation_schedule = :schedule, evaluation_schedule_end = :schedule_end, evaluation_room = :room, evaluation_focus = :focus, evaluation_subject_area = :subject_area, evaluation_subject = :subject, evaluation_semester = :semester, evaluation_form_type = :form_type, scheduled_by = :scheduled_by, scheduled_department = :scheduled_department, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':schedule', $schedule);
@@ -349,12 +382,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $stmt->bindParam(':id', $teacher_id);
 
         if ($stmt->execute()) {
-            // Clear signatures for this department only when schedule is set/updated — teacher must re-sign
-            $del_sem = $_POST['filter_semester'] ?? ($_GET['semester'] ?? '1st');
+            // Delete all unsigned upcoming-plan acknowledgments for this teacher/AY/semester.
+            $del_sem = $post_semester ?: ($_POST['filter_semester'] ?? ($_GET['semester'] ?? '1st'));
             $del_ay = $_POST['filter_academic_year'] ?? ($_GET['academic_year'] ?? '');
             if (!empty($del_ay)) {
-                $del_ack = $db->prepare("DELETE FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND (department = :dept OR department IS NULL)");
-                $del_ack->execute([':tid' => $teacher_id, ':ay' => $del_ay, ':sem' => $del_sem, ':dept' => $sched_dept_val]);
+                $del_ack = $db->prepare("DELETE FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL");
+                $del_ack->execute([':tid' => $teacher_id, ':ay' => $del_ay, ':sem' => $del_sem]);
             }
             $is_reschedule = !empty($_POST['is_reschedule']);
             $success_message = $is_reschedule ? "Schedule updated. Teacher will need to sign again." : "Evaluation schedule set successfully!";
@@ -438,11 +471,13 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                     $sign_dept = $dStmt2->fetchColumn() ?: null;
                 }
                 if (empty($sign_dept)) {
-                    // Use the teacher's own department so the correct dean can see the signature
-                    $tdStmt = $db->prepare("SELECT department FROM teachers WHERE id = :tid LIMIT 1");
+                    // Upcoming schedules are owned by the active scheduled
+                    // department. Fall back to the teacher's primary department
+                    // for older records where scheduled_department is empty.
+                    $tdStmt = $db->prepare("SELECT scheduled_department, department FROM teachers WHERE id = :tid LIMIT 1");
                     $tdStmt->execute([':tid' => $my_teacher_id]);
                     $tRow = $tdStmt->fetch(PDO::FETCH_ASSOC);
-                    $sign_dept = $tRow['department'] ?? null;
+                    $sign_dept = $tRow['scheduled_department'] ?: ($tRow['department'] ?? null);
                 }
                 if ($eval_id === null) {
                     $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL AND (department = :dept OR (department IS NULL AND :dept2 IS NULL)) LIMIT 1");
@@ -475,9 +510,10 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                     }
                 }
                 if ($has_upcoming && empty($signed_depts)) {
-                    $pdStmt = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
+                    $pdStmt = $db->prepare("SELECT scheduled_department, department FROM teachers WHERE id = :id LIMIT 1");
                     $pdStmt->execute([':id' => $my_teacher_id]);
-                    $pd = $pdStmt->fetchColumn();
+                    $pdRow = $pdStmt->fetch(PDO::FETCH_ASSOC);
+                    $pd = ($pdRow['scheduled_department'] ?? '') ?: ($pdRow['department'] ?? '');
                     if (!empty($pd)) $signed_depts[] = $pd;
                 }
                 notifyObservationPlanSigned($db, $my_teacher_id, $_SESSION['name'] ?? 'Teacher', $signed_depts);
@@ -1063,6 +1099,8 @@ foreach ($eval_teachers as $t) {
     // Determine the "owning" department: scheduled_department > teacher's primary dept > evaluator's dept
     $sched_dept_val = $t['scheduled_department'] ?? '';
     $teacher_primary_dept = $t['teacher_department'] ?? '';
+    $row_owning_dept = !empty($sched_dept_val) ? $sched_dept_val : $teacher_primary_dept;
+    $owning_dept = $row_owning_dept;
     $is_secondary_dept = !empty($raw_department) && $teacher_primary_dept !== $raw_department;
 
     // For leaders: find which department this evaluation belongs to
@@ -1093,15 +1131,22 @@ foreach ($eval_teachers as $t) {
         $assign_stmt->execute([':teacher_id' => $tid]);
         $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     } else {
+        // Non-leader views should use the row's owning department, not the
+        // current page filter department, to avoid dropping valid observers.
+        $owning_dept_nonleader = !empty($sched_dept_val) ? $sched_dept_val : $teacher_primary_dept;
+        if (empty($owning_dept_nonleader)) {
+            $owning_dept_nonleader = $raw_department;
+        }
+
         $obs_query = "SELECT DISTINCT u.name FROM evaluations e JOIN users u ON e.evaluator_id = u.id WHERE e.teacher_id = :teacher_id AND e.academic_year = :academic_year AND e.semester = :semester AND u.department = :department ORDER BY u.name";
         $obs_stmt = $db->prepare($obs_query);
-        $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $raw_department]);
+        $obs_stmt->execute([':teacher_id' => $tid, ':academic_year' => $academic_year, ':semester' => $semester, ':department' => $owning_dept_nonleader]);
         $observers = $obs_stmt->fetchAll(PDO::FETCH_COLUMN);
 
         // Non-leader views: show same-department observers plus accepted President/VP observers.
         $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :dept OR u.role IN ('president','vice_president')) ORDER BY u.name";
         $assign_stmt = $db->prepare($assign_query);
-        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
+        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $owning_dept_nonleader]);
         $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     }
 
@@ -1110,10 +1155,11 @@ foreach ($eval_teachers as $t) {
     if (!empty($dean_name) && !in_array($dean_name, $all_observers) && $_SESSION['department'] === $raw_department) {
         array_unshift($all_observers, $dean_name);
     }
-    // For leaders: add dean/principal of the owning department
-    if ($is_leader && !empty($owning_dept)) {
+    // Always include dean/principal of the row-owning department.
+    $dept_for_dean = !empty($row_owning_dept) ? $row_owning_dept : $owning_dept;
+    if (!empty($dept_for_dean)) {
         $dept_dean_stmt = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
-        $dept_dean_stmt->execute([':dept' => $owning_dept]);
+        $dept_dean_stmt->execute([':dept' => $dept_for_dean]);
         while ($dd_name = $dept_dean_stmt->fetchColumn()) {
             if (!in_array($dd_name, $all_observers)) {
                 $all_observers[] = $dd_name;
@@ -1279,6 +1325,9 @@ foreach ($scheduled_teachers as $t) {
         $assign_stmt = $db->prepare($assign_query);
         $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $owning_dept]);
     } else {
+        // Non-leader views: use row owning department so observers are accurate
+        // even when current page filter/program differs.
+        $owning_dept_nonleader = !empty($owning_dept) ? $owning_dept : $raw_department;
         $assign_query = "SELECT DISTINCT u.name
                          FROM teacher_assignments ta
                          JOIN users u ON ta.evaluator_id = u.id
@@ -1286,7 +1335,7 @@ foreach ($scheduled_teachers as $t) {
                            AND (u.department = :dept OR u.role IN ('president','vice_president'))
                          ORDER BY u.name";
         $assign_stmt = $db->prepare($assign_query);
-        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $raw_department]);
+        $assign_stmt->execute([':teacher_id' => $tid, ':dept' => $owning_dept_nonleader]);
     }
     $assigned = $assign_stmt->fetchAll(PDO::FETCH_COLUMN);
     $all_observers = $assigned;
@@ -1294,8 +1343,8 @@ foreach ($scheduled_teachers as $t) {
     if (!empty($dean_name) && !in_array($dean_name, $all_observers) && $_SESSION['department'] === $raw_department) {
         array_unshift($all_observers, $dean_name);
     }
-    // For leaders: add dean/principal of the owning department
-    if ($is_leader && !empty($owning_dept)) {
+    // Always include dean/principal of the row-owning department.
+    if (!empty($owning_dept)) {
         $dept_dean_stmt2 = $db->prepare("SELECT DISTINCT name FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active' ORDER BY name");
         $dept_dean_stmt2->execute([':dept' => $owning_dept]);
         while ($dn = $dept_dean_stmt2->fetchColumn()) {
@@ -1471,22 +1520,55 @@ if ($is_leader) {
 
 // Load acknowledgment data for current semester/year
 $ack_map = [];
+$ack_upcoming_map = [];
 try {
-    if ($is_leader) {
-        $ack_query = "SELECT teacher_id, department, acknowledged_at, signature FROM observation_plan_acknowledgments WHERE academic_year = :ay AND semester = :sem";
-        $ack_stmt = $db->prepare($ack_query);
-        $ack_stmt->bindParam(':ay', $academic_year);
-        $ack_stmt->bindParam(':sem', $semester);
-    } else {
-        $ack_query = "SELECT teacher_id, department, acknowledged_at, signature FROM observation_plan_acknowledgments WHERE academic_year = :ay AND semester = :sem AND (department = :dept OR department IS NULL)";
-        $ack_stmt = $db->prepare($ack_query);
-        $ack_stmt->bindParam(':ay', $academic_year);
-        $ack_stmt->bindParam(':sem', $semester);
-        $ack_stmt->bindParam(':dept', $raw_department);
+    // Build ack map for the exact teacher rows visible in this table.
+    // This avoids false "Pending" when teacher signatures were stored under
+    // a different department than the current viewer's department.
+    $ack_teacher_ids = [];
+    foreach ($teachers_list as $tt) {
+        $tid = (int)($tt['id'] ?? 0);
+        if ($tid > 0) $ack_teacher_ids[$tid] = true;
     }
-    $ack_stmt->execute();
-    while ($ack_row = $ack_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $ack_map[$ack_row['teacher_id']] = $ack_row;
+    $ack_teacher_ids = array_keys($ack_teacher_ids);
+
+    if (!empty($ack_teacher_ids)) {
+        $ph = implode(',', array_fill(0, count($ack_teacher_ids), '?'));
+        $ack_query = "SELECT teacher_id, department, acknowledged_at, signature, evaluation_id, id
+                      FROM observation_plan_acknowledgments
+                      WHERE academic_year = ?
+                        AND semester = ?
+                        AND teacher_id IN ($ph)
+                      ORDER BY acknowledged_at DESC, id DESC";
+        $ack_stmt = $db->prepare($ack_query);
+        $ack_stmt->execute(array_merge([$academic_year, $semester], $ack_teacher_ids));
+
+        while ($ack_row = $ack_stmt->fetch(PDO::FETCH_ASSOC)) {
+            $tid = (int)$ack_row['teacher_id'];
+            if (!isset($ack_map[$tid])) {
+                $ack_map[$tid] = $ack_row;
+            } else {
+                // Prefer a row with an actual drawn signature if available.
+                $currentHasSig = !empty($ack_map[$tid]['signature']);
+                $newHasSig = !empty($ack_row['signature']);
+                if (!$currentHasSig && $newHasSig) {
+                    $ack_map[$tid] = $ack_row;
+                }
+            }
+
+            // Track upcoming-schedule signatures specifically (evaluation_id IS NULL).
+            if ($ack_row['evaluation_id'] === null || $ack_row['evaluation_id'] === '') {
+                if (!isset($ack_upcoming_map[$tid])) {
+                    $ack_upcoming_map[$tid] = $ack_row;
+                } else {
+                    $curUpcomingHasSig = !empty($ack_upcoming_map[$tid]['signature']);
+                    $newUpcomingHasSig = !empty($ack_row['signature']);
+                    if (!$curUpcomingHasSig && $newUpcomingHasSig) {
+                        $ack_upcoming_map[$tid] = $ack_row;
+                    }
+                }
+            }
+        }
     }
 } catch (Exception $e) {
     // table may not exist yet
@@ -1573,6 +1655,40 @@ try {
         #scheduleModal .modal-body {
             overflow-y: auto;
         }
+        .observation-plan-container {
+            padding: 24px;
+        }
+        .observation-card {
+            background: #fff;
+            padding: 30px;
+        }
+        .observation-card-elevated {
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        .action-toolbar {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .myobs-sign-canvas-wrap {
+            display: inline-block;
+            max-width: 100%;
+        }
+        #myObsSigCanvas {
+            max-width: 100%;
+            height: auto;
+            border: 2px solid #333;
+            border-radius: 8px;
+            background: #fff;
+            cursor: crosshair;
+            touch-action: none;
+        }
+        #scheduleModal .form-check {
+            margin-bottom: 0.35rem;
+        }
 
         @media print {
             @page {
@@ -1621,6 +1737,15 @@ try {
             }
         }
         @media (max-width: 768px) {
+            .observation-plan-container {
+                padding: 12px;
+            }
+            .observation-card {
+                padding: 16px;
+            }
+            .action-toolbar .btn {
+                width: 100%;
+            }
             #scheduleModal .modal-dialog {
                 max-width: 100%;
                 width: calc(100% - 1rem);
@@ -1628,6 +1753,20 @@ try {
             }
             #scheduleModal .modal-content {
                 max-height: calc(100vh - 1rem);
+            }
+            #scheduleModal .modal-body {
+                padding: 0.9rem;
+            }
+            #scheduleModal .modal-footer {
+                gap: 0.5rem;
+            }
+            #scheduleModal .modal-footer .btn {
+                width: 100%;
+                margin: 0;
+            }
+            #scheduleModal .d-flex.gap-3 {
+                flex-direction: column;
+                gap: 0.4rem !important;
             }
         }
     </style>
@@ -1659,7 +1798,7 @@ try {
             </div>
         </div>
         <div class="dashboard-body-wrap">
-        <div class="container-fluid" style="padding:24px;">
+        <div class="container-fluid observation-plan-container">
 
             <!-- Filters (screen only) -->
             <div class="card mb-3 no-print">
@@ -1683,7 +1822,7 @@ try {
                             <label class="form-label fw-bold">View</label>
                             <select name="view" class="form-select">
                                 <option value="plan" <?php echo $view_mode === 'plan' ? 'selected' : ''; ?>>Observation Plan</option>
-                                <option value="my_observation" <?php echo $view_mode === 'my_observation' ? 'selected' : ''; ?>>My Observation</option>
+                                <option value="my_observation" <?php echo $view_mode === 'my_observation' ? 'selected' : ''; ?>>My Evaluation Schedule</option>
                             </select>
                         </div>
                         <?php endif; ?>
@@ -1765,7 +1904,7 @@ try {
 
             <?php if ($view_mode === 'my_observation' && $has_teacher_record): ?>
             <!-- My Observation View -->
-            <div style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08);">
+            <div class="observation-card observation-card-elevated">
                 <?php
                     $my_header_dept_code = $my_filter_department !== ''
                         ? $my_filter_department
@@ -1774,7 +1913,7 @@ try {
                     $is_basiced_dept = in_array($my_header_dept_code, ['JHS', 'ELEM'], true);
                 ?>
                 <div class="text-center mb-3">
-                    <h5 class="fw-bold">My Observation Plan</h5>
+                    <h5 class="fw-bold">My Evaluation Schedule</h5>
                     <p class="text-muted mb-1"><?php echo htmlspecialchars($my_header_dept_display); ?></p>
                     <p class="text-muted"><?php echo htmlspecialchars($semester); ?> Semester SY <?php echo htmlspecialchars($academic_year); ?></p>
                 </div>
@@ -1931,8 +2070,8 @@ try {
                     <div style="background:#fff3e0;border:2px solid #ff9800;border-radius:10px;padding:20px;text-align:center;">
                         <h5>Draw Your Signature</h5>
                         <p class="text-muted small" id="myObsSelectedCount">0 schedule(s) selected</p>
-                        <div class="mb-3" style="display:inline-block;">
-                            <canvas id="myObsSigCanvas" width="400" height="150" style="border: 2px solid #333; border-radius: 8px; background: #fff; cursor: crosshair;"></canvas>
+                        <div class="mb-3 myobs-sign-canvas-wrap">
+                            <canvas id="myObsSigCanvas" width="400" height="150"></canvas>
                             <div class="mt-1">
                                 <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearMyObsSig()"><i class="fas fa-eraser me-1"></i>Clear</button>
                             </div>
@@ -1954,15 +2093,15 @@ try {
                 <?php else: ?>
                 <div class="text-center py-5">
                     <i class="fas fa-clipboard fa-3x text-muted mb-3"></i>
-                    <h5 class="text-muted">No Observation Plan Yet</h5>
-                    <p class="text-muted">No observation schedule has been set for you this <?php echo htmlspecialchars($semester); ?> Semester.</p>
+                    <h5 class="text-muted">No Evaluation Schedule Yet</h5>
+                    <p class="text-muted">No evaluation schedule has been set for you this <?php echo htmlspecialchars($semester); ?> Semester.</p>
                 </div>
                 <?php endif; ?>
             </div>
 
             <?php else: ?>
             <!-- Normal Observation Plan View -->
-            <div style="background: white; padding: 30px;">
+            <div class="observation-card">
                 
                 <!-- Print Header -->
                 <div class="print-only" style="padding: 8px 0 10px; border-bottom: 1px solid #000; margin-bottom: 0;">
@@ -2000,7 +2139,7 @@ try {
                 </div>
 
                 <!-- Action Buttons -->
-                <div class="mb-3 d-flex justify-content-end align-items-center gap-2 no-print">
+                <div class="mb-3 action-toolbar no-print">
                     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="openScheduleModal()">
                         <i class="fas fa-calendar-plus me-1"></i>Set Schedule
                     </button>
@@ -2038,10 +2177,19 @@ try {
                         <tbody>
                             <?php if (count($teachers_list) > 0): ?>
                                 <?php $counter = 1; foreach ($teachers_list as $t): ?>
-                                <?php $tid = $t['id']; $row_key = $t['_row_key'] ?? $tid; $sd = $schedule_data[$row_key] ?? []; $is_done = $eval_data[$row_key]['done'] ?? false; $has_schedule = !$is_done && !empty($t['evaluation_schedule']); ?>
+                                <?php
+                                    $tid = $t['id'];
+                                    $row_key = $t['_row_key'] ?? $tid;
+                                    $sd = $schedule_data[$row_key] ?? [];
+                                    $is_done = $eval_data[$row_key]['done'] ?? false;
+                                    $has_schedule = !$is_done && !empty($t['evaluation_schedule']);
+                                    $ack_upcoming = $ack_upcoming_map[$tid] ?? null;
+                                    $is_schedule_signed = $has_schedule && !empty($ack_upcoming);
+                                    $can_reschedule = $has_schedule && !$is_schedule_signed;
+                                ?>
                                 <tr>
                                     <td>
-                                        <?php if ($has_schedule && !$is_done): ?>
+                                        <?php if ($can_reschedule): ?>
                                             <?php if ($is_leader): ?>
                                                 <?php
                                                     $is_opted = isset($leader_opted_teachers[$tid]);
@@ -2101,7 +2249,14 @@ try {
                                         <?php 
                                         $ack = $ack_map[$tid] ?? null;
                                         $faculty_sig = $eval_data[$row_key]['faculty_signature'] ?? '';
-                                        if ($ack && !empty($ack['signature'])): ?>
+                                        if ($is_schedule_signed && !empty($ack_upcoming['signature'])): ?>
+                                            <img src="<?php echo $ack_upcoming['signature']; ?>" alt="Signature" style="max-height: 30px; max-width: 60px;" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack_upcoming['acknowledged_at']))); ?>">
+                                        <?php elseif ($is_schedule_signed): ?>
+                                            <span class="text-success no-print" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack_upcoming['acknowledged_at']))); ?>">
+                                                <i class="fas fa-check-circle"></i>
+                                            </span>
+                                            <span class="print-only">Signed</span>
+                                        <?php elseif ($ack && !empty($ack['signature'])): ?>
                                             <img src="<?php echo $ack['signature']; ?>" alt="Signature" style="max-height: 30px; max-width: 60px;" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
                                         <?php elseif ($ack): ?>
                                             <span class="text-success no-print" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
@@ -2296,7 +2451,7 @@ try {
                             <input type="hidden" id="modal_evaluation_schedule" name="evaluation_schedule" required>
                             <input type="hidden" id="modal_evaluation_schedule_end" name="evaluation_schedule_end">
                             <div class="row g-2 mb-2">
-                                <div class="col-7">
+                                <div class="col-12 col-md-7">
                                     <div class="input-group">
                                         <span class="input-group-text"><i class="fas fa-calendar"></i></span>
                                         <input type="date" class="form-control" id="modal_evaluation_date" required>
@@ -2304,13 +2459,13 @@ try {
                                 </div>
                             </div>
                             <div class="row g-2">
-                                <div class="col-6">
+                                <div class="col-12 col-md-6">
                                     <div class="input-group">
                                         <span class="input-group-text"><i class="fas fa-clock"></i> Start</span>
                                         <input type="time" class="form-control" id="modal_evaluation_start_time" step="900" required>
                                     </div>
                                 </div>
-                                <div class="col-6">
+                                <div class="col-12 col-md-6">
                                     <div class="input-group">
                                         <span class="input-group-text"><i class="fas fa-clock"></i> End</span>
                                         <input type="time" class="form-control" id="modal_evaluation_end_time" step="900">
@@ -2878,25 +3033,40 @@ document.querySelectorAll('.inline-edit').forEach(input => {
         countEl = document.getElementById('myObsSelectedCount');
         container = document.getElementById('myObsSignedItemsContainer');
 
+        function getCanvasPoint(clientX, clientY) {
+            var rect = canvas.getBoundingClientRect();
+            var scaleX = canvas.width / rect.width;
+            var scaleY = canvas.height / rect.height;
+            return {
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY
+            };
+        }
+
         canvas.addEventListener('mousedown', function(e) {
-            drawing = true; ctx.beginPath(); ctx.moveTo(e.offsetX, e.offsetY);
+            var p = getCanvasPoint(e.clientX, e.clientY);
+            drawing = true; ctx.beginPath(); ctx.moveTo(p.x, p.y);
         });
         canvas.addEventListener('mousemove', function(e) {
             if (!drawing) return; hasDrawn = true;
+            var p = getCanvasPoint(e.clientX, e.clientY);
             ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = '#000';
-            ctx.lineTo(e.offsetX, e.offsetY); ctx.stroke();
+            ctx.lineTo(p.x, p.y); ctx.stroke();
         });
         canvas.addEventListener('mouseup', function() { drawing = false; });
         canvas.addEventListener('mouseleave', function() { drawing = false; });
         canvas.addEventListener('touchstart', function(e) {
-            e.preventDefault(); var rect = canvas.getBoundingClientRect(); var touch = e.touches[0];
-            drawing = true; ctx.beginPath(); ctx.moveTo(touch.clientX - rect.left, touch.clientY - rect.top);
+            e.preventDefault();
+            var touch = e.touches[0];
+            var p = getCanvasPoint(touch.clientX, touch.clientY);
+            drawing = true; ctx.beginPath(); ctx.moveTo(p.x, p.y);
         });
         canvas.addEventListener('touchmove', function(e) {
             e.preventDefault(); if (!drawing) return; hasDrawn = true;
-            var rect = canvas.getBoundingClientRect(); var touch = e.touches[0];
+            var touch = e.touches[0];
+            var p = getCanvasPoint(touch.clientX, touch.clientY);
             ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.strokeStyle = '#000';
-            ctx.lineTo(touch.clientX - rect.left, touch.clientY - rect.top); ctx.stroke();
+            ctx.lineTo(p.x, p.y); ctx.stroke();
         });
         canvas.addEventListener('touchend', function() { drawing = false; });
         // Update hidden inputs now that container exists

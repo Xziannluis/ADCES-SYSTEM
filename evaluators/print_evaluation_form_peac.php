@@ -36,25 +36,34 @@ if (!$eval) {
     exit();
 }
 
-// Allow access if user is the teacher being evaluated
-$isOwnEvaluation = false;
+// Check if the current user is the teacher being evaluated
+$isTeacherBeingEvaluated = false;
 $tchkStmt = $db->prepare("SELECT id FROM teachers WHERE user_id = :uid LIMIT 1");
 $tchkStmt->bindParam(':uid', $_SESSION['user_id'], PDO::PARAM_INT);
 $tchkStmt->execute();
-$myTeacher = $tchkStmt->fetch(PDO::FETCH_ASSOC);
-if ($myTeacher && (int)$myTeacher['id'] === (int)$eval['teacher_id']) {
-    $isOwnEvaluation = true;
+$myTeacherRec = $tchkStmt->fetch(PDO::FETCH_ASSOC);
+if ($myTeacherRec && (int)$myTeacherRec['id'] === (int)$eval['teacher_id']) {
+    $isTeacherBeingEvaluated = true;
 }
 
-// Coordinators can only view their own evaluations within assigned programs
-if (!$isOwnEvaluation && in_array($_SESSION['role'] ?? '', ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
-    if ((int)$eval['evaluator_id'] !== (int)($_SESSION['user_id'] ?? 0)) {
-        http_response_code(403);
-        echo 'Access denied.';
-        exit();
+// Coordinators can print their own evaluations, evaluations on assigned teachers,
+// or evaluations about themselves (teacher record linked to their user).
+if (!$isTeacherBeingEvaluated && in_array($_SESSION['role'] ?? '', ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
+    $is_own_evaluation = ((int)$eval['evaluator_id'] === (int)($_SESSION['user_id'] ?? 0));
+    if (!$is_own_evaluation) {
+        $assignCheck = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :eid AND teacher_id = :tid LIMIT 1");
+        $assignCheck->execute([':eid' => $_SESSION['user_id'], ':tid' => $eval['teacher_id']]);
+        if (!$assignCheck->fetch()) {
+            http_response_code(403);
+            echo 'Access denied.';
+            exit();
+        }
     }
-    $programs = resolveEvaluatorPrograms($db, $_SESSION['user_id'], $_SESSION['department'] ?? null);
-    if (!empty($programs) && !in_array($eval['teacher_department'], $programs, true)) {
+}
+
+// Teachers can only print evaluations about themselves.
+if (($_SESSION['role'] ?? '') === 'teacher') {
+    if (!$isTeacherBeingEvaluated) {
         http_response_code(403);
         echo 'Access denied.';
         exit();
@@ -203,7 +212,31 @@ $autoPrint = !empty($_GET['auto_print']);
             .page-footer img { width: 100%; height: auto; }
         }
         .print-btn-bar { text-align: center; margin-bottom: 12px; }
-        input[type="radio"] { pointer-events: none; margin: 0; width: 13px; height: 13px; accent-color: #000; }
+        input[type="radio"] {
+            pointer-events: none;
+            -webkit-appearance: none;
+            appearance: none;
+            width: 13px;
+            height: 13px;
+            margin: 0;
+            border: 1.6px solid #000;
+            border-radius: 50%;
+            background: #fff;
+            display: inline-grid;
+            place-content: center;
+            vertical-align: middle;
+        }
+        input[type="radio"]::before {
+            content: "";
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #000;
+            transform: scale(0);
+        }
+        input[type="radio"]:checked::before {
+            transform: scale(1);
+        }
     </style>
 </head>
 <body>

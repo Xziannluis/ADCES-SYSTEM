@@ -78,6 +78,73 @@ function confirmAction(message) {
         }
     });
 })();
+
+(function setupMobileScrollControls() {
+    if (document.querySelector('.mobile-scroll-controls')) {
+        return;
+    }
+
+    const controls = document.createElement('div');
+    controls.className = 'mobile-scroll-controls no-print';
+    controls.setAttribute('aria-label', 'Scroll controls');
+    controls.innerHTML = `
+        <div class="msc-row">
+            <button type="button" class="mobile-scroll-btn" data-dir="up" aria-label="Scroll up"><i class="fas fa-arrow-up"></i></button>
+            <button type="button" class="mobile-scroll-btn" data-dir="down" aria-label="Scroll down"><i class="fas fa-arrow-down"></i></button>
+        </div>
+        <div class="msc-row">
+            <button type="button" class="mobile-scroll-btn" data-dir="left" aria-label="Scroll left"><i class="fas fa-arrow-left"></i></button>
+            <button type="button" class="mobile-scroll-btn" data-dir="right" aria-label="Scroll right"><i class="fas fa-arrow-right"></i></button>
+        </div>
+    `;
+    document.body.appendChild(controls);
+
+    const buttons = {
+        up: controls.querySelector('[data-dir="up"]'),
+        down: controls.querySelector('[data-dir="down"]'),
+        left: controls.querySelector('[data-dir="left"]'),
+        right: controls.querySelector('[data-dir="right"]')
+    };
+
+    function scrollByDir(dir) {
+        const xStep = Math.max(180, Math.floor(window.innerWidth * 0.75));
+        const yStep = Math.max(220, Math.floor(window.innerHeight * 0.7));
+        if (dir === 'left') window.scrollBy({ left: -xStep, behavior: 'smooth' });
+        if (dir === 'right') window.scrollBy({ left: xStep, behavior: 'smooth' });
+        if (dir === 'up') window.scrollBy({ top: -yStep, behavior: 'smooth' });
+        if (dir === 'down') window.scrollBy({ top: yStep, behavior: 'smooth' });
+    }
+
+    Object.keys(buttons).forEach(function(dir) {
+        buttons[dir].addEventListener('click', function() {
+            scrollByDir(dir);
+        });
+    });
+
+    function updateButtons() {
+        const isMobile = window.innerWidth < 992;
+        controls.style.display = isMobile ? 'flex' : 'none';
+        if (!isMobile) return;
+
+        const doc = document.scrollingElement || document.documentElement;
+        const maxX = Math.max(0, doc.scrollWidth - window.innerWidth);
+        const maxY = Math.max(0, doc.scrollHeight - window.innerHeight);
+        const x = window.pageXOffset || doc.scrollLeft || 0;
+        const y = window.pageYOffset || doc.scrollTop || 0;
+
+        buttons.left.disabled = (x <= 2);
+        buttons.right.disabled = (x >= maxX - 2);
+        buttons.up.disabled = (y <= 2);
+        buttons.down.disabled = (y >= maxY - 2);
+
+        // Hide horizontal row if page doesn't overflow horizontally.
+        buttons.left.parentElement.style.display = (maxX > 10) ? 'flex' : 'none';
+    }
+
+    window.addEventListener('scroll', updateButtons, { passive: true });
+    window.addEventListener('resize', updateButtons);
+    updateButtons();
+})();
 </script>
 
 </body>
