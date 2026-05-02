@@ -204,6 +204,36 @@ class EvaluationController {
                 throw new Exception($scheduleGate['message']);
             }
 
+            // Enforce teacher acknowledgment for the active schedule cycle.
+            // A teacher can only be evaluated after signing the observation plan
+            // for the same academic year + semester as the scheduled evaluation.
+            $scheduleSemester = (string)($postData['semester'] ?? '');
+            if (!in_array($scheduleSemester, ['1st', '2nd'], true)) {
+                $teacherSemStmt = $this->db->prepare("SELECT evaluation_semester FROM teachers WHERE id = :id LIMIT 1");
+                $teacherSemStmt->bindValue(':id', $teacherId);
+                $teacherSemStmt->execute();
+                $scheduleSemester = (string)$teacherSemStmt->fetchColumn();
+            }
+            $scheduleAcademicYear = (string)($postData['academic_year'] ?? '');
+
+            if ($scheduleAcademicYear !== '' && in_array($scheduleSemester, ['1st', '2nd'], true)) {
+                $ackStmt = $this->db->prepare(
+                    "SELECT id
+                     FROM observation_plan_acknowledgments
+                     WHERE teacher_id = :teacher_id
+                       AND academic_year = :academic_year
+                       AND semester = :semester
+                     LIMIT 1"
+                );
+                $ackStmt->bindValue(':teacher_id', $teacherId);
+                $ackStmt->bindValue(':academic_year', $scheduleAcademicYear);
+                $ackStmt->bindValue(':semester', $scheduleSemester);
+                $ackStmt->execute();
+                if (!$ackStmt->fetch(PDO::FETCH_ASSOC)) {
+                    throw new Exception('Cannot submit evaluation: teacher acknowledgment is required first.');
+                }
+            }
+
             // Log submission for debugging
             error_log("Submission: evaluatorId=$evaluatorId, teacher_id=" . ($postData['teacher_id'] ?? 'MISSING'));
 

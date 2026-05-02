@@ -144,16 +144,24 @@ try {
 
 // Load observation plan acknowledgments to check if teachers have signed
 $teacher_signed_map = [];
+$currentAcademicYear = '';
+try {
+    $monthNow = (int)date('n');
+    $yearNow = (int)date('Y');
+    $currentAcademicYear = ($monthNow >= 6) ? ($yearNow . '-' . ($yearNow + 1)) : (($yearNow - 1) . '-' . $yearNow);
+} catch (Throwable $e) {
+    $currentAcademicYear = '';
+}
 try {
     $eval_viewer_dept = $_SESSION['department'] ?? '';
     if (in_array($_SESSION['role'], ['president', 'vice_president'])) {
-        $ack_stmt = $db->prepare("SELECT DISTINCT teacher_id FROM observation_plan_acknowledgments");
+        $ack_stmt = $db->prepare("SELECT DISTINCT teacher_id, academic_year, semester FROM observation_plan_acknowledgments");
         $ack_stmt->execute();
     } elseif (in_array($_SESSION['role'], ['dean', 'principal'])) {
         // Deans/principals: check signatures matching their department OR
         // where the teacher's own department matches (for cross-dept coordinator schedules)
         $ack_stmt = $db->prepare(
-            "SELECT DISTINCT opa.teacher_id FROM observation_plan_acknowledgments opa
+            "SELECT DISTINCT opa.teacher_id, opa.academic_year, opa.semester FROM observation_plan_acknowledgments opa
              LEFT JOIN teachers t ON t.id = opa.teacher_id
              WHERE opa.department = :dept OR opa.department IS NULL OR t.department = :dept2"
         );
@@ -162,16 +170,21 @@ try {
         // Coordinators may have cross-dept teachers assigned to them,
         // so check any signature that exists for their assigned teachers
         $ack_stmt = $db->prepare(
-            "SELECT DISTINCT opa.teacher_id FROM observation_plan_acknowledgments opa
+            "SELECT DISTINCT opa.teacher_id, opa.academic_year, opa.semester FROM observation_plan_acknowledgments opa
              INNER JOIN teacher_assignments ta ON ta.teacher_id = opa.teacher_id AND ta.evaluator_id = :evaluator_id"
         );
         $ack_stmt->execute([':evaluator_id' => $_SESSION['user_id']]);
     } else {
-        $ack_stmt = $db->prepare("SELECT DISTINCT teacher_id FROM observation_plan_acknowledgments WHERE department = :dept OR department IS NULL");
+        $ack_stmt = $db->prepare("SELECT DISTINCT teacher_id, academic_year, semester FROM observation_plan_acknowledgments WHERE department = :dept OR department IS NULL");
         $ack_stmt->execute([':dept' => $eval_viewer_dept]);
     }
     while ($ack_row = $ack_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $teacher_signed_map[(int)$ack_row['teacher_id']] = true;
+        $ackTeacherId = (int)($ack_row['teacher_id'] ?? 0);
+        $ackAy = (string)($ack_row['academic_year'] ?? '');
+        $ackSem = (string)($ack_row['semester'] ?? '');
+        if ($ackTeacherId > 0 && $ackAy !== '' && $ackSem !== '') {
+            $teacher_signed_map[$ackTeacherId . '|' . $ackAy . '|' . $ackSem] = true;
+        }
     }
 } catch (PDOException $e) {}
 
@@ -312,7 +325,11 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             $schedule_block_message = '';
 
                                             // Block if teacher hasn't signed the observation plan
-                                            $teacher_has_signed = isset($teacher_signed_map[(int)$teacher_row['id']]);
+                                            $teacher_semester = (string)($teacher_row['evaluation_semester'] ?? '');
+                                            $teacher_has_signed = false;
+                                            if ($currentAcademicYear !== '' && in_array($teacher_semester, ['1st', '2nd'], true)) {
+                                                $teacher_has_signed = isset($teacher_signed_map[(int)$teacher_row['id'] . '|' . $currentAcademicYear . '|' . $teacher_semester]);
+                                            }
                                             if (!$teacher_has_signed) {
                                                 $can_evaluate_now = false;
                                                 $schedule_badge_class = 'bg-warning text-dark';

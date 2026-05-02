@@ -162,6 +162,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             foreach ($teacher_ids as $tid) {
                 $tid = (int)$tid;
                 if ($tid <= 0) continue;
+
+                // If this leader originally set the schedule, treat observer status as implicit
+                // and do not send "accepted as observer" notifications for that teacher.
+                $scheduledByMe = false;
+                try {
+                    $sbChk = $db->prepare("SELECT 1 FROM teachers WHERE id = :tid AND scheduled_by = :eid LIMIT 1");
+                    $sbChk->execute([':tid' => $tid, ':eid' => $_SESSION['user_id']]);
+                    $scheduledByMe = (bool)$sbChk->fetchColumn();
+                } catch (Exception $e) {
+                    $scheduledByMe = false;
+                }
+                if ($scheduledByMe) {
+                    continue;
+                }
+
                 // Check if already assigned
                 $chk = $db->prepare("SELECT id FROM teacher_assignments WHERE evaluator_id = :eid AND teacher_id = :tid LIMIT 1");
                 $chk->execute([':eid' => $_SESSION['user_id'], ':tid' => $tid]);

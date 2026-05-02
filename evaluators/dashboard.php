@@ -285,7 +285,7 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
             <div class="ms-auto d-flex align-items-center gap-2">
                 <!-- Notification Bell -->
                 <div class="dropdown">
-                    <button class="btn position-relative" type="button" id="notifBell" data-bs-toggle="dropdown" aria-expanded="false" style="color:#fff;font-size:1.3rem;">
+                    <button class="btn position-relative" type="button" id="notifBell" data-bs-toggle="dropdown" aria-expanded="false">
                         <i class="fas fa-bell"></i>
                         <?php if ($unread_count > 0): ?>
                         <span class="position-absolute top-0 start-100 translate-middle p-1 bg-danger border border-light rounded-circle" style="font-size:0;">
@@ -293,28 +293,28 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                         </span>
                         <?php endif; ?>
                     </button>
-                    <div class="dropdown-menu dropdown-menu-end shadow-lg" aria-labelledby="notifBell" style="width:420px;max-height:480px;overflow-y:auto;padding:0;border-radius:10px;">
-                        <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom" style="background:#2c3e50;color:#fff;border-radius:10px 10px 0 0;">
+                    <div class="dropdown-menu dropdown-menu-end shadow-lg" aria-labelledby="notifBell">
+                        <div class="d-flex justify-content-between align-items-center notif-head">
                             <strong><i class="fas fa-bell me-2"></i>Notifications</strong>
                             <?php if ($unread_count > 0): ?>
-                            <button class="btn btn-sm text-white-50 p-0" onclick="event.stopPropagation();markAllRead()" style="font-size:0.85rem;">Mark all as read</button>
+                            <button class="notif-mark-all" onclick="event.stopPropagation();markAllRead()">Mark all as read</button>
                             <?php endif; ?>
                         </div>
                         <?php if (!empty($notifications)): ?>
                             <div id="notificationList">
                             <?php foreach ($notifications as $notif): ?>
-                            <div class="notif-item border-bottom px-3 py-3" id="notif-<?php echo (int)$notif['id']; ?>" style="white-space:normal;transition:all 0.3s ease;">
+                            <div class="notif-item <?php echo !$notif['is_read'] ? 'unread' : ''; ?>" id="notif-<?php echo (int)$notif['id']; ?>">
                                 <div class="d-flex align-items-start gap-2">
                                     <div style="flex:1;min-width:0;">
-                                        <div class="fw-semibold" style="font-size:0.95rem;">
+                                        <div class="notif-title">
                                             <?php if (!$notif['is_read']): ?><i class="fas fa-circle text-danger me-1" style="font-size:0.5rem;vertical-align:middle;"></i><?php endif; ?>
                                             <?php echo htmlspecialchars($notif['title']); ?>
                                         </div>
-                                        <div class="text-muted mt-1" style="font-size:0.85rem;line-height:1.4;"><?php echo htmlspecialchars($notif['message']); ?></div>
-                                        <div class="text-muted mt-1" style="font-size:0.78rem;"><i class="far fa-clock me-1"></i><?php echo date('M j, Y g:i A', strtotime($notif['created_at'])); ?></div>
+                                        <div class="notif-message"><?php echo htmlspecialchars($notif['message']); ?></div>
+                                        <div class="notif-time"><i class="far fa-clock me-1"></i><?php echo date('M j, Y g:i A', strtotime($notif['created_at'])); ?></div>
                                     </div>
                                     <?php if (!$notif['is_read']): ?>
-                                    <button class="btn btn-sm btn-outline-primary rounded-pill px-2 py-1 flex-shrink-0" onclick="event.stopPropagation();markRead(<?php echo (int)$notif['id']; ?>)" title="Mark as read" style="font-size:0.78rem;">
+                                    <button class="btn btn-sm btn-outline-primary flex-shrink-0 notif-read-btn" onclick="event.stopPropagation();markRead(<?php echo (int)$notif['id']; ?>)" title="Mark as read">
                                         <i class="fas fa-check me-1"></i>Read
                                     </button>
                                     <?php endif; ?>
@@ -323,7 +323,7 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                             <?php endforeach; ?>
                             </div>
                         <?php else: ?>
-                            <div class="text-center text-muted py-4" style="font-size:0.95rem;"><i class="far fa-bell-slash me-2"></i>No notifications</div>
+                            <div class="notif-empty"><i class="far fa-bell-slash me-2"></i>No notifications</div>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -488,7 +488,7 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
     function checkEmpty() {
         var list = document.getElementById('notificationList');
         if (list && list.querySelectorAll('.notif-item').length === 0) {
-            list.innerHTML = '<div class="text-center text-muted py-4" style="font-size:0.95rem;"><i class="far fa-bell-slash me-2"></i>No notifications</div>';
+            list.innerHTML = '<div class="notif-empty"><i class="far fa-bell-slash me-2"></i>No notifications</div>';
         }
     }
     </script>

@@ -575,7 +575,7 @@ img {
     color: white;
 }
 .stat-2 { 
-    background: linear-gradient(135deg, var(--success) 0%, #219653 100%);
+    background: linear-gradient(135deg, #2f80ed 0%, #1d4f91 100%);
     color: white;
 }
 .stat-3 { 
