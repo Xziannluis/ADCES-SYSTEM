@@ -30,6 +30,12 @@ class Evaluation {
         $where = [];
         $params = [];
 
+        // Reports should include only finalized evaluation outputs.
+        // Exclude placeholder/auto-generated rows (e.g., status changed but no real score yet).
+        $where[] = "e.status = 'completed'";
+        $where[] = "e.overall_avg IS NOT NULL";
+        $where[] = "e.overall_avg > 0";
+
         // If an evaluator_id is provided, filter by evaluator; otherwise return all evaluations (useful for leaders)
         if (!empty($evaluator_id)) {
             $where[] = 'e.evaluator_id = :evaluator_id';
@@ -99,7 +105,10 @@ class Evaluation {
                   FROM " . $this->table_name . " e
                   JOIN teachers t ON e.teacher_id = t.id
                   LEFT JOIN ai_recommendations ai ON e.id = ai.evaluation_id
-                  WHERE (t.department = :department" . (!empty($cross_dept_user_id) ? " OR e.evaluator_id = :cross_dept_user_id" : "") . ")";
+                  WHERE (t.department = :department" . (!empty($cross_dept_user_id) ? " OR e.evaluator_id = :cross_dept_user_id" : "") . ")
+                    AND e.status = 'completed'
+                    AND e.overall_avg IS NOT NULL
+                    AND e.overall_avg > 0";
         
         $params = [':department' => $department];
         if (!empty($cross_dept_user_id)) {
@@ -149,7 +158,10 @@ class Evaluation {
                     COUNT(ai.id) as ai_recommendations
                   FROM " . $this->table_name . " e
                   LEFT JOIN ai_recommendations ai ON e.id = ai.evaluation_id
-                  WHERE e.evaluator_id = :admin_id";
+                  WHERE e.evaluator_id = :admin_id
+                    AND e.status = 'completed'
+                    AND e.overall_avg IS NOT NULL
+                    AND e.overall_avg > 0";
         
         $stmt = $this->conn->prepare($query);
         $stmt->bindParam(':admin_id', $admin_id);
@@ -169,12 +181,18 @@ class Evaluation {
 
     // Get recent evaluations
     public function getRecentEvaluations($evaluator_id, $limit = 5) {
-        $query = "SELECT e.*, t.name as teacher_name
-                  FROM " . $this->table_name . " e
-                  JOIN teachers t ON e.teacher_id = t.id
-                  WHERE e.evaluator_id = :evaluator_id
-                  ORDER BY e.observation_date DESC
-                  LIMIT :limit";
+                // Only surface completed evaluations in "Recent Evaluations" so that
+                // draft/placeholder records (created when schedules are set) do not
+                // show a 0.0 overall score on the dashboard.
+                $query = "SELECT e.*, t.name as teacher_name
+                                    FROM " . $this->table_name . " e
+                                    JOIN teachers t ON e.teacher_id = t.id
+                                    WHERE e.evaluator_id = :evaluator_id
+                                        AND e.status = 'completed'
+                                        AND e.overall_avg IS NOT NULL
+                                        AND e.overall_avg > 0
+                                    ORDER BY e.observation_date DESC
+                                    LIMIT :limit";
         
         $stmt = $this->conn->prepare($query);
         $stmt->bindParam(':evaluator_id', $evaluator_id);

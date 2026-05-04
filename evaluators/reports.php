@@ -67,12 +67,25 @@ $available_teachers = [];
 try {
     if ($is_leader && $raw_department === '') {
         // Leaders with no department filter: show all years and teachers
-        $yearsQuery = "SELECT DISTINCT academic_year FROM evaluations WHERE academic_year IS NOT NULL AND academic_year <> '' ORDER BY academic_year DESC";
+        $yearsQuery = "SELECT DISTINCT academic_year
+                       FROM evaluations
+                       WHERE academic_year IS NOT NULL
+                         AND academic_year <> ''
+                         AND status = 'completed'
+                         AND overall_avg IS NOT NULL
+                         AND overall_avg > 0
+                       ORDER BY academic_year DESC";
         $yearsStmt = $db->prepare($yearsQuery);
         $yearsStmt->execute();
         $available_years = $yearsStmt->fetchAll(PDO::FETCH_COLUMN);
 
-        $teachersQuery = "SELECT DISTINCT t.id, t.name FROM evaluations e INNER JOIN teachers t ON e.teacher_id = t.id ORDER BY t.name ASC";
+        $teachersQuery = "SELECT DISTINCT t.id, t.name
+                          FROM evaluations e
+                          INNER JOIN teachers t ON e.teacher_id = t.id
+                          WHERE e.status = 'completed'
+                            AND e.overall_avg IS NOT NULL
+                            AND e.overall_avg > 0
+                          ORDER BY t.name ASC";
         $teachersStmt = $db->prepare($teachersQuery);
         $teachersStmt->execute();
         $available_teachers = $teachersStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -82,7 +95,10 @@ try {
         INNER JOIN teachers t ON e.teacher_id = t.id
         WHERE (t.department = :department OR e.evaluator_id = :current_user_id)
           AND e.academic_year IS NOT NULL
-          AND e.academic_year <> ''";
+          AND e.academic_year <> ''
+          AND e.status = 'completed'
+          AND e.overall_avg IS NOT NULL
+          AND e.overall_avg > 0";
     if ($scoped_evaluator_id !== null) {
         $yearsQuery .= " AND e.evaluator_id = :evaluator_id";
     }
@@ -100,7 +116,10 @@ try {
     $teachersQuery = "SELECT DISTINCT t.id, t.name
         FROM evaluations e
         INNER JOIN teachers t ON e.teacher_id = t.id
-        WHERE (t.department = :department OR e.evaluator_id = :current_user_id)";
+        WHERE (t.department = :department OR e.evaluator_id = :current_user_id)
+          AND e.status = 'completed'
+          AND e.overall_avg IS NOT NULL
+          AND e.overall_avg > 0";
     if ($scoped_evaluator_id !== null) {
         $teachersQuery .= " AND e.evaluator_id = :evaluator_id";
     }
@@ -549,7 +568,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                 </div>
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
-                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $_SESSION['role'])); ?>)
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="evaluatorMenu">
                         <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog me-2"></i>Settings</a></li>
@@ -1151,3 +1170,4 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
     </div>
 </body>
 </html>
+

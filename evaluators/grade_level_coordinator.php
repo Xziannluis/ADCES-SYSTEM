@@ -67,7 +67,7 @@ $recent_evals = $evaluation->getRecentEvaluations($_SESSION['user_id'], 5);
 $notifications = [];
 $unread_count = 0;
 try {
-    $notif_q = "SELECT * FROM notifications WHERE user_id = :user_id AND type = 'schedule' AND is_read = 0 ORDER BY created_at DESC LIMIT 10";
+    $notif_q = "SELECT * FROM notifications WHERE user_id = :user_id AND type IN ('schedule','reschedule_request') AND is_read = 0 ORDER BY created_at DESC LIMIT 10";
     $notif_stmt = $db->prepare($notif_q);
     $notif_stmt->bindParam(':user_id', $_SESSION['user_id']);
     $notif_stmt->execute();
@@ -113,7 +113,7 @@ try {
                         <?php if (!empty($notifications)): ?>
                             <div id="notificationList">
                             <?php foreach ($notifications as $notif): ?>
-                            <div class="notif-item <?php echo !$notif['is_read'] ? 'unread' : ''; ?>" id="notif-<?php echo (int)$notif['id']; ?>">
+                            <div class="notif-item <?php echo !$notif['is_read'] ? 'unread' : ''; ?>" id="notif-<?php echo (int)$notif['id']; ?>" <?php if (!empty($notif['link'])): ?>onclick="window.location.href='<?php echo htmlspecialchars($notif['link'], ENT_QUOTES); ?>'" style="cursor:pointer;"<?php endif; ?>>
                                 <div class="d-flex align-items-start gap-2">
                                     <div style="flex:1;min-width:0;">
                                         <div class="notif-title">
@@ -139,7 +139,7 @@ try {
                 </div>
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" id="gradeCoordinatorMenu" data-bs-toggle="dropdown" aria-expanded="false">
-                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (Grade Level Coordinator)
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="gradeCoordinatorMenu">
                         <li><a class="dropdown-item" href="settings.php"><i class="fas fa-cog me-2"></i>Settings</a></li>

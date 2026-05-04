@@ -9,6 +9,7 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['role'], $allowed_roles)
 }
 
 require_once '../config/database.php';
+require_once '../includes/mailer.php';
 
 $database = new Database();
 $db = $database->getConnection();
@@ -121,6 +122,142 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     } else {
         $error_message = "Please select at least one schedule to sign.";
+    }
+}
+
+// Handle teacher reschedule request
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'request_reschedule_my') {
+    $req_semester = trim((string)($_POST['semester'] ?? ''));
+    $req_academic_year = trim((string)($_POST['academic_year'] ?? ''));
+    $req_item = trim((string)($_POST['reschedule_item'] ?? ''));
+    $req_reason = trim((string)($_POST['reschedule_reason'] ?? ''));
+    $req_other_reason = trim((string)($_POST['reschedule_reason_other'] ?? ''));
+
+    $allowed_reasons = ['emergency', 'conflict_schedule', 'others'];
+    if (!in_array($req_reason, $allowed_reasons, true)) {
+        $error_message = "Invalid reschedule reason.";
+    } elseif ($req_reason === 'others' && $req_other_reason === '') {
+        $error_message = 'Please provide details for "Others".';
+    } elseif ($req_item === '') {
+        $error_message = 'Please select a schedule to request reschedule.';
+    } else {
+        try {
+            $tReqStmt = $db->prepare("SELECT id, name, department, scheduled_department, evaluation_schedule, evaluation_room, evaluation_subject FROM teachers WHERE id = :tid LIMIT 1");
+            $tReqStmt->execute([':tid' => $teacher_id]);
+            $tReq = $tReqStmt->fetch(PDO::FETCH_ASSOC);
+
+            $teacher_name_req = $tReq['name'] ?? ($_SESSION['name'] ?? 'Teacher');
+            $teacher_dept_req = trim((string)($tReq['scheduled_department'] ?? ''));
+            if ($teacher_dept_req === '') $teacher_dept_req = trim((string)($tReq['department'] ?? ''));
+
+            $req_sched = trim((string)($tReq['evaluation_schedule'] ?? ''));
+            $req_room = trim((string)($tReq['evaluation_room'] ?? ''));
+            $req_subject = trim((string)($tReq['evaluation_subject'] ?? ''));
+            $req_eval_id = null;
+
+            if ($req_item !== 'upcoming') {
+                $req_eval_id = (int)$req_item;
+                if ($req_eval_id > 0) {
+                    $eReqStmt = $db->prepare("SELECT e.observation_date, e.observation_time, e.observation_room, e.subject_observed, u.department AS evaluator_department
+                                              FROM evaluations e
+                                              LEFT JOIN users u ON u.id = e.evaluator_id
+                                              WHERE e.id = :eid AND e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem
+                                              LIMIT 1");
+                    $eReqStmt->execute([
+                        ':eid' => $req_eval_id,
+                        ':tid' => $teacher_id,
+                        ':ay' => $req_academic_year,
+                        ':sem' => $req_semester
+                    ]);
+                    $eReq = $eReqStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($eReq) {
+                        $od = trim((string)($eReq['observation_date'] ?? ''));
+                        $ot = trim((string)($eReq['observation_time'] ?? ''));
+                        if ($od !== '') {
+                            $req_sched = $od . ($ot !== '' ? (' ' . $ot) : '');
+                        }
+                        $req_room = trim((string)($eReq['observation_room'] ?? $req_room));
+                        $req_subject = trim((string)($eReq['subject_observed'] ?? $req_subject));
+                        $evDept = trim((string)($eReq['evaluator_department'] ?? ''));
+                        if ($evDept !== '') $teacher_dept_req = $evDept;
+                    }
+                }
+            }
+
+            $reason_label = $req_reason === 'emergency'
+                ? 'Emergency'
+                : ($req_reason === 'conflict_schedule' ? 'Conflict of Schedule' : 'Others');
+            $reason_text = $reason_label . ($req_reason === 'others' ? (': ' . $req_other_reason) : '');
+
+            // Notify: dean + chairperson of owning department
+            // and always notify president + vice president.
+            $recipients = [];
+            if ($teacher_dept_req !== '') {
+                $rStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                       FROM users u
+                                       WHERE u.department = :dept
+                                         AND u.status = 'active'
+                                         AND u.email IS NOT NULL
+                                         AND u.email <> ''
+                                         AND u.role IN ('dean','chairperson')");
+                $rStmt->execute([':dept' => $teacher_dept_req]);
+                $recipients = $rStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            }
+
+            $pvStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                    FROM users u
+                                    WHERE u.status = 'active'
+                                      AND u.email IS NOT NULL
+                                      AND u.email <> ''
+                                      AND u.role IN ('president','vice_president')");
+            $pvStmt->execute();
+            $pvRows = $pvStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $byId = [];
+            foreach (array_merge($recipients, $pvRows) as $r) {
+                $rid = (int)($r['id'] ?? 0);
+                if ($rid > 0) $byId[$rid] = $r;
+            }
+            $recipients = array_values($byId);
+
+            $formatted_sched = $req_sched ? date('F d, Y \a\t h:i A', strtotime($req_sched)) : 'TBA';
+            $subject_line = "Reschedule Request - {$teacher_name_req}";
+            $msg = "Teacher {$teacher_name_req} requested reschedule for {$formatted_sched}. Reason: {$reason_text}.";
+            if ($req_room !== '') $msg .= " Room: {$req_room}.";
+            if ($req_subject !== '') $msg .= " Subject: {$req_subject}.";
+
+            $notifLink = 'observation_plan.php?' . http_build_query([
+                'open_reschedule' => 1,
+                'teacher_id' => (int)$teacher_id,
+                'semester' => $req_semester,
+                'academic_year' => $req_academic_year
+            ]);
+
+            foreach ($recipients as $rcp) {
+                if (!empty($rcp['email'])) {
+                    sendGenericNotificationEmail(
+                        $rcp['email'],
+                        $rcp['name'] ?? 'Evaluator',
+                        $subject_line,
+                        $msg
+                    );
+                }
+                try {
+                    $notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link) VALUES (:uid, :tid, 'reschedule_request', :title, :msg, :link)");
+                    $notif->execute([
+                        ':uid' => (int)$rcp['id'],
+                        ':tid' => (int)$teacher_id,
+                        ':title' => $subject_line,
+                        ':msg' => $msg,
+                        ':link' => $notifLink
+                    ]);
+                } catch (Exception $e) {}
+            }
+
+            $success_message = 'Reschedule request sent successfully.';
+        } catch (Exception $e) {
+            $error_message = 'Failed to send reschedule request.';
+        }
     }
 }
 
@@ -402,6 +539,21 @@ try {
             width: 20px;
             color: #2c3e50;
         }
+        .resched-modal .modal-dialog {
+            max-width: 560px;
+        }
+        .resched-modal .modal-content {
+            border: 0;
+            border-radius: 14px;
+            overflow: hidden;
+        }
+        .resched-modal .modal-header {
+            background: #0d6efd !important;
+            color: #fff;
+        }
+        .resched-modal .modal-body {
+            padding: 1rem 1.25rem;
+        }
     </style>
 </head>
 <body>
@@ -510,6 +662,9 @@ try {
                 <?php if ($show_upcoming || count($eval_groups) > 0): ?>
 
                 <div class="mb-3 d-flex justify-content-end no-print">
+                    <button class="btn btn-outline-primary me-2" id="reqReschedBtn" disabled onclick="openRescheduleRequestModal()">
+                        <i class="fas fa-calendar-alt me-1"></i>Request Reschedule
+                    </button>
                     <button class="btn btn-primary" id="signToggleBtn" disabled onclick="toggleSignPanel()">
                         <i class="fas fa-signature me-1"></i>Sign <span id="signBadgeCount" class="badge bg-light text-dark ms-1" style="display:none;">0</span>
                     </button>
@@ -619,7 +774,7 @@ try {
                             <tr>
                                 <td class="text-center">
                                     <?php if (!$upcoming_signed): ?>
-                                        <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" style="width:20px;height:20px;">
+                                        <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars($row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
                                     <?php else: ?>
                                         <i class="fas fa-check-circle text-success" title="Signed on <?php echo date('M d, Y g:i A', strtotime($signed_map['upcoming']['acknowledged_at'])); ?>"></i>
                                     <?php endif; ?>
@@ -695,11 +850,50 @@ try {
 
     <?php include '../includes/footer.php'; ?>
 
+    <!-- Request Reschedule Modal -->
+    <div class="modal fade resched-modal" id="rescheduleRequestModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-calendar-times me-2"></i>Request Reschedule</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <form method="POST">
+                    <div class="modal-body">
+                        <input type="hidden" name="action" value="request_reschedule_my">
+                        <input type="hidden" name="semester" value="<?php echo htmlspecialchars($semester); ?>">
+                        <input type="hidden" name="academic_year" value="<?php echo htmlspecialchars($academic_year); ?>">
+                        <input type="hidden" name="reschedule_item" id="rescheduleItemInput" value="">
+
+                        <div class="mb-2 small text-muted" id="rescheduleSelectedText"></div>
+
+                        <label class="form-label fw-bold">Reason <span class="text-danger">*</span></label>
+                        <select class="form-select" name="reschedule_reason" id="rescheduleReasonSelect" required>
+                            <option value="">Select reason</option>
+                            <option value="emergency">Emergency</option>
+                            <option value="conflict_schedule">Conflict of Schedule</option>
+                            <option value="others">Others</option>
+                        </select>
+                        <div class="mt-3" id="rescheduleOtherWrap" style="display:none;">
+                            <label class="form-label fw-bold">Please specify</label>
+                            <textarea class="form-control" name="reschedule_reason_other" id="rescheduleOtherText" rows="3"></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        <button type="submit" class="btn btn-primary">Send Request</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script>
     // Sign panel toggle
-    var signPanel = document.getElementById('signPanel');
-    var signToggleBtn = document.getElementById('signToggleBtn');
-    var signBadgeCount = document.getElementById('signBadgeCount');
+var signPanel = document.getElementById('signPanel');
+var signToggleBtn = document.getElementById('signToggleBtn');
+var signBadgeCount = document.getElementById('signBadgeCount');
+var reqReschedBtn = document.getElementById('reqReschedBtn');
 
     function toggleSignPanel() {
         if (!signPanel) return;
@@ -785,6 +979,9 @@ try {
                 if (signPanel) signPanel.style.display = 'none';
             }
         }
+        if (reqReschedBtn) {
+            reqReschedBtn.disabled = (count !== 1);
+        }
     }
 
     document.querySelectorAll('.sign-item-check').forEach(function(cb) {
@@ -811,6 +1008,42 @@ try {
         if (!confirm('Sign ' + checks.length + ' selected schedule(s)?')) return false;
         document.getElementById('signatureData').value = sigCanvas.toDataURL('image/png');
         return true;
+    }
+
+    function openRescheduleRequestModal() {
+        var checks = document.querySelectorAll('.sign-item-check:checked');
+        if (checks.length !== 1) {
+            alert('Please select exactly one schedule.');
+            return;
+        }
+        var selected = checks[0];
+        var itemInput = document.getElementById('rescheduleItemInput');
+        var selectedText = document.getElementById('rescheduleSelectedText');
+        if (itemInput) itemInput.value = selected.value;
+        if (selectedText) selectedText.textContent = selected.dataset.scheduleLabel || ('Selected schedule item: ' + selected.value);
+
+        var reasonSelect = document.getElementById('rescheduleReasonSelect');
+        var otherWrap = document.getElementById('rescheduleOtherWrap');
+        var otherText = document.getElementById('rescheduleOtherText');
+        if (reasonSelect) reasonSelect.value = '';
+        if (otherWrap) otherWrap.style.display = 'none';
+        if (otherText) { otherText.value = ''; otherText.required = false; }
+
+        var modalEl = document.getElementById('rescheduleRequestModal');
+        if (!modalEl) return;
+        var modal = new bootstrap.Modal(modalEl);
+        modal.show();
+    }
+
+    var reasonSelect = document.getElementById('rescheduleReasonSelect');
+    if (reasonSelect) {
+        reasonSelect.addEventListener('change', function() {
+            var isOther = this.value === 'others';
+            var otherWrap = document.getElementById('rescheduleOtherWrap');
+            var otherText = document.getElementById('rescheduleOtherText');
+            if (otherWrap) otherWrap.style.display = isOther ? '' : 'none';
+            if (otherText) otherText.required = isOther;
+        });
     }
     </script>
 </body>

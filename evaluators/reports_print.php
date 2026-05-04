@@ -69,13 +69,22 @@ $scoped_evaluator_id = $_SESSION['user_id'] ?? null;
 $available_teachers = [];
 try {
     if ($is_leader && $raw_department === '') {
-        $teachersQuery = "SELECT DISTINCT t.id, t.name FROM evaluations e INNER JOIN teachers t ON e.teacher_id = t.id ORDER BY t.name ASC";
+        $teachersQuery = "SELECT DISTINCT t.id, t.name
+                          FROM evaluations e
+                          INNER JOIN teachers t ON e.teacher_id = t.id
+                          WHERE e.status = 'completed'
+                            AND e.overall_avg IS NOT NULL
+                            AND e.overall_avg > 0
+                          ORDER BY t.name ASC";
         $teachersStmt = $db->prepare($teachersQuery);
     } else {
     $teachersQuery = "SELECT DISTINCT t.id, t.name
         FROM evaluations e
         INNER JOIN teachers t ON e.teacher_id = t.id
-        WHERE (t.department = :department OR e.evaluator_id = :current_user_id)";
+        WHERE (t.department = :department OR e.evaluator_id = :current_user_id)
+          AND e.status = 'completed'
+          AND e.overall_avg IS NOT NULL
+          AND e.overall_avg > 0";
     if ($scoped_evaluator_id !== null) {
         $teachersQuery .= " AND e.evaluator_id = :evaluator_id";
     }
