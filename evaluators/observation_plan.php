@@ -15,6 +15,8 @@ require_once '../models/Teacher.php';
 require_once '../includes/mailer.php';
 require_once '../includes/program_assignments.php';
 
+$is_observer_only_role = in_array($_SESSION['role'] ?? '', ['president', 'vice_president'], true);
+
 $database = new Database();
 $db = $database->getConnection();
 $teacher = new Teacher($db);
@@ -23,6 +25,16 @@ $error_message = null;
 
 // Handle bulk schedule cancel
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule') {
+    if ($is_observer_only_role) {
+        $_SESSION['error'] = 'President/Vice President can only accept as observer.';
+        $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
+        if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
+        if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
+        if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode($_GET['status']);
+        header("Location: $redirect");
+        exit();
+    }
+
     $raw_ids = $_POST['teacher_ids'] ?? '[]';
     $teacher_ids = [];
 
@@ -177,6 +189,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_schedule') {
+    if ($is_observer_only_role) {
+        $_SESSION['error'] = 'President/Vice President can only accept as observer.';
+        $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
+        if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
+        if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
+        if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode($_GET['status']);
+        header("Location: $redirect");
+        exit();
+    }
+
     $teacher_id = $_POST['teacher_id'] ?? ($_POST['reschedule_teacher_id'] ?? '');
     $schedule = $_POST['evaluation_schedule'] ?? '';
     $schedule_end = $_POST['evaluation_schedule_end'] ?? '';
@@ -744,6 +766,7 @@ $department_map = [
 ];
 
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
+$is_observer_only = $is_leader;
 $is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
 
 $all_departments = ['ELEM', 'JHS', 'SHS', 'CCIS', 'CAS', 'CTEAS', 'CBM', 'CTHM', 'CCJE'];
@@ -2446,20 +2469,24 @@ try {
 
                 <!-- Action Buttons -->
                 <div class="mb-3 action-toolbar no-print">
+                    <?php if (!$is_observer_only): ?>
                     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="openScheduleModal()">
                         <i class="fas fa-calendar-plus me-1"></i>Set Schedule
                     </button>
                     <button class="btn btn-primary" onclick="openRescheduleModal()">
                         <i class="fas fa-redo me-1"></i>Reschedule
                     </button>
+                    <?php endif; ?>
                     <?php if ($is_leader): ?>
                     <button class="btn btn-success" id="joinObserverBtn" disabled onclick="joinAsObserver()">
                         <i class="fas fa-user-plus me-1"></i>Accept as Observer
                     </button>
                     <?php endif; ?>
+                    <?php if (!$is_observer_only): ?>
                     <button class="btn btn-outline-danger" id="bulkCancelBtn" disabled onclick="cancelSelectedSchedules()">
                         <i class="fas fa-times me-1"></i>Cancel
                     </button>
+                    <?php endif; ?>
                 </div>
 
                 <!-- Observation Plan Table -->
@@ -2505,7 +2532,7 @@ try {
                                                     $is_opted = isset($leader_opted_teachers[$tid]);
                                                     $scheduled_by_me = ((int)($t['scheduled_by'] ?? 0) === (int)($_SESSION['user_id'] ?? 0));
                                                 ?>
-                                                <?php if ($scheduled_by_me): ?>
+                                                <?php if (!$is_observer_only && $scheduled_by_me): ?>
                                                     <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;" title="Scheduled by you">
                                                 <?php else: ?>
                                                     <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $is_opted ? 'You are an observer' : 'Check to join as observer'; ?>">
