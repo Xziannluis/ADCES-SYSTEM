@@ -390,7 +390,10 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                             if ($is_leader && !isset($leader_accepted_teachers[(int)$teacher_row['id']])) {
                                 $leader_not_accepted = true;
                                 $can_evaluate_now = false;
-                                if (!$all_done) {
+                                if (
+                                    !$all_done &&
+                                    !empty($scheduleRaw)
+                                ) {
                                     $schedule_badge_class = 'bg-secondary';
                                     $schedule_badge_text = 'Accept as observer first';
                                     $schedule_block_message = 'You must accept as observer in the Observation Plan before you can evaluate this teacher.';

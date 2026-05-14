@@ -372,6 +372,41 @@ function getAssignedCoordinators($db, $supervisor_id) {
         return [];
     }
 }
+
+$leadershipTeacherDepartments = [];
+try {
+    $teacherDepartmentsTableCheck = $db->query("SHOW TABLES LIKE 'teacher_departments'");
+    $hasTeacherDepartmentsTable = $teacherDepartmentsTableCheck && $teacherDepartmentsTableCheck->fetch(PDO::FETCH_NUM);
+
+    if ($hasTeacherDepartmentsTable) {
+        $leadershipDepartmentQuery = "SELECT dept_map.user_id,
+                                             GROUP_CONCAT(DISTINCT dept_map.department ORDER BY dept_map.department SEPARATOR ', ') AS departments
+                                      FROM (
+                                          SELECT t.user_id, t.department AS department
+                                          FROM teachers t
+                                          WHERE t.user_id IS NOT NULL AND t.department <> ''
+                                          UNION ALL
+                                          SELECT t.user_id, td.department AS department
+                                          FROM teachers t
+                                          JOIN teacher_departments td ON td.teacher_id = t.id
+                                          WHERE t.user_id IS NOT NULL AND td.department <> ''
+                                      ) AS dept_map
+                                      GROUP BY dept_map.user_id";
+    } else {
+        $leadershipDepartmentQuery = "SELECT t.user_id,
+                                             GROUP_CONCAT(DISTINCT t.department ORDER BY t.department SEPARATOR ', ') AS departments
+                                      FROM teachers t
+                                      WHERE t.user_id IS NOT NULL AND t.department <> ''
+                                      GROUP BY t.user_id";
+    }
+
+    $leadershipDepartmentStmt = $db->query($leadershipDepartmentQuery);
+    while ($deptRow = $leadershipDepartmentStmt->fetch(PDO::FETCH_ASSOC)) {
+        $leadershipTeacherDepartments[(int)$deptRow['user_id']] = $deptRow['departments'];
+    }
+} catch (PDOException $e) {
+    error_log('leadership teaching departments lookup fallback: ' . $e->getMessage());
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -679,6 +714,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
             <form method="get" class="filter-toolbar" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
                 <span class="filter-label"><i class="fas fa-filter me-2"></i>Filter</span>
                 <select name="role_filter" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+                    <option value="leadership" <?php if($selected_role_filter == 'leadership') echo 'selected'; ?>>President & Vice President</option>
                     <option value="supervisors" <?php if($selected_role_filter == 'supervisors') echo 'selected'; ?>>Deans & Principals</option>
                     <option value="coordinators" <?php if($selected_role_filter == 'coordinators') echo 'selected'; ?>>Coordinators</option>
                     <option value="teachers" <?php if($selected_role_filter == 'teachers') echo 'selected'; ?>>Teachers</option>
@@ -706,6 +742,7 @@ function getAssignedCoordinators($db, $supervisor_id) {
                         <th>Name</th>
                         <th>Username</th>
                         <th>Role</th>
+                        <th class="d-none d-md-table-cell">Teaching Departments</th>
                         <th width="10%">Status</th>
                         <th width="20%">Actions</th>
                     </tr>
@@ -731,6 +768,9 @@ function getAssignedCoordinators($db, $supervisor_id) {
                             <span style="color: #000; font-weight: 600;">
                                 <?php echo ucfirst(str_replace('_', ' ', $row['role'])); ?>
                             </span>
+                        </td>
+                        <td class="d-none d-md-table-cell">
+                            <?php echo htmlspecialchars($leadershipTeacherDepartments[(int)$row['id']] ?? '-'); ?>
                         </td>
                         <td>
                             <span class="badge bg-<?php echo $row['status'] == 'active' ? 'success' : 'secondary'; ?>">

@@ -31,13 +31,20 @@ if ($evaluator['role'] === 'grade_level_coordinator') {
 
 // Look up evaluator's teacher record for secondary departments
 $evaluatorTeacherId = null;
+$evaluatorTeacherDepartment = '';
 $currentSecondaryDepartments = [];
-$teacherIdQuery = $db->prepare("SELECT id FROM teachers WHERE user_id = :user_id LIMIT 1");
+$teacherIdQuery = $db->prepare("SELECT id, department FROM teachers WHERE user_id = :user_id LIMIT 1");
 $teacherIdQuery->bindParam(':user_id', $id);
 $teacherIdQuery->execute();
-$evaluatorTeacherId = $teacherIdQuery->fetchColumn();
-if ($evaluatorTeacherId) {
+$teacherRow = $teacherIdQuery->fetch(PDO::FETCH_ASSOC);
+if ($teacherRow && isset($teacherRow['id'])) {
+    $evaluatorTeacherId = (int)$teacherRow['id'];
+    $evaluatorTeacherDepartment = (string)($teacherRow['department'] ?? '');
     $currentSecondaryDepartments = $teacherModel->getSecondaryDepartments((int)$evaluatorTeacherId);
+}
+$selectedDepartment = (string)($evaluator['department'] ?? '');
+if ($selectedDepartment === '' && $evaluatorTeacherDepartment !== '') {
+    $selectedDepartment = $evaluatorTeacherDepartment;
 }
 
 $allDepartments = [
@@ -55,9 +62,6 @@ $allDepartments = [
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $postedRole = $_POST['role'] ?? '';
     $postedDepartment = $_POST['department'] ?? '';
-    if (in_array($postedRole, ['president', 'vice_president'], true)) {
-        $postedDepartment = '';
-    }
 
     $data = [
         'name' => $_POST['name'],
@@ -92,9 +96,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $updateTeacher->bindParam(':id', $tId);
         $updateTeacher->execute();
     } else {
-        // Create teacher record if secondary departments are being assigned
-        $secondaryDepts = $_POST['secondary_departments'] ?? [];
-        if (!empty($secondaryDepts) && !empty($postedDepartment)) {
+        // Create teacher record if this evaluator has a teaching department.
+        if (!empty($postedDepartment)) {
             $createTeacher = $db->prepare("INSERT INTO teachers (name, department, status, user_id, created_at) VALUES (:name, :department, 'active', :user_id, NOW())");
             $createTeacher->bindParam(':name', $data['name']);
             $createTeacher->bindParam(':department', $postedDepartment);
@@ -244,7 +247,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             'CCJE' => '(CCJE) College of Criminal Justice Education'
                         ];
                         foreach($departments as $key => $label): ?>
-                            <option value="<?php echo $key; ?>" <?php if($evaluator['department'] == $key) echo 'selected'; ?>><?php echo $label; ?></option>
+                            <option value="<?php echo $key; ?>" <?php if($selectedDepartment == $key) echo 'selected'; ?>><?php echo $label; ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -260,7 +263,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <!-- Secondary Departments (for evaluators who also teach) -->
                 <div class="mb-3" id="secondaryDepartmentsContainer">
                     <label class="form-label">Additional Departments</label>
-                    <small class="text-muted d-block mb-2">Select additional departments if this evaluator teaches subjects in other departments</small>
+                    <small class="text-muted d-block mb-2">Select additional departments if this evaluator (including President/VP) teaches subjects in other departments</small>
                     <div class="secondary-departments-grid">
                         <?php foreach($allDepartments as $key => $label): ?>
                         <div class="form-check secondary-dept-item" data-dept-value="<?php echo htmlspecialchars($key, ENT_QUOTES); ?>">
@@ -308,15 +311,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 const role = roleSelect.value;
                 const departmentFieldWrap = document.getElementById('departmentFieldWrap');
                 const secondaryContainer = document.getElementById('secondaryDepartmentsContainer');
-                
-                if (role === 'president' || role === 'vice_president') {
-                    departmentFieldWrap.style.display = 'none';
-                    departmentSelect.value = '';
-                    if (secondaryContainer) secondaryContainer.style.display = 'none';
-                } else {
-                    departmentFieldWrap.style.display = 'block';
-                    if (secondaryContainer) secondaryContainer.style.display = 'block';
-                }
+
+                departmentFieldWrap.style.display = 'block';
+                if (secondaryContainer) secondaryContainer.style.display = 'block';
 
                 // Sync secondary department options (hide primary)
                 syncSecondaryDepts();

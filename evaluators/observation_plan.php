@@ -2008,6 +2008,15 @@ try {
             <div class="card mb-3 no-print">
                 <div class="card-body">
                     <form method="GET" class="row g-2 align-items-end">
+                        <?php if ($has_teacher_record): ?>
+                        <div class="col-md-2">
+                            <label class="form-label fw-bold">View</label>
+                            <select name="view" class="form-select">
+                                <option value="plan" <?php echo $view_mode === 'plan' ? 'selected' : ''; ?>>Observation Plan</option>
+                                <option value="my_observation" <?php echo $view_mode === 'my_observation' ? 'selected' : ''; ?>>My Evaluation Schedule</option>
+                            </select>
+                        </div>
+                        <?php endif; ?>
                         <?php if ($is_leader): ?>
                         <div class="col-md-2">
                             <label class="form-label fw-bold">Department</label>
@@ -2018,15 +2027,6 @@ try {
                                 <?php foreach(($is_leader ? $all_departments : $available_filter_departments) as $dept): ?>
                                 <option value="<?php echo htmlspecialchars($dept); ?>" <?php echo $raw_department === $dept ? 'selected' : ''; ?>><?php echo htmlspecialchars($dept); ?></option>
                                 <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <?php endif; ?>
-                        <?php if ($has_teacher_record && !$is_leader): ?>
-                        <div class="col-md-2">
-                            <label class="form-label fw-bold">View</label>
-                            <select name="view" class="form-select">
-                                <option value="plan" <?php echo $view_mode === 'plan' ? 'selected' : ''; ?>>Observation Plan</option>
-                                <option value="my_observation" <?php echo $view_mode === 'my_observation' ? 'selected' : ''; ?>>My Evaluation Schedule</option>
                             </select>
                         </div>
                         <?php endif; ?>

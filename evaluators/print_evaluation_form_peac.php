@@ -19,7 +19,13 @@ if ($evaluationId <= 0) {
 }
 
 $headerStmt = $db->prepare(
-    "SELECT e.*, t.name AS teacher_name, t.department AS teacher_department, u.name AS evaluator_name, u.department AS evaluator_department
+    "SELECT e.*,
+            t.name AS teacher_name,
+            t.department AS teacher_department,
+            t.scheduled_department AS teacher_scheduled_department,
+            u.name AS evaluator_name,
+            u.role AS evaluator_role,
+            u.department AS evaluator_department
      FROM evaluations e
      JOIN teachers t ON t.id = e.teacher_id
      JOIN users u ON u.id = e.evaluator_id
@@ -96,8 +102,24 @@ $teacherActionsAvg = (float)($eval['communications_avg'] ?? 0);
 $studentActionsAvg = (float)($eval['management_avg'] ?? 0);
 $overallAvg        = (float)($eval['overall_avg'] ?? 0);
 
-// Department display name — use the evaluator's department (observation context)
-$deptCode = $eval['evaluator_department'] ?? $eval['teacher_department'] ?? '';
+// Department display priority:
+// 1) evaluator department (for dean/principal/coordinator),
+// 2) evaluation.department snapshot,
+// 3) teacher scheduled_department,
+// 4) teacher primary department.
+$evaluatorRole = strtolower(trim((string)($eval['evaluator_role'] ?? '')));
+$evaluatorDept = trim((string)($eval['evaluator_department'] ?? ''));
+$evaluationDept = trim((string)($eval['department'] ?? ''));
+$scheduledDept = trim((string)($eval['teacher_scheduled_department'] ?? ''));
+$teacherDept = trim((string)($eval['teacher_department'] ?? ''));
+
+$deptCode = $evaluatorDept;
+if ($deptCode === '' && in_array($evaluatorRole, ['president', 'vice_president'], true)) {
+    $deptCode = $evaluationDept !== '' ? $evaluationDept : ($scheduledDept !== '' ? $scheduledDept : $teacherDept);
+}
+if ($deptCode === '') {
+    $deptCode = $evaluationDept !== '' ? $evaluationDept : ($scheduledDept !== '' ? $scheduledDept : $teacherDept);
+}
 $deptDisplayNames = [
     'CCIS'  => 'College of Computing and Information Sciences',
     'CBM'   => 'College of Business and Management',
@@ -147,7 +169,7 @@ $autoPrint = !empty($_GET['auto_print']);
         .form-header .logo-right img { max-height: 45px; width: auto; }
         .form-header .logo-right .logo-divider { width: 1px; background: #000; height: 40px; margin: 0 6px; }
 
-        .dept-line { text-align: center; font-weight: 700; font-size: 12px; text-decoration: underline; margin: 2px 0 0; color: #00479B; padding-bottom: 4px; border-bottom: 1.5px solid #000; }
+        .dept-line { text-align: center; font-weight: 700; font-size: 12px; text-decoration: none; margin: 2px 0 0; color: #000; padding-bottom: 4px; border-bottom: 1.5px solid #000; }
 
         /* Info section */
         .info-section { font-size: 10.5px; margin-bottom: 6px; line-height: 1.6; }
