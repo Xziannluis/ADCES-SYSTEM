@@ -23,6 +23,22 @@ $teacher = new Teacher($db);
 $success_message = null;
 $error_message = null;
 
+// Ensure evaluation status supports "rescheduled" for remarks workflow.
+// This keeps behavior consistent across Dean/Coordinator/President/VP views.
+try {
+    if ($db) {
+        $statusCol = $db->query("SHOW COLUMNS FROM evaluations LIKE 'status'")->fetch(PDO::FETCH_ASSOC);
+        $statusType = strtolower(trim((string)($statusCol['Type'] ?? '')));
+        if ($statusType !== '' && strpos($statusType, "enum(") === 0 && strpos($statusType, "'rescheduled'") === false) {
+            $db->exec("ALTER TABLE evaluations MODIFY COLUMN status ENUM('draft','rescheduled','completed') DEFAULT 'draft'");
+        }
+        // Normalize previous invalid blank statuses created before enum update.
+        $db->exec("UPDATE evaluations SET status = 'rescheduled' WHERE status = '' OR status IS NULL");
+    }
+} catch (Exception $e) {
+    // Non-fatal: page should still load even if schema patch cannot run.
+}
+
 // Handle bulk schedule cancel
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule') {
     if ($is_observer_only_role) {
@@ -188,6 +204,96 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit();
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'accept_reschedule_request') {
+    $allowed_accept_roles = ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'];
+    if (!in_array($_SESSION['role'] ?? '', $allowed_accept_roles, true)) {
+        $_SESSION['error'] = 'Only Dean/Principal/Coordinator can accept reschedule requests.';
+    } else {
+        $teacher_id_accept = (int)($_POST['teacher_id'] ?? 0);
+        $notif_id_accept = (int)($_POST['notification_id'] ?? 0);
+
+        if ($teacher_id_accept <= 0) {
+            $_SESSION['error'] = 'Invalid teacher selected.';
+        } else {
+            try {
+                // Mark request notification(s) as read for current approver.
+                if ($notif_id_accept > 0) {
+                    $readStmt = $db->prepare("UPDATE notifications
+                                              SET is_read = 1
+                                              WHERE id = :nid
+                                                AND user_id = :uid
+                                                AND type = 'reschedule_request'");
+                    $readStmt->execute([
+                        ':nid' => $notif_id_accept,
+                        ':uid' => (int)($_SESSION['user_id'] ?? 0)
+                    ]);
+                } else {
+                    $readAllStmt = $db->prepare("UPDATE notifications
+                                                 SET is_read = 1
+                                                 WHERE user_id = :uid
+                                                   AND teacher_id = :tid
+                                                   AND type = 'reschedule_request'");
+                    $readAllStmt->execute([
+                        ':uid' => (int)($_SESSION['user_id'] ?? 0),
+                        ':tid' => $teacher_id_accept
+                    ]);
+                }
+
+                // Notify teacher that request was accepted.
+                $teacherUserStmt = $db->prepare("SELECT t.name, t.user_id, u.email
+                                                 FROM teachers t
+                                                 LEFT JOIN users u ON u.id = t.user_id
+                                                 WHERE t.id = :tid
+                                                 LIMIT 1");
+                $teacherUserStmt->execute([':tid' => $teacher_id_accept]);
+                $teacherUser = $teacherUserStmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($teacherUser && !empty($teacherUser['user_id'])) {
+                    $approver_name = trim((string)($_SESSION['name'] ?? 'Evaluator'));
+                    $approver_role = ucfirst(str_replace('_', ' ', (string)($_SESSION['role'] ?? 'evaluator')));
+                    $title = 'Reschedule Request Accepted';
+                    $message = "{$approver_name} ({$approver_role}) accepted your reschedule request and will set your new schedule.";
+                    $teacherLink = 'observation_plan.php?view=my_observation';
+
+                    $insNotif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link)
+                                              VALUES (:uid, :tid, 'reschedule_accepted', :title, :msg, :lnk)");
+                    $insNotif->execute([
+                        ':uid' => (int)$teacherUser['user_id'],
+                        ':tid' => $teacher_id_accept,
+                        ':title' => $title,
+                        ':msg' => $message,
+                        ':lnk' => $teacherLink
+                    ]);
+
+                    $teacherEmail = trim((string)($teacherUser['email'] ?? ''));
+                    if ($teacherEmail !== '') {
+                        sendGenericNotificationEmail(
+                            $teacherEmail,
+                            trim((string)($teacherUser['name'] ?? 'Teacher')),
+                            $title,
+                            $message
+                        );
+                    }
+                }
+
+                $_SESSION['success'] = 'Reschedule request accepted. You can now set the new schedule.';
+            } catch (Exception $e) {
+                $_SESSION['error'] = 'Failed to accept reschedule request.';
+            }
+        }
+    }
+
+    $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
+    if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
+    if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
+    if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode($_GET['status']);
+    if (!empty($_POST['teacher_id'])) {
+        $redirect .= '&open_reschedule=1&teacher_id=' . urlencode((string)((int)$_POST['teacher_id']));
+    }
+    header("Location: $redirect");
+    exit();
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_schedule') {
     if ($is_observer_only_role) {
         $_SESSION['error'] = 'President/Vice President can only accept as observer.';
@@ -263,6 +369,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $reschedule_teacher_id_post !== '' &&
             ((string)$reschedule_teacher_id_post === (string)$teacher_id)
         );
+        $target_eval_status = $is_reschedule ? 'rescheduled' : 'draft';
         $eval_id = null;
         $debug_action = null;
         
@@ -296,6 +403,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 subject_area = :subject_area,
                 subject_observed = :subject,
                 evaluation_focus = :focus,
+                status = :status,
                 updated_at = NOW()
                 WHERE id = :eval_id");
             $upd_eval->execute([
@@ -305,6 +413,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ':subject_area' => $subject_area,
                 ':subject' => $subject,
                 ':focus' => $focus_json,
+                ':status' => $target_eval_status,
                 ':eval_id' => $eval_id
             ]);
             // Debug: log update action
@@ -331,7 +440,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 VALUES 
                 (:tid, :faculty_name, :dept, :evaluator_id, :ay, :sem, 
                  :obs_date, :obs_time, :room, :subject_area, :subject, 
-                 :focus, 'draft', NOW(), NOW())");
+                 :focus, :status, NOW(), NOW())");
             $ins_eval->execute([
                 ':tid' => $teacher_id,
                 ':faculty_name' => $faculty_name,
@@ -344,7 +453,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ':room' => $room,
                 ':subject_area' => $subject_area,
                 ':subject' => $subject,
-                ':focus' => $focus_json
+                ':focus' => $focus_json,
+                ':status' => $target_eval_status
             ]);
             $eval_id = $db->lastInsertId();
             // Debug: log insert action
@@ -584,35 +694,102 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                     : ($req_reason === 'conflict_schedule' ? 'Conflict of Schedule' : 'Others');
                 $reason_text = $reason_label . ($req_reason === 'others' ? (': ' . $req_other_reason) : '');
 
-                // Recipients:
-                // 1) Dean + Chairperson of schedule-owning department
-                // 2) Always include President + Vice President
-                $recipients = [];
-                if ($teacher_dept_req !== '') {
-                    $rStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
-                                           FROM users u
-                                           WHERE u.department = :dept
-                                             AND u.status = 'active'
-                                             AND u.email IS NOT NULL
-                                             AND u.email <> ''
-                                             AND u.role IN ('dean','chairperson')");
-                    $rStmt->execute([':dept' => $teacher_dept_req]);
-                    $recipients = $rStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                }
+                // Recipients = observers for the selected row in "My Evaluation Schedule".
+                // President/VP should only receive the request when they explicitly accepted
+                // this teacher as observer (have a teacher_assignments row for this teacher).
+                $observerRows = [];
+                try {
+                    if ($teacher_dept_req !== '') {
+                        if (!empty($req_eval_id)) {
+                            // Evaluation row observer logic:
+                            // explicitly assigned observers + dean/principal of row department + row evaluator owner.
+                            $obsStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                                     FROM teacher_assignments ta
+                                                     JOIN users u ON u.id = ta.evaluator_id
+                                                     WHERE ta.teacher_id = :tid
+                                                       AND u.status = 'active'
+                                                       AND u.email IS NOT NULL
+                                                       AND u.email <> ''");
+                            $obsStmt->execute([
+                                ':tid' => (int)$my_teacher_id
+                            ]);
+                            $observerRows = $obsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
-                $pvStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
-                                        FROM users u
-                                        WHERE u.status = 'active'
-                                          AND u.email IS NOT NULL
-                                          AND u.email <> ''
-                                          AND u.role IN ('president','vice_president')");
-                $pvStmt->execute();
-                $pvRows = $pvStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                            $deptLeadsStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                                           FROM users u
+                                                           WHERE u.department = :dept
+                                                             AND u.role IN ('dean','principal')
+                                                             AND u.status = 'active'
+                                                             AND u.email IS NOT NULL
+                                                             AND u.email <> ''");
+                            $deptLeadsStmt->execute([':dept' => $teacher_dept_req]);
+                            $observerRows = array_merge($observerRows, $deptLeadsStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+
+                            $ownerStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                                       FROM evaluations e
+                                                       JOIN users u ON u.id = e.evaluator_id
+                                                       WHERE e.id = :eid
+                                                         AND u.status = 'active'
+                                                         AND u.email IS NOT NULL
+                                                         AND u.email <> ''
+                                                       LIMIT 1");
+                            $ownerStmt->execute([':eid' => (int)$req_eval_id]);
+                            $owner = $ownerStmt->fetch(PDO::FETCH_ASSOC);
+                            if ($owner) $observerRows[] = $owner;
+                        } else {
+                            // Upcoming row observer logic:
+                            // explicitly assigned observers + dean/principal of schedule dept.
+                            $obsStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                                     FROM teacher_assignments ta
+                                                     JOIN users u ON u.id = ta.evaluator_id
+                                                     WHERE ta.teacher_id = :tid
+                                                       AND u.status = 'active'
+                                                       AND u.email IS NOT NULL
+                                                       AND u.email <> ''");
+                            $obsStmt->execute([
+                                ':tid' => (int)$my_teacher_id
+                            ]);
+                            $observerRows = $obsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+                            $deptLeadsStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                                           FROM users u
+                                                           WHERE u.department = :dept
+                                                             AND u.role IN ('dean','principal')
+                                                             AND u.status = 'active'
+                                                             AND u.email IS NOT NULL
+                                                             AND u.email <> ''");
+                            $deptLeadsStmt->execute([':dept' => $teacher_dept_req]);
+                            $observerRows = array_merge($observerRows, $deptLeadsStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+                        }
+                    }
+                } catch (Exception $e) {}
+
+                // Build set of accepted observers for this teacher.
+                // This is the gate for president/vice president email recipients.
+                $acceptedObserverIds = [];
+                try {
+                    $acceptedStmt = $db->prepare("SELECT evaluator_id FROM teacher_assignments WHERE teacher_id = :tid");
+                    $acceptedStmt->execute([':tid' => (int)$my_teacher_id]);
+                    while ($acc = $acceptedStmt->fetch(PDO::FETCH_ASSOC)) {
+                        $aid = (int)($acc['evaluator_id'] ?? 0);
+                        if ($aid > 0) $acceptedObserverIds[$aid] = true;
+                    }
+                } catch (Exception $e) {}
 
                 $byId = [];
-                foreach (array_merge($recipients, $pvRows) as $r) {
+                $myUserId = (int)($_SESSION['user_id'] ?? 0);
+                $myUserName = trim((string)($_SESSION['name'] ?? ''));
+                foreach ($observerRows as $r) {
                     $rid = (int)($r['id'] ?? 0);
-                    if ($rid > 0) $byId[$rid] = $r;
+                    $rrole = strtolower(trim((string)($r['role'] ?? '')));
+                    $rname = trim((string)($r['name'] ?? ''));
+                    if ($rid <= 0) continue;
+                    if (in_array($rrole, ['president', 'vice_president', 'vice president'], true) && empty($acceptedObserverIds[$rid])) {
+                        continue;
+                    }
+                    if ($myUserId > 0 && $rid === $myUserId) continue;
+                    if ($myUserName !== '' && strcasecmp($rname, $myUserName) === 0) continue;
+                    $byId[$rid] = $r;
                 }
                 $recipients = array_values($byId);
 
@@ -1279,11 +1456,12 @@ foreach ($eval_teachers as $t) {
     $seen_ids[$tid] = true;
 
     $obs_date = $t['observation_date'] ?? '';
-    $is_done = ($t['eval_status'] === 'completed');
+    $eval_status = strtolower(trim((string)($t['eval_status'] ?? '')));
+    $is_done = ($eval_status === 'completed');
     $faculty_sig = $t['faculty_signature'] ?? '';
 
     // Store per-row eval data (used during rendering)
-    $eval_data[$row_key] = ['date' => $obs_date, 'done' => $is_done, 'faculty_signature' => $faculty_sig, 'eval_id' => $eval_id ?: null];
+    $eval_data[$row_key] = ['date' => $obs_date, 'done' => $is_done, 'faculty_signature' => $faculty_sig, 'eval_id' => $eval_id ?: null, 'status' => $eval_status];
 
     // Track all evaluation datetimes for this teacher to compare against
     // teacher-level schedules later (to avoid duplicate rows when identical).
@@ -1448,6 +1626,7 @@ foreach ([] as $t) {
             'done' => false,
             'faculty_signature' => '',
             'eval_id' => null,
+            'status' => 'scheduled',
         ];
         // Rebuild schedule_data from teacher's current schedule columns
         $focus_raw = $t['evaluation_focus'] ?? '';
@@ -1491,7 +1670,7 @@ foreach ($scheduled_teachers as $t) {
     $t['_row_key'] = $row_key;
     $teachers_list[] = $t;
 
-    $eval_data[$row_key] = ['date' => $sched_date, 'done' => false, 'faculty_signature' => '', 'eval_id' => null];
+    $eval_data[$row_key] = ['date' => $sched_date, 'done' => false, 'faculty_signature' => '', 'eval_id' => null, 'status' => 'scheduled'];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
     $focus_arr = [];
@@ -1609,14 +1788,38 @@ if (!empty($filter_status)) {
     $teachers_list = array_filter($teachers_list, function($t) use ($eval_data, $filter_status) {
         $row_key = $t['_row_key'] ?? $t['id'];
         $is_done = $eval_data[$row_key]['done'] ?? false;
+        $row_status = strtolower(trim((string)($eval_data[$row_key]['status'] ?? '')));
         $has_sched = !empty($t['evaluation_schedule']);
         if ($filter_status === 'done') return $is_done;
+        if ($filter_status === 'rescheduled') return ($row_status === 'rescheduled');
         if ($filter_status === 'scheduled') return $has_sched && !$is_done;
         return true;
     });
     $teachers_list = array_values($teachers_list);
 }
 $dean_role_display = ucfirst(str_replace('_', ' ', $_SESSION['role']));
+
+// Pending reschedule requests for current evaluator (used in Observation Plan UI)
+$pending_reschedule_requests = [];
+try {
+    $pendingStmt = $db->prepare("SELECT id, teacher_id, created_at
+                                 FROM notifications
+                                 WHERE user_id = :uid
+                                   AND type = 'reschedule_request'
+                                   AND is_read = 0
+                                 ORDER BY id DESC");
+    $pendingStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+    while ($pr = $pendingStmt->fetch(PDO::FETCH_ASSOC)) {
+        $ptid = (int)($pr['teacher_id'] ?? 0);
+        if ($ptid <= 0) continue;
+        if (!isset($pending_reschedule_requests[$ptid])) {
+            $pending_reschedule_requests[$ptid] = [
+                'notification_id' => (int)($pr['id'] ?? 0),
+                'created_at' => $pr['created_at'] ?? null
+            ];
+        }
+    }
+} catch (Exception $e) {}
 
 // Get dean's signature from most recent evaluation
 $dean_signature = '';
@@ -1794,6 +1997,20 @@ try {
         .plan-table tr:nth-child(even) {
             background: #f8f9fa;
         }
+        .myobs-table {
+            table-layout: fixed;
+            min-width: 1300px;
+        }
+        .myobs-table th,
+        .myobs-table td {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+        .myobs-focus-cell,
+        .myobs-observers-cell {
+            white-space: normal;
+            line-height: 1.35;
+        }
         .plan-header {
             text-align: center;
             margin-bottom: 15px;
@@ -1879,7 +2096,8 @@ try {
             margin-bottom: 0.35rem;
         }
         .resched-modal .modal-dialog {
-            max-width: 560px;
+            max-width: 860px;
+            width: calc(100% - 1.5rem);
         }
         .resched-modal .modal-content {
             border: 0;
@@ -1892,6 +2110,8 @@ try {
         }
         .resched-modal .modal-body {
             padding: 1rem 1.25rem;
+            max-height: 72vh;
+            overflow-y: auto;
         }
 
         @media print {
@@ -2058,10 +2278,11 @@ try {
                             </select>
                         </div>
                         <div class="col-md-2">
-                            <label class="form-label fw-bold">Status</label>
+                            <label class="form-label fw-bold">Remarks</label>
                             <select name="status" class="form-select">
-                                <option value="" <?php echo $filter_status === '' ? 'selected' : ''; ?>>All Status</option>
+                                <option value="" <?php echo $filter_status === '' ? 'selected' : ''; ?>>All Remarks</option>
                                 <option value="scheduled" <?php echo $filter_status === 'scheduled' ? 'selected' : ''; ?>>Scheduled</option>
+                                <option value="rescheduled" <?php echo $filter_status === 'rescheduled' ? 'selected' : ''; ?>>Rescheduled</option>
                                 <option value="done" <?php echo $filter_status === 'done' ? 'selected' : ''; ?>>Done</option>
                             </select>
                         </div>
@@ -2177,30 +2398,31 @@ try {
                 <?php if ($my_show_upcoming || count($my_evaluations) > 0): ?>
 
                 <div class="mb-3 d-flex justify-content-end no-print">
-                    <button class="btn btn-outline-primary me-2" id="myObsReschedBtn" disabled onclick="openMyObsRescheduleModal()">
+                    <button type="button" class="btn btn-outline-primary me-2" id="myObsReschedBtn" disabled onclick="openMyObsRescheduleModal()">
                         <i class="fas fa-calendar-alt me-1"></i>Request Reschedule
                     </button>
-                    <button class="btn btn-primary" id="myObsSignToggleBtn" disabled onclick="toggleMyObsSignPanel()">
+                    <button type="button" class="btn btn-primary" id="myObsSignToggleBtn" disabled onclick="toggleMyObsSignPanel()">
                         <i class="fas fa-signature me-1"></i>Sign <span id="myObsSignBadge" class="badge bg-light text-dark ms-1" style="display:none;">0</span>
                     </button>
                 </div>
 
                 <div class="table-responsive">
-                    <table class="plan-table" style="width:100%; border-collapse:collapse;">
+                    <table class="plan-table myobs-table" style="width:100%; border-collapse:collapse;">
                         <thead>
                             <tr>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:50px;">
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:3%;">
                                     <i class="fas fa-check-square"></i>
                                 </th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Semester</th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Focus of Observation</th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Date</th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Day &amp; Time</th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;"><?php echo $is_basiced_dept ? 'Grade Level/Section' : 'Subject Area'; ?></th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;"><?php echo $is_basiced_dept ? 'Subject of Instruction' : 'Subject'; ?></th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Room</th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Observers</th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;">Status</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:7%;">Semester</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:19%;">Focus of Observation</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:7%;">Date</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:8%;">Day &amp; Time</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:8%;"><?php echo $is_basiced_dept ? 'Grade Level/Section' : 'Subject Area'; ?></th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:7%;"><?php echo $is_basiced_dept ? 'Subject of Instruction' : 'Subject'; ?></th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:5%;">Room</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:18%;">Observers</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:8%;">Teacher's Signature</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:10%;">Remarks</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -2220,29 +2442,31 @@ try {
                                     }
                                 }
                                 $upcoming_signed = isset($my_signed_map['upcoming']);
+                                $upcoming_signature = $my_signed_map['upcoming']['signature'] ?? '';
                             ?>
                             <tr>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
-                                    <?php if ($upcoming_signed): ?>
-                                        <i class="fas fa-check-circle text-success" title="Signed on <?php echo date('M d, Y g:i A', strtotime($my_signed_map['upcoming']['acknowledged_at'])); ?>"></i>
-                                    <?php else: ?>
-                                        <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars(date('M d, Y g:i A', $ts)); ?>" style="width:20px;height:20px;">
-                                    <?php endif; ?>
+                                    <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars(date('M d, Y g:i A', $ts)); ?>" style="width:20px;height:20px;" title="<?php echo $upcoming_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($my_teacher_data['evaluation_semester'] ?? '') . ' Semester'); ?></td>
-                                <td style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
+                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo date('M d, Y', $ts); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $my_day_time; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_subject_area'] ?? ''); ?></td>
                                 <td style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_subject'] ?? ''); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_room'] ?? ''); ?></td>
-                                <td style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $my_observer_names)); ?></td>
+                                <td class="myobs-observers-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $my_observer_names)); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
-                                    <?php if ($upcoming_signed): ?>
-                                        <span class="badge bg-success">Signed</span>
+                                    <?php if (!empty($upcoming_signature)): ?>
+                                        <img src="<?php echo htmlspecialchars($upcoming_signature); ?>" alt="Teacher Signature" style="max-height:30px;max-width:90px;">
+                                    <?php elseif (!empty($my_teacher_data['faculty_signature'])): ?>
+                                        <img src="<?php echo htmlspecialchars($my_teacher_data['faculty_signature']); ?>" alt="Teacher Signature" style="max-height:30px;max-width:90px;">
                                     <?php else: ?>
-                                        <span class="badge bg-info">Upcoming</span>
+                                        <span class="text-muted">-</span>
                                     <?php endif; ?>
+                                </td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
+                                    <span class="badge bg-info">Upcoming</span>
                                 </td>
                             </tr>
                             <?php endif; ?>
@@ -2254,6 +2478,7 @@ try {
                                 if ($ev_focus_raw) { try { $ev_focus_arr = json_decode($ev_focus_raw, true) ?: []; } catch (\Exception $e) {} }
                                 $ev_focus_display = array_map(function($f) use ($focus_labels_my) { return $focus_labels_my[$f] ?? $f; }, $ev_focus_arr);
                                 $ev_signed = isset($my_signed_map[(int)$ev['id']]);
+                                $ev_signature = $my_signed_map[(int)$ev['id']]['signature'] ?? '';
                                 $ev_status = strtolower(trim((string)($ev['status'] ?? '')));
                                 $ev_day_time = '';
                                 if (!empty($ev['observation_date'])) {
@@ -2323,25 +2548,30 @@ try {
                             ?>
                             <tr>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
-                                    <?php if ($ev_signed): ?>
-                                        <i class="fas fa-check-circle text-success" title="Signed on <?php echo date('M d, Y g:i A', strtotime($my_signed_map[(int)$ev['id']]['acknowledged_at'])); ?>"></i>
-                                    <?php else: ?>
-                                        <input type="checkbox" class="form-check-input sign-item-check" value="<?php echo (int)$ev['id']; ?>" data-schedule-label="Schedule: <?php echo htmlspecialchars(!empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''); ?>" style="width:20px;height:20px;">
-                                    <?php endif; ?>
+                                    <input type="checkbox" class="form-check-input sign-item-check" value="<?php echo (int)$ev['id']; ?>" data-schedule-label="Schedule: <?php echo htmlspecialchars(!empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''); ?>" style="width:20px;height:20px;" title="<?php echo $ev_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($ev['semester'] ?? '') . ' Semester'); ?></td>
-                                <td style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $ev_focus_display)); ?></td>
+                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $ev_focus_display)); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo !empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $ev_day_time; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($ev['subject_area'] ?? ''); ?></td>
                                 <td style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($ev['subject_observed'] ?? ''); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($ev['observation_room'] ?? ''); ?></td>
-                                <td style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $ev_observers)); ?></td>
+                                <td class="myobs-observers-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $ev_observers)); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
-                                    <?php if ($ev_signed): ?>
-                                        <span class="badge bg-success">Signed</span>
-                                    <?php elseif ($ev_status === 'completed'): ?>
-                                        <span class="badge bg-warning text-dark">For Signature</span>
+                                    <?php if (!empty($ev_signature)): ?>
+                                        <img src="<?php echo htmlspecialchars($ev_signature); ?>" alt="Teacher Signature" style="max-height:30px;max-width:90px;">
+                                    <?php elseif (!empty($ev['faculty_signature'])): ?>
+                                        <img src="<?php echo htmlspecialchars($ev['faculty_signature']); ?>" alt="Teacher Signature" style="max-height:30px;max-width:90px;">
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
+                                    <?php if ($ev_status === 'completed'): ?>
+                                        <span class="badge bg-success">Conducted</span>
+                                    <?php elseif ($ev_status === 'rescheduled'): ?>
+                                        <span class="badge bg-warning text-dark">Rescheduled</span>
                                     <?php elseif ($ev_status === 'in_progress' || $ev_status === 'draft'): ?>
                                         <span class="badge bg-info">Scheduled</span>
                                     <?php else: ?>
@@ -2476,6 +2706,11 @@ try {
                     <button class="btn btn-primary" onclick="openRescheduleModal()">
                         <i class="fas fa-redo me-1"></i>Reschedule
                     </button>
+                    <?php if (in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'], true)): ?>
+                    <button class="btn btn-warning" id="acceptRescheduleBtn" disabled onclick="acceptRescheduleRequest()">
+                        <i class="fas fa-check-circle me-1"></i>Accept Reschedule Request
+                    </button>
+                    <?php endif; ?>
                     <?php endif; ?>
                     <?php if ($is_leader): ?>
                     <button class="btn btn-success" id="joinObserverBtn" disabled onclick="joinAsObserver()">
@@ -2522,7 +2757,11 @@ try {
                                     $has_schedule = !$is_done && $row_has_schedule_data;
                                     $ack_upcoming = $ack_upcoming_map[$tid] ?? null;
                                     $is_schedule_signed = $has_schedule && !empty($ack_upcoming);
-                                    $can_reschedule = $has_schedule && !$is_schedule_signed;
+                                    // Signature is acknowledgment only; it must not block rescheduling.
+                                    $can_reschedule = $has_schedule;
+                                    $pending_req_info = $pending_reschedule_requests[$tid] ?? null;
+                                    $has_pending_req = !empty($pending_req_info);
+                                    $pending_req_id = (int)($pending_req_info['notification_id'] ?? 0);
                                 ?>
                                 <tr>
                                     <td>
@@ -2533,15 +2772,18 @@ try {
                                                     $scheduled_by_me = ((int)($t['scheduled_by'] ?? 0) === (int)($_SESSION['user_id'] ?? 0));
                                                 ?>
                                                 <?php if (!$is_observer_only && $scheduled_by_me): ?>
-                                                    <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;" title="Scheduled by you">
+                                                    <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;" title="Scheduled by you">
                                                 <?php else: ?>
-                                                    <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $is_opted ? 'You are an observer' : 'Check to join as observer'; ?>">
+                                                    <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $is_opted ? 'You are an observer' : 'Check to join as observer'; ?>">
                                                 <?php endif; ?>
                                             <?php else: ?>
-                                                <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
+                                                <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
                                             <?php endif; ?>
                                         <?php endif; ?>
                                         <?php echo $counter++ . '. ' . htmlspecialchars($t['name']); ?>
+                                        <?php if ($has_pending_req): ?>
+                                            <span class="badge bg-warning text-dark ms-1">Reschedule Request</span>
+                                        <?php endif; ?>
                                     </td>
                                     <td class="text-center"><?php $sem = $sd['semester'] ?? ''; echo htmlspecialchars($sem ? $sem . ' Semester' : ''); ?></td>
                                     <td style="font-size:0.8rem;"><?php echo htmlspecialchars($sd['focus'] ?? ''); ?></td>
@@ -2609,8 +2851,11 @@ try {
                                     </td>
                                     <td class="text-center" style="font-size:0.8rem;">
                                         <?php 
+                                        $row_eval_status = strtolower(trim((string)($eval_data[$row_key]['status'] ?? '')));
                                         if ($eval_data[$row_key]['done'] ?? false) {
                                             echo '<span class="badge bg-success">Done</span>';
+                                        } elseif ($row_eval_status === 'rescheduled') {
+                                            echo '<span class="badge bg-warning text-dark">Rescheduled</span>';
                                         } elseif ($has_schedule) {
                                             echo '<span class="badge bg-info">Scheduled</span>';
                                         } else {
@@ -3039,6 +3284,12 @@ function openRescheduleModal() {
     }
     
     var teacherId = checked[0].value;
+    var hasPendingReq = (checked[0].dataset.hasPendingReq || '0') === '1';
+    var acceptBtn = document.getElementById('acceptRescheduleBtn');
+    if (hasPendingReq && acceptBtn) {
+        alert('Please click "Accept Reschedule Request" first before setting the new schedule.');
+        return;
+    }
     var select = document.getElementById('schedule_teacher_id');
     
     if (!select) {
@@ -3096,6 +3347,52 @@ function openRescheduleModal() {
     }
     var modal = new bootstrap.Modal(scheduleModalElement);
     modal.show();
+}
+
+function acceptRescheduleRequest() {
+    var checked = document.querySelectorAll('.reschedule-check:checked');
+    if (checked.length === 0) {
+        alert('Please select a teacher with a reschedule request.');
+        return;
+    }
+    if (checked.length > 1) {
+        alert('Please select only one teacher at a time.');
+        return;
+    }
+
+    var target = checked[0];
+    var teacherId = parseInt(target.value || '0', 10);
+    var hasPendingReq = (target.dataset.hasPendingReq || '0') === '1';
+    var notifId = parseInt(target.dataset.pendingNotifId || '0', 10);
+
+    if (!hasPendingReq || !teacherId) {
+        alert('The selected teacher has no pending reschedule request.');
+        return;
+    }
+
+    if (!confirm('Accept this teacher reschedule request and notify the teacher?')) return;
+
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = window.location.href;
+    form.style.display = 'none';
+
+    var a = document.createElement('input');
+    a.type = 'hidden'; a.name = 'action'; a.value = 'accept_reschedule_request';
+    form.appendChild(a);
+
+    var t = document.createElement('input');
+    t.type = 'hidden'; t.name = 'teacher_id'; t.value = String(teacherId);
+    form.appendChild(t);
+
+    if (notifId > 0) {
+        var n = document.createElement('input');
+        n.type = 'hidden'; n.name = 'notification_id'; n.value = String(notifId);
+        form.appendChild(n);
+    }
+
+    document.body.appendChild(form);
+    form.submit();
 }
 
 // When a teacher is selected from dropdown, populate their existing schedule data
@@ -3321,13 +3618,19 @@ document.addEventListener('DOMContentLoaded', () => {
     var checkAll = document.getElementById('checkAllTeachers');
     var rescheduleBtn = document.getElementById('bulkRescheduleBtn');
     var cancelBtn = document.getElementById('bulkCancelBtn');
+    var acceptReqBtn = document.getElementById('acceptRescheduleBtn');
     var countBadge = document.getElementById('rescheduleCount');
 
     function updateRescheduleState() {
         var checked = document.querySelectorAll('.reschedule-check:checked');
         var count = checked.length;
+        var canAcceptReq = false;
+        if (count === 1) {
+            canAcceptReq = (checked[0].dataset.hasPendingReq || '0') === '1';
+        }
         if (rescheduleBtn) rescheduleBtn.disabled = (count === 0);
         if (cancelBtn) cancelBtn.disabled = (count === 0);
+        if (acceptReqBtn) acceptReqBtn.disabled = !canAcceptReq;
         if (countBadge) {
             countBadge.textContent = count;
             countBadge.style.display = count > 0 ? 'inline' : 'none';
@@ -3494,6 +3797,7 @@ document.querySelectorAll('.inline-edit').forEach(input => {
     function updateMyObsCheckboxState() {
         var checks = document.querySelectorAll('.sign-item-check:checked');
         var count = checks.length;
+        var canSign = !!panelEl && !!container;
         if (countEl) countEl.textContent = count + ' schedule(s) selected';
         if (container) {
             container.innerHTML = '';
@@ -3505,8 +3809,8 @@ document.querySelectorAll('.inline-edit').forEach(input => {
         }
         // Update top Sign button
         if (toggleBtn) {
-            toggleBtn.disabled = (count === 0);
-            if (count > 0) {
+            toggleBtn.disabled = (!canSign || count === 0);
+            if (canSign && count > 0) {
                 badgeEl.textContent = count;
                 badgeEl.style.display = '';
             } else {
@@ -3558,16 +3862,27 @@ document.querySelectorAll('.inline-edit').forEach(input => {
         var otherInput = document.getElementById('myObsRescheduleOther');
         if (reason) reason.value = '';
         if (otherWrap) otherWrap.style.display = 'none';
-        if (otherInput) otherInput.value = '';
+        if (otherInput) {
+            otherInput.value = '';
+            otherInput.required = false;
+        }
 
         var modalEl = document.getElementById('myObsRescheduleModal');
         if (!modalEl) return;
-        var modal = new bootstrap.Modal(modalEl);
+        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
         modal.show();
     };
 })();
 
 document.addEventListener('DOMContentLoaded', function() {
+    // Move reschedule modal to <body> so it is above the backdrop and fully clickable.
+    // The page wrapper uses its own stacking context; keeping modal inside it can make
+    // the backdrop cover the modal.
+    var modalHostEl = document.getElementById('myObsRescheduleModal');
+    if (modalHostEl && modalHostEl.parentElement !== document.body) {
+        document.body.appendChild(modalHostEl);
+    }
+
     var reasonSelect = document.getElementById('myObsRescheduleReason');
     var otherWrap = document.getElementById('myObsRescheduleOtherWrap');
     var otherInput = document.getElementById('myObsRescheduleOther');
@@ -3576,6 +3891,18 @@ document.addEventListener('DOMContentLoaded', function() {
             var isOther = this.value === 'others';
             if (otherWrap) otherWrap.style.display = isOther ? '' : 'none';
             if (otherInput) otherInput.required = isOther;
+        });
+    }
+
+    var reschedModalEl = document.getElementById('myObsRescheduleModal');
+    if (reschedModalEl) {
+        reschedModalEl.addEventListener('hidden.bs.modal', function() {
+            if (reasonSelect) reasonSelect.value = '';
+            if (otherWrap) otherWrap.style.display = 'none';
+            if (otherInput) {
+                otherInput.value = '';
+                otherInput.required = false;
+            }
         });
     }
 
@@ -3588,7 +3915,14 @@ document.addEventListener('DOMContentLoaded', function() {
     if (targetCheckbox) {
         document.querySelectorAll('.reschedule-check').forEach(function(cb) { cb.checked = false; });
         targetCheckbox.checked = true;
-        openRescheduleModal();
+        targetCheckbox.dispatchEvent(new Event('change'));
+        var hasPendingReq = (targetCheckbox.dataset.hasPendingReq || '0') === '1';
+        var acceptBtn = document.getElementById('acceptRescheduleBtn');
+        if (hasPendingReq && acceptBtn) {
+            alert('Please click "Accept Reschedule Request" first before setting the new schedule.');
+        } else {
+            openRescheduleModal();
+        }
         return;
     }
 

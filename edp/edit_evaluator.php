@@ -12,8 +12,20 @@ $db = $database->getConnection();
 $user = new User($db);
 $teacherModel = new Teacher($db);
 
+$allowedRoleFilters = ['leadership', 'supervisors', 'coordinators', 'teachers'];
+$selectedRoleFilterContext = isset($_POST['current_role_filter']) ? trim((string)$_POST['current_role_filter']) : (isset($_GET['role_filter']) ? trim((string)$_GET['role_filter']) : 'supervisors');
+if (!in_array($selectedRoleFilterContext, $allowedRoleFilters, true)) {
+    $selectedRoleFilterContext = 'supervisors';
+}
+$selectedDepartmentContext = isset($_POST['current_department']) ? trim((string)$_POST['current_department']) : (isset($_GET['department']) ? trim((string)$_GET['department']) : '');
+$usersRedirectParams = ['role_filter' => $selectedRoleFilterContext];
+if ($selectedDepartmentContext !== '') {
+    $usersRedirectParams['department'] = $selectedDepartmentContext;
+}
+$usersRedirectUrl = 'users.php?' . http_build_query($usersRedirectParams);
+
 if (!isset($_GET['id'])) {
-    header('Location: users.php');
+    header('Location: ' . $usersRedirectUrl);
     exit();
 }
 $id = $_GET['id'];
@@ -138,7 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     
     $_SESSION['success'] = "Evaluator updated successfully!";
-    header('Location: users.php');
+    header('Location: ' . $usersRedirectUrl);
     exit();
 }
 ?>
@@ -213,6 +225,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="dashboard-body-wrap">
         <div class="container-fluid" style="padding:24px;">
             <form method="POST" id="editEvaluatorForm">
+                <input type="hidden" name="current_role_filter" value="<?php echo htmlspecialchars($selectedRoleFilterContext, ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="current_department" value="<?php echo htmlspecialchars($selectedDepartmentContext, ENT_QUOTES, 'UTF-8'); ?>">
                 <div class="mb-3">
                     <label class="form-label">Name</label>
                         <input type="text" class="form-control" id="editNameInput" name="name" value="<?php echo htmlspecialchars($evaluator['name']); ?>" required>

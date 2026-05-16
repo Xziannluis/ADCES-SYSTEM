@@ -189,34 +189,89 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 : ($req_reason === 'conflict_schedule' ? 'Conflict of Schedule' : 'Others');
             $reason_text = $reason_label . ($req_reason === 'others' ? (': ' . $req_other_reason) : '');
 
-            // Notify: dean + chairperson of owning department
-            // and always notify president + vice president.
-            $recipients = [];
+            // Notify all relevant observers:
+            // - explicitly assigned observers for this teacher
+            // - department leads (dean/principal/chairperson/coordinators) of owning department
+            // - president/vice president (global)
+            // Note: in-app notifications should not require an email address.
+            $observerRows = [];
+
+            // 1) Assigned observers
+            $obsStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                     FROM teacher_assignments ta
+                                     JOIN users u ON u.id = ta.evaluator_id
+                                     WHERE ta.teacher_id = :tid
+                                       AND u.status = 'active'");
+            $obsStmt->execute([':tid' => (int)$teacher_id]);
+            $observerRows = $obsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            // 2) Department leads (handle both code and full-name department values)
             if ($teacher_dept_req !== '') {
-                $rStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
-                                       FROM users u
-                                       WHERE u.department = :dept
-                                         AND u.status = 'active'
-                                         AND u.email IS NOT NULL
-                                         AND u.email <> ''
-                                         AND u.role IN ('dean','chairperson')");
-                $rStmt->execute([':dept' => $teacher_dept_req]);
-                $recipients = $rStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                $dept_alias_to_code = [
+                    'College of Computing and Information Sciences' => 'CCIS',
+                    'College of Business and Management' => 'CBM',
+                    'College of Arts and Sciences' => 'CAS',
+                    'College of Criminal Justice Education' => 'CCJE',
+                    'College of Tourism and Hospitality Management' => 'CTHM',
+                    'College of Teacher Education, Arts and Sciences' => 'CTEAS',
+                    'College of Teacher Education and Arts and Sciences' => 'CTEAS',
+                    'Elementary Department' => 'ELEM',
+                    'Junior High School Department' => 'JHS',
+                    'Senior High School Department' => 'SHS',
+                ];
+                $dept_code_to_alias = array_flip($dept_alias_to_code);
+                $dept_variants = [$teacher_dept_req];
+                if (isset($dept_alias_to_code[$teacher_dept_req])) {
+                    $dept_variants[] = $dept_alias_to_code[$teacher_dept_req];
+                } elseif (isset($dept_code_to_alias[$teacher_dept_req])) {
+                    $dept_variants[] = $dept_code_to_alias[$teacher_dept_req];
+                }
+                $dept_variants = array_values(array_unique(array_filter(array_map('trim', $dept_variants))));
+
+                $deptPlaceholders = implode(',', array_fill(0, count($dept_variants), '?'));
+                $leadStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                          FROM users u
+                                          WHERE u.department IN ($deptPlaceholders)
+                                            AND u.status = 'active'
+                                            AND u.role IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator')");
+                $leadStmt->execute($dept_variants);
+                $observerRows = array_merge($observerRows, $leadStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
             }
 
+            // 3) President/VP
             $pvStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
                                     FROM users u
                                     WHERE u.status = 'active'
-                                      AND u.email IS NOT NULL
-                                      AND u.email <> ''
                                       AND u.role IN ('president','vice_president')");
             $pvStmt->execute();
-            $pvRows = $pvStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $observerRows = array_merge($observerRows, $pvStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
 
+            // 4) If request points to a specific evaluation row, include row owner evaluator too.
+            if (!empty($req_eval_id)) {
+                $ownerStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
+                                           FROM evaluations e
+                                           JOIN users u ON u.id = e.evaluator_id
+                                           WHERE e.id = :eid
+                                             AND u.status = 'active'
+                                           LIMIT 1");
+                $ownerStmt->execute([':eid' => (int)$req_eval_id]);
+                $owner = $ownerStmt->fetch(PDO::FETCH_ASSOC);
+                if ($owner) {
+                    $observerRows[] = $owner;
+                }
+            }
+
+            // De-duplicate and exclude teacher user/self from recipient list
             $byId = [];
-            foreach (array_merge($recipients, $pvRows) as $r) {
+            $myUserId = (int)($_SESSION['user_id'] ?? 0);
+            $myName = trim((string)($_SESSION['name'] ?? ''));
+            foreach ($observerRows as $r) {
                 $rid = (int)($r['id'] ?? 0);
-                if ($rid > 0) $byId[$rid] = $r;
+                $rname = trim((string)($r['name'] ?? ''));
+                if ($rid <= 0) continue;
+                if ($myUserId > 0 && $rid === $myUserId) continue;
+                if ($myName !== '' && strcasecmp($rname, $myName) === 0) continue;
+                $byId[$rid] = $r;
             }
             $recipients = array_values($byId);
 
@@ -264,6 +319,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // Flash messages
 if (!empty($_SESSION['success'])) { $success_message = $_SESSION['success']; unset($_SESSION['success']); }
 if (!empty($_SESSION['error'])) { $error_message = $_SESSION['error']; unset($_SESSION['error']); }
+
+// Teacher notifications (same dropdown style as dashboard)
+$notifications = [];
+$unread_count = 0;
+try {
+    $notif_q = "SELECT * FROM notifications
+                WHERE user_id = :user_id
+                  AND type IN ('schedule', 'reschedule_request', 'reschedule_accepted', 'observation_signed')
+                  AND is_read = 0
+                ORDER BY created_at DESC
+                LIMIT 10";
+    $notif_stmt = $db->prepare($notif_q);
+    $notif_stmt->bindParam(':user_id', $_SESSION['user_id']);
+    $notif_stmt->execute();
+    $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($notifications as $n) {
+        if (empty($n['is_read'])) $unread_count++;
+    }
+} catch (Exception $e) {
+    $notifications = [];
+    $unread_count = 0;
+}
 
 // Filters
 $semester = $_GET['semester'] ?? '1st';
@@ -446,9 +523,29 @@ if (!empty($filter_status)) {
     }
 }
 
-// Count unsigned items (only upcoming schedules need signing, not completed evaluations)
+// Count unsigned items for actions (Sign / Request Reschedule).
+// Current schedule can be represented either as:
+// - an upcoming row (no evaluation group on same date), or
+// - an in-progress current-date evaluation group.
 $unsigned_count = 0;
-if ($show_upcoming && !isset($signed_map['upcoming'])) $unsigned_count++;
+$has_unsigned_current_group = false;
+if ($has_matching_schedule && !isset($signed_map['upcoming']) && $schedule_date_key !== null && isset($eval_groups[$schedule_date_key])) {
+    $current_group = $eval_groups[$schedule_date_key];
+    $current_completed_evaluators = [];
+    foreach ($current_group as $cev) {
+        if (($cev['status'] ?? '') === 'completed') {
+            $current_completed_evaluators[] = $cev['evaluator_name'] ?? '';
+        }
+    }
+    $current_completed_evaluators = array_values(array_unique(array_filter($current_completed_evaluators)));
+    $current_all_done = count($current_completed_evaluators) >= count($all_observer_names) && count($all_observer_names) > 0;
+    $has_unsigned_current_group = !$current_all_done;
+}
+if ($show_upcoming && !isset($signed_map['upcoming'])) {
+    $unsigned_count++;
+} elseif ($has_unsigned_current_group) {
+    $unsigned_count++;
+}
 
 $department_map = [
     'CCIS'  => 'College of Computing and Information Sciences',
@@ -564,6 +661,66 @@ try {
         <div class="dashboard-topbar">
             <h2>Saint Michael College of Caraga</h2>
             <div class="ms-auto d-flex align-items-center gap-3">
+                <div class="dropdown">
+                    <button class="btn position-relative" type="button" id="notifBell" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-bell"></i>
+                        <?php if ($unread_count > 0): ?>
+                        <span class="position-absolute top-0 start-100 translate-middle p-1 bg-danger border border-light rounded-circle" style="font-size:0;">
+                            <span class="visually-hidden">New notifications</span>
+                        </span>
+                        <?php endif; ?>
+                    </button>
+                    <div class="dropdown-menu dropdown-menu-end shadow-lg" aria-labelledby="notifBell">
+                        <div class="d-flex justify-content-between align-items-center notif-head">
+                            <strong><i class="fas fa-bell me-2"></i>Notifications</strong>
+                            <?php if ($unread_count > 0): ?>
+                            <button class="notif-mark-all" onclick="event.stopPropagation();markAllRead()">Mark all as read</button>
+                            <?php endif; ?>
+                        </div>
+                        <?php if (!empty($notifications)): ?>
+                            <div id="notificationList">
+                            <?php foreach ($notifications as $notif): ?>
+                            <div class="notif-item <?php echo !$notif['is_read'] ? 'unread' : ''; ?>" id="notif-<?php echo (int)$notif['id']; ?>" <?php if (!empty($notif['link'])): ?>onclick="window.location.href='<?php echo htmlspecialchars($notif['link'], ENT_QUOTES); ?>'" style="cursor:pointer;"<?php endif; ?>>
+                                <div class="notif-avatar">
+                                    <?php if (!empty($notif['avatar'])): ?>
+                                        <img src="<?php echo htmlspecialchars($notif['avatar']); ?>" alt="avatar">
+                                    <?php else: ?>
+                                        <i class="fas fa-user-circle fa-lg text-secondary"></i>
+                                    <?php endif; ?>
+                                </div>
+                                <div style="flex:1;min-width:0;">
+                                    <div class="d-flex align-items-start justify-content-between">
+                                        <div class="notif-title">
+                                            <?php echo htmlspecialchars($notif['title']); ?>
+                                        </div>
+                                        <?php if (!$notif['is_read']): ?>
+                                            <span class="notif-unread-dot" aria-hidden="true"></span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="notif-message"><?php echo htmlspecialchars($notif['message']); ?></div>
+                                    <div class="d-flex align-items-center justify-content-between mt-2">
+                                        <small class="text-muted"><i class="far fa-clock me-1"></i><?php echo date('M j, Y g:i A', strtotime($notif['created_at'])); ?></small>
+                                        <div class="text-end">
+                                            <span class="badge bg-light text-dark me-2"><?php echo htmlspecialchars($notif['type']); ?></span>
+                                            <?php if (!$notif['is_read']): ?>
+                                                <button class="btn btn-sm btn-outline-primary notif-read-btn" onclick="event.stopPropagation();markRead(<?php echo (int)$notif['id']; ?>)" title="Mark as read">
+                                                    <i class="fas fa-check me-1"></i>Read
+                                                </button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <?php endforeach; ?>
+                            </div>
+                            <div class="dropdown-footer">
+                                <button class="btn btn-link p-0" onclick="event.stopPropagation();markAllRead()"><i class="fas fa-check-double me-1"></i>Mark all as read</button>
+                            </div>
+                        <?php else: ?>
+                            <div class="notif-empty"><i class="far fa-bell-slash me-2"></i>No notifications</div>
+                        <?php endif; ?>
+                    </div>
+                </div>
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" data-bs-toggle="dropdown">
                         <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (Teacher)
@@ -721,8 +878,19 @@ try {
                                     if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
                                     $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
 
-                                    // Status for this group
-                                    $completed_evaluators = array_unique(array_column($group, 'evaluator_name'));
+                                    // Status and first-column control for this group
+                                    $completed_evaluators = [];
+                                    $group_all_rows_completed = true;
+                                    foreach ($group as $g_ev) {
+                                        if (($g_ev['status'] ?? '') === 'completed') {
+                                            $completed_evaluators[] = $g_ev['evaluator_name'] ?? '';
+                                        } else {
+                                            $group_all_rows_completed = false;
+                                        }
+                                    }
+                                    $completed_evaluators = array_values(array_unique(array_filter($completed_evaluators)));
+                                    $row_can_sign = false;
+
                                     if ($is_current) {
                                         $all_done = count($completed_evaluators) >= count($all_observer_names) && count($all_observer_names) > 0;
                                         if ($all_done) {
@@ -732,13 +900,22 @@ try {
                                         } else {
                                             $status_badge = '<span class="badge bg-info">Upcoming</span>';
                                         }
+                                        $row_can_sign = !$all_done && !isset($signed_map['upcoming']);
                                     } else {
-                                        $status_badge = '<span class="badge bg-success">Completed</span>';
+                                        if ($group_all_rows_completed) {
+                                            $status_badge = '<span class="badge bg-success">Completed</span>';
+                                        } else {
+                                            $status_badge = '<span class="badge bg-info">In Progress</span>';
+                                        }
                                     }
                             ?>
                             <tr>
                                 <td class="text-center">
-                                    <i class="fas fa-check-circle text-success" title="Evaluation completed"></i>
+                                    <?php if ($is_current): ?>
+                                        <input type="checkbox" class="form-check-input schedule-item-check <?php echo $row_can_sign ? 'sign-item-check' : ''; ?>" value="upcoming" data-schedule-label="<?php echo htmlspecialchars('Current: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
+                                    <?php else: ?>
+                                        <i class="fas fa-check-circle text-success" title="Evaluation completed"></i>
+                                    <?php endif; ?>
                                 </td>
                                 <td class="text-center"><?php echo htmlspecialchars($row_semester_display); ?></td>
                                 <td style="font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
@@ -773,11 +950,7 @@ try {
                             ?>
                             <tr>
                                 <td class="text-center">
-                                    <?php if (!$upcoming_signed): ?>
-                                        <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars($row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
-                                    <?php else: ?>
-                                        <i class="fas fa-check-circle text-success" title="Signed on <?php echo date('M d, Y g:i A', strtotime($signed_map['upcoming']['acknowledged_at'])); ?>"></i>
-                                    <?php endif; ?>
+                                    <input type="checkbox" class="form-check-input schedule-item-check <?php echo !$upcoming_signed ? 'sign-item-check' : ''; ?>" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars($row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
                                 </td>
                                 <td class="text-center"><?php echo htmlspecialchars($row_semester_display); ?></td>
                                 <td style="font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
@@ -889,6 +1062,70 @@ try {
     </div>
 
     <script>
+    function syncNotificationUI() {
+        var list = document.getElementById('notificationList');
+        var itemCount = list ? list.querySelectorAll('.notif-item').length : 0;
+        var badge = document.querySelector('#notifBell .bg-danger');
+        if (itemCount === 0) {
+            if (badge) badge.remove();
+            if (list) {
+                list.innerHTML = '<div class="notif-empty"><i class="far fa-bell-slash me-2"></i>No notifications</div>';
+            }
+            document.querySelectorAll('.notif-mark-all, .dropdown-footer button[onclick*="markAllRead"]').forEach(function(btn) {
+                btn.remove();
+            });
+            var footer = document.querySelector('.dropdown-footer');
+            if (footer && footer.querySelectorAll('button, a').length === 0) {
+                footer.remove();
+            }
+        }
+    }
+
+    function markRead(id) {
+        fetch('../includes/notification_mark_read.php', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'id=' + id
+        }).then(r => r.json()).then(d => {
+            if (d.success) {
+                var el = document.getElementById('notif-' + id);
+                if (el) {
+                    el.style.opacity = '0';
+                    el.style.maxHeight = '0';
+                    el.style.padding = '0';
+                    el.style.overflow = 'hidden';
+                    setTimeout(function() {
+                        el.remove();
+                        syncNotificationUI();
+                    }, 300);
+                } else {
+                    syncNotificationUI();
+                }
+            }
+        });
+    }
+
+    function markAllRead() {
+        fetch('../includes/notification_mark_read.php', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'mark_all=1'
+        }).then(r => r.json()).then(d => {
+            if (d.success) {
+                document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
+                    el.style.opacity = '0';
+                    el.style.maxHeight = '0';
+                    el.style.padding = '0';
+                    el.style.overflow = 'hidden';
+                    setTimeout(function() { el.remove(); }, 300);
+                });
+                setTimeout(syncNotificationUI, 320);
+            }
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', syncNotificationUI);
+
     // Sign panel toggle
 var signPanel = document.getElementById('signPanel');
 var signToggleBtn = document.getElementById('signToggleBtn');
@@ -953,10 +1190,31 @@ var reqReschedBtn = document.getElementById('reqReschedBtn');
         sigCanvas.addEventListener('touchend', function(e) { e.preventDefault(); sigDrawing = false; });
     }
 
+    function getSelectedSignChecks() {
+        var selected = Array.from(document.querySelectorAll('.sign-item-check:checked'));
+        if (selected.length > 0) return selected;
+        return Array.from(document.querySelectorAll('.sign-item-check'));
+    }
+
+    function getSelectedRescheduleChecks() {
+        var selected = Array.from(document.querySelectorAll('.schedule-item-check:checked'));
+        if (selected.length > 0) return selected;
+        return Array.from(document.querySelectorAll('.schedule-item-check'));
+    }
+
     function updateCheckboxState() {
-        var checks = document.querySelectorAll('.sign-item-check:checked');
+        var checkedCount = document.querySelectorAll('.sign-item-check:checked').length;
+        var checks = getSelectedSignChecks();
         var count = checks.length;
-        if (countEl) countEl.textContent = count + ' schedule(s) selected';
+        var reschedChecks = getSelectedRescheduleChecks();
+        var reschedCount = reschedChecks.length;
+        if (countEl) {
+            if (checkedCount > 0) {
+                countEl.textContent = count + ' schedule(s) selected';
+            } else {
+                countEl.textContent = count + ' schedule(s) ready to sign';
+            }
+        }
         if (itemsContainer) {
             itemsContainer.innerHTML = '';
             checks.forEach(function(cb) {
@@ -980,11 +1238,11 @@ var reqReschedBtn = document.getElementById('reqReschedBtn');
             }
         }
         if (reqReschedBtn) {
-            reqReschedBtn.disabled = (count !== 1);
+            reqReschedBtn.disabled = (reschedCount !== 1);
         }
     }
 
-    document.querySelectorAll('.sign-item-check').forEach(function(cb) {
+    document.querySelectorAll('.schedule-item-check, .sign-item-check').forEach(function(cb) {
         cb.addEventListener('change', updateCheckboxState);
     });
 
@@ -996,7 +1254,7 @@ var reqReschedBtn = document.getElementById('reqReschedBtn');
 
     function submitSignature() {
         if (!sigCanvas) return false;
-        var checks = document.querySelectorAll('.sign-item-check:checked');
+        var checks = getSelectedSignChecks();
         if (checks.length === 0) {
             alert('Please select at least one schedule to sign.');
             return false;
@@ -1011,7 +1269,7 @@ var reqReschedBtn = document.getElementById('reqReschedBtn');
     }
 
     function openRescheduleRequestModal() {
-        var checks = document.querySelectorAll('.sign-item-check:checked');
+        var checks = getSelectedRescheduleChecks();
         if (checks.length !== 1) {
             alert('Please select exactly one schedule.');
             return;
@@ -1045,6 +1303,9 @@ var reqReschedBtn = document.getElementById('reqReschedBtn');
             if (otherText) otherText.required = isOther;
         });
     }
+
+    // Initialize action button state even before any checkbox interaction.
+    updateCheckboxState();
     </script>
 </body>
 </html>

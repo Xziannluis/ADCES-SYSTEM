@@ -144,7 +144,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
     }
 
-    // Prevent assigning leadership accounts as teacher-assignees for coordinators
+    // Prevent assigning top leadership accounts as teacher-assignees for coordinators.
+    // Deans/principals are allowed when they are valid teachers in the target department.
     try {
         $lead_check = $db->prepare(
             "SELECT u.role
@@ -155,8 +156,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         );
         $lead_check->execute([':teacher_id' => $teacher_id]);
         $linked_role = $lead_check->fetchColumn();
-        if (in_array($linked_role, ['dean', 'principal', 'president', 'vice_president'], true)) {
-            $_SESSION['error'] = "This account is leadership and cannot be assigned as a coordinator's teacher.";
+        if (in_array($linked_role, ['president', 'vice_president'], true)) {
+            $_SESSION['error'] = "This top leadership account cannot be assigned as a coordinator's teacher.";
             header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
             exit();
         }
@@ -454,20 +455,19 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                 <select class="form-select" name="teacher_id" required>
                                     <option value="">Select Teacher</option>
                                     <?php while($teacher_row = $available_teachers->fetch(PDO::FETCH_ASSOC)):
-                                        // Exclude teachers who are evaluators/admins in the TARGET coordinator's department
-                                        // but allow them if they teach in other departments (cross-dept assignment)
+                                        // Exclude only top leadership accounts from teacher assignment.
+                                        // Deans/principals may still be assigned when they teach in target programs.
                                         $exclude = false;
-                                        $target_dept_for_exclude = $coordinator_info['department'] ?? $_SESSION['department'];
                                         if (!empty($teacher_row['user_id'])) {
-                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE id = :uid AND role IN ('dean','principal','president','vice_president') AND status = 'active' LIMIT 1");
+                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE id = :uid AND role IN ('president','vice_president') AND status = 'active' LIMIT 1");
                                             $eval_query->bindParam(':uid', $teacher_row['user_id']);
                                             $eval_query->execute();
                                             if ($eval_query->fetchColumn()) {
                                                 $exclude = true;
                                             }
                                         } else {
-                                            // Fallback: match by name for leadership roles
-                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE role IN ('dean','principal','president','vice_president') AND name = :name AND status = 'active' LIMIT 1");
+                                            // Fallback: match by name for top leadership roles
+                                            $eval_query = $db->prepare("SELECT 1 FROM users WHERE role IN ('president','vice_president') AND name = :name AND status = 'active' LIMIT 1");
                                             $eval_query->bindParam(':name', $teacher_row['name']);
                                             $eval_query->execute();
                                             if ($eval_query->fetchColumn()) {

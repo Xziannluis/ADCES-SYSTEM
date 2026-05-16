@@ -10,8 +10,31 @@ $departments = [
     'CTHM' => '(CTHM) College of Tourism and Hospitality Management',
     'CCJE' => '(CCJE) College of Criminal Justice Education'
 ];
-$selected_department = isset($_GET['department']) ? $_GET['department'] : '';
-$selected_role_filter = isset($_GET['role_filter']) && $_GET['role_filter'] !== '' ? $_GET['role_filter'] : 'supervisors';
+$selected_department = isset($_GET['department']) ? trim((string)$_GET['department']) : '';
+$allowed_role_filters = ['leadership', 'supervisors', 'coordinators', 'teachers'];
+$selected_role_filter = isset($_GET['role_filter']) && $_GET['role_filter'] !== '' ? trim((string)$_GET['role_filter']) : 'supervisors';
+if (!in_array($selected_role_filter, $allowed_role_filters, true)) {
+    $selected_role_filter = 'supervisors';
+}
+
+$buildUsersRedirectUrl = static function ($roleFilter, $department) use ($allowed_role_filters) {
+    $roleFilter = trim((string)$roleFilter);
+    if (!in_array($roleFilter, $allowed_role_filters, true)) {
+        $roleFilter = 'supervisors';
+    }
+
+    $department = trim((string)$department);
+    $params = ['role_filter' => $roleFilter];
+    if ($department !== '') {
+        $params['department'] = $department;
+    }
+
+    return 'users.php?' . http_build_query($params);
+};
+
+$post_role_filter = $_POST['current_role_filter'] ?? $selected_role_filter;
+$post_department = $_POST['current_department'] ?? $selected_department;
+$post_redirect_url = $buildUsersRedirectUrl($post_role_filter, $post_department);
 require_once '../auth/session-check.php';
 if($_SESSION['role'] != 'edp') {
     header("Location: ../login.php");
@@ -124,14 +147,32 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                             }
                         }
 
-                        // Assign to Dean/Principal if specified
-                        if (isset($_POST['supervisor_id']) && !empty($_POST['supervisor_id'])) {
-                            $supervisor_query = "INSERT INTO evaluator_assignments (evaluator_id, supervisor_id, assigned_at) 
-                                               VALUES (:evaluator_id, :supervisor_id, NOW())";
-                            $supervisor_stmt = $db->prepare($supervisor_query);
-                            $supervisor_stmt->bindParam(':evaluator_id', $new_id);
-                            $supervisor_stmt->bindParam(':supervisor_id', $_POST['supervisor_id']);
-                            $supervisor_stmt->execute();
+                        // Auto-assign coordinators to the active Dean of the selected department.
+                        if (in_array($role, ['subject_coordinator', 'chairperson', 'grade_level_coordinator'], true) && !empty($department)) {
+                            $deanQuery = "SELECT id FROM users
+                                          WHERE role = 'dean'
+                                            AND department = :department
+                                            AND status = 'active'
+                                          ORDER BY id ASC
+                                          LIMIT 1";
+                            $deanStmt = $db->prepare($deanQuery);
+                            $deanStmt->bindParam(':department', $department);
+                            $deanStmt->execute();
+                            $deanId = $deanStmt->fetchColumn();
+
+                            if ($deanId) {
+                                $deleteAssignmentQuery = "DELETE FROM evaluator_assignments WHERE evaluator_id = :evaluator_id";
+                                $deleteAssignmentStmt = $db->prepare($deleteAssignmentQuery);
+                                $deleteAssignmentStmt->bindParam(':evaluator_id', $new_id);
+                                $deleteAssignmentStmt->execute();
+
+                                $assignmentQuery = "INSERT INTO evaluator_assignments (evaluator_id, supervisor_id, assigned_at)
+                                                    VALUES (:evaluator_id, :supervisor_id, NOW())";
+                                $assignmentStmt = $db->prepare($assignmentQuery);
+                                $assignmentStmt->bindParam(':evaluator_id', $new_id);
+                                $assignmentStmt->bindParam(':supervisor_id', $deanId);
+                                $assignmentStmt->execute();
+                            }
                         }
                     }
                 }
@@ -280,7 +321,7 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 }
                 break;
         }
-        header("Location: users.php");
+        header("Location: " . $post_redirect_url);
         exit();
     }
 }
@@ -290,7 +331,45 @@ $roles = ['president', 'vice_president', 'dean', 'principal', 'subject_coordinat
 $evaluators = [];
 foreach ($roles as $role) {
     if ($selected_department) {
-        $evaluators[$role] = $user->getUsersByRoleAndDepartment($role, $selected_department, 'active');
+        if (in_array($role, ['subject_coordinator', 'chairperson', 'grade_level_coordinator'], true)) {
+            // Coordinators can belong to a filter department via:
+            // 1) their primary department,
+            // 2) their secondary teacher departments,
+            // 3) assignment under a supervisor in that department.
+            $query = "SELECT u.*,
+                             CASE
+                                 WHEN u.department = :department_display_primary THEN :department_display_primary
+                                 WHEN td.department = :department_display_secondary THEN :department_display_secondary
+                                 WHEN (supervisor.status = 'active' AND supervisor.department = :department_display_supervisor) THEN :department_display_supervisor
+                                 ELSE u.department
+                             END AS display_department
+                      FROM users u
+                      LEFT JOIN teachers t ON t.user_id = u.id
+                      LEFT JOIN teacher_departments td ON td.teacher_id = t.id
+                      LEFT JOIN evaluator_assignments ea ON ea.evaluator_id = u.id
+                      LEFT JOIN users supervisor ON supervisor.id = ea.supervisor_id
+                      WHERE u.role = :role
+                        AND u.status = 'active'
+                        AND (
+                            u.department = :department_primary
+                            OR td.department = :department_secondary
+                            OR (supervisor.status = 'active' AND supervisor.department = :department_supervisor)
+                        )
+                      GROUP BY u.id
+                      ORDER BY u.name";
+            $stmt = $db->prepare($query);
+            $stmt->bindParam(':role', $role);
+            $stmt->bindParam(':department_primary', $selected_department);
+            $stmt->bindParam(':department_secondary', $selected_department);
+            $stmt->bindParam(':department_supervisor', $selected_department);
+            $stmt->bindParam(':department_display_primary', $selected_department);
+            $stmt->bindParam(':department_display_secondary', $selected_department);
+            $stmt->bindParam(':department_display_supervisor', $selected_department);
+            $stmt->execute();
+            $evaluators[$role] = $stmt;
+        } else {
+            $evaluators[$role] = $user->getUsersByRoleAndDepartment($role, $selected_department, 'active');
+        }
     } else {
         $evaluators[$role] = $user->getUsersByRole($role, 'active');
     }
@@ -780,7 +859,7 @@ try {
                         </td>
                         <td>
                             <div class="d-flex flex-wrap gap-1">
-                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-primary">
+                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>&role_filter=<?php echo urlencode($selected_role_filter); ?>&department=<?php echo urlencode($selected_department); ?>" class="btn btn-sm btn-outline-primary">
                                     <i class="fas fa-edit me-1"></i>Edit
                                 </a>
                                 <form method="POST" class="d-inline">
@@ -847,7 +926,7 @@ try {
                             </span>
                         </td>
                         <td class="d-none d-md-table-cell">
-                            <?php echo htmlspecialchars($row['department']); ?>
+                            <?php echo htmlspecialchars($row['display_department'] ?? $row['department']); ?>
                         </td>
                         <td>
                             <span class="badge bg-<?php echo $row['status'] == 'active' ? 'success' : 'secondary'; ?>">
@@ -857,7 +936,7 @@ try {
                         </td>
                         <td>
                             <div class="d-flex flex-wrap gap-1">
-                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-primary">
+                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>&role_filter=<?php echo urlencode($selected_role_filter); ?>&department=<?php echo urlencode($selected_department); ?>" class="btn btn-sm btn-outline-primary">
                                     <i class="fas fa-edit me-1"></i>Edit
                                 </a>
                                 <a href="assign_coordinators.php?supervisor_id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-info">
@@ -937,7 +1016,7 @@ try {
                         </td>
                         <td>
                             <div class="d-flex flex-wrap gap-1">
-                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-primary">
+                                <a href="edit_evaluator.php?id=<?php echo $row['id']; ?>&role_filter=<?php echo urlencode($selected_role_filter); ?>&department=<?php echo urlencode($selected_department); ?>" class="btn btn-sm btn-outline-primary">
                                     <i class="fas fa-edit me-1"></i>Edit
                                 </a>
                                 <a href="assign_teachers.php?evaluator_id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline-success">
@@ -979,22 +1058,24 @@ try {
         }
 
         if ($hasTeacherDepartments) {
-            $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id,
+            $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id, u.role AS user_role,
                                     GROUP_CONCAT(td.department ORDER BY td.department SEPARATOR ',') AS secondary_department_codes
                             FROM teachers t 
                             LEFT JOIN users u ON t.user_id = u.id 
                             LEFT JOIN teacher_departments td ON td.teacher_id = t.id
-                            WHERE (u.role = 'teacher' AND u.id IS NOT NULL)";
+                            WHERE u.id IS NOT NULL
+                              AND u.role IN ('teacher', 'dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president')";
             if (!empty($selected_department)) {
                 $teacher_query .= " AND (t.department = :department OR td.department = :department)";
             }
             $teacher_query .= " GROUP BY t.id ORDER BY t.name ASC";
         } else {
-            $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id,
+            $teacher_query = "SELECT t.*, u.username, u.status, u.id as user_id, u.role AS user_role,
                                     NULL AS secondary_department_codes
                             FROM teachers t 
                             LEFT JOIN users u ON t.user_id = u.id 
-                            WHERE (u.role = 'teacher' AND u.id IS NOT NULL)";
+                            WHERE u.id IS NOT NULL
+                              AND u.role IN ('teacher', 'dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president')";
             if (!empty($selected_department)) {
                 $teacher_query .= " AND t.department = :department";
             }
@@ -1025,6 +1106,7 @@ try {
                     $counter = 1;
                     while($row = $teacher_result->fetch(PDO::FETCH_ASSOC)):
                         if(!empty($row['username'])):
+                            $isTeacherAccount = (($row['user_role'] ?? '') === 'teacher');
                             $secondaryDepartmentCodes = array_values(array_filter(array_map('trim', explode(',', (string)($row['secondary_department_codes'] ?? '')))));
                             $secondaryDepartmentLabels = array_map(function ($code) use ($departments) {
                                 return $departments[$code] ?? $code;
@@ -1039,6 +1121,9 @@ try {
                                     <div class="fw-bold"><?php echo htmlspecialchars($row['name']); ?></div>
                                     <small class="text-muted d-md-none"><?php echo htmlspecialchars($row['username']); ?></small>
                                     <small class="text-muted d-lg-none"><?php echo htmlspecialchars($row['department']); ?></small>
+                                    <?php if (!$isTeacherAccount): ?>
+                                        <small class="text-muted d-block">Account role: <?php echo htmlspecialchars(ucfirst(str_replace('_', ' ', $row['user_role'] ?? ''))); ?></small>
+                                    <?php endif; ?>
                                     <?php if (!empty($secondaryDepartmentsDisplay)): ?>
                                         <small class="text-muted d-block">Also in: <?php echo htmlspecialchars($secondaryDepartmentsDisplay); ?></small>
                                     <?php endif; ?>
@@ -1062,9 +1147,15 @@ try {
                         </td>
                         <td>
                             <div class="d-flex flex-wrap gap-1">
-                                <button class="btn btn-sm btn-outline-primary btn-edit-teacher" data-userid="<?php echo $row['user_id']; ?>" data-username="<?php echo htmlspecialchars($row['username']); ?>" data-name="<?php echo htmlspecialchars($row['name']); ?>" data-department="<?php echo htmlspecialchars($row['department']); ?>" data-email="<?php echo htmlspecialchars($row['email'] ?? ''); ?>" data-secondary-departments="<?php echo htmlspecialchars(implode(',', $secondaryDepartmentCodes)); ?>">
-                                    <i class="fas fa-edit me-1"></i>Edit
-                                </button>
+                                <?php if ($isTeacherAccount): ?>
+                                    <button class="btn btn-sm btn-outline-primary btn-edit-teacher" data-userid="<?php echo $row['user_id']; ?>" data-username="<?php echo htmlspecialchars($row['username']); ?>" data-name="<?php echo htmlspecialchars($row['name']); ?>" data-department="<?php echo htmlspecialchars($row['department']); ?>" data-email="<?php echo htmlspecialchars($row['email'] ?? ''); ?>" data-secondary-departments="<?php echo htmlspecialchars(implode(',', $secondaryDepartmentCodes)); ?>">
+                                        <i class="fas fa-edit me-1"></i>Edit
+                                    </button>
+                                <?php else: ?>
+                                    <a href="edit_evaluator.php?id=<?php echo $row['user_id']; ?>&role_filter=<?php echo urlencode($selected_role_filter); ?>&department=<?php echo urlencode($selected_department); ?>" class="btn btn-sm btn-outline-primary">
+                                        <i class="fas fa-edit me-1"></i>Edit
+                                    </a>
+                                <?php endif; ?>
                                 <form method="POST" class="d-inline">
                                     <input type="hidden" name="user_id" value="<?php echo $row['user_id']; ?>">
                                     <input type="hidden" name="action" value="<?php echo $row['status'] == 'active' ? 'deactivate' : 'activate'; ?>">
@@ -1172,24 +1263,6 @@ try {
                             <label class="form-label">Department</label>
                             <select class="form-select" name="department" id="departmentSelect" required>
                                 <option value="">Select Department</option>
-                            </select>
-                        </div>
-
-                        <!-- Supervisor Selection (for Coordinators) -->
-                        <div class="mb-3" id="supervisorContainer" style="display: none;">
-                            <label class="form-label">Assign to Supervisor</label>
-                            <select class="form-select" name="supervisor_id" id="supervisorSelect">
-                                <option value="">Select Supervisor (Optional)</option>
-                                <?php
-                                // Get all deans and principals
-                                $supervisors_query = "SELECT id, name, role, department FROM users WHERE role IN ('dean', 'principal') AND status = 'active' ORDER BY role, name";
-                                $supervisors_result = $db->query($supervisors_query);
-                                while($supervisor = $supervisors_result->fetch(PDO::FETCH_ASSOC)):
-                                ?>
-                                <option value="<?php echo $supervisor['id']; ?>">
-                                    <?php echo htmlspecialchars($supervisor['name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $supervisor['role'])); ?> - <?php echo htmlspecialchars($supervisor['department']); ?>)
-                                </option>
-                                <?php endwhile; ?>
                             </select>
                         </div>
 
@@ -1330,8 +1403,28 @@ try {
             'JHS': ['7', '8', '9', '10'],
             'SHS': ['11', '12']
         };
+        const currentRoleFilter = <?php echo json_encode($selected_role_filter); ?>;
+        const currentDepartmentFilter = <?php echo json_encode($selected_department); ?>;
 
         document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('form[method="POST"], form[method="post"]').forEach(form => {
+                if (!form.querySelector('input[name="current_role_filter"]')) {
+                    const roleInput = document.createElement('input');
+                    roleInput.type = 'hidden';
+                    roleInput.name = 'current_role_filter';
+                    roleInput.value = currentRoleFilter || 'supervisors';
+                    form.appendChild(roleInput);
+                }
+
+                if (!form.querySelector('input[name="current_department"]')) {
+                    const departmentInput = document.createElement('input');
+                    departmentInput.type = 'hidden';
+                    departmentInput.name = 'current_department';
+                    departmentInput.value = currentDepartmentFilter || '';
+                    form.appendChild(departmentInput);
+                }
+            });
+
             const departmentFilter = document.querySelector('.filter-toolbar select[name="department"]');
             const addAccountOptions = document.querySelectorAll('.add-account-option');
 
@@ -1363,7 +1456,6 @@ try {
             const departmentContainer = document.getElementById('departmentContainer');
             const departmentSelect = document.getElementById('departmentSelect');
             const teacherDepartmentSelect = document.getElementById('teacherDepartmentSelect');
-            const supervisorContainer = document.getElementById('supervisorContainer');
             const subjectsContainer = document.getElementById('subjectsContainer');
             const gradeLevelsContainer = document.getElementById('gradeLevelsContainer');
             const gradeLevelsList = document.getElementById('gradeLevelsList');
@@ -1476,14 +1568,8 @@ try {
                 }
                 
                 // Hide all containers first
-                supervisorContainer.style.display = 'none';
                 if (subjectsContainer) subjectsContainer.style.display = 'none';
                 gradeLevelsContainer.style.display = 'none';
-                
-                // Show supervisor selection for coordinators (not for grade level coordinators)
-                if (role === 'subject_coordinator' || role === 'chairperson') {
-                    supervisorContainer.style.display = 'block';
-                }
                 
                 // Show subject/grade level selection
                 if (role === 'subject_coordinator' || role === 'chairperson') {

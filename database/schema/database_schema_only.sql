@@ -157,7 +157,7 @@ CREATE TABLE `evaluations` (
   `course_syllabi` TINYINT DEFAULT 0,
   `others_requirements` TINYINT DEFAULT 0,
   `others_specify` TEXT,
-  `status` ENUM('draft', 'completed') DEFAULT 'draft',
+  `status` ENUM('draft', 'rescheduled', 'completed') DEFAULT 'draft',
   `communications_avg` DECIMAL(3,2),
   `management_avg` DECIMAL(3,2),
   `assessment_avg` DECIMAL(3,2),

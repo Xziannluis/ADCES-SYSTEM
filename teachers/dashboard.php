@@ -84,6 +84,28 @@ if(!$teacher_data) {
     exit();
 }
 
+// Teacher notifications (same dropdown style as evaluator dashboards)
+$notifications = [];
+$unread_count = 0;
+try {
+    $notif_q = "SELECT * FROM notifications
+                WHERE user_id = :user_id
+                  AND type IN ('schedule', 'reschedule_request', 'reschedule_accepted', 'observation_signed')
+                  AND is_read = 0
+                ORDER BY created_at DESC
+                LIMIT 10";
+    $notif_stmt = $db->prepare($notif_q);
+    $notif_stmt->bindParam(':user_id', $_SESSION['user_id']);
+    $notif_stmt->execute();
+    $notifications = $notif_stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($notifications as $n) {
+        if (empty($n['is_read'])) $unread_count++;
+    }
+} catch (Exception $e) {
+    $notifications = [];
+    $unread_count = 0;
+}
+
 // Collect filter values
 $filter_academic_year = $_GET['academic_year'] ?? '';
 $filter_semester = $_GET['semester'] ?? '';
@@ -169,22 +191,6 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
             margin: 5px 0 0 0;
             opacity: 0.9;
         }
-        .schedule-bell {
-            border: none;
-            background: #fff;
-            color: #2c3e50;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
-        }
-        .schedule-bell .schedule-dot {
-            position: absolute;
-            top: 2px; right: 2px;
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            background: #dc3545;
-            border: 1px solid #fff;
-            display: none;
-        }
-        .schedule-bell.show-dot .schedule-dot { display: inline-block; }
         .content-area {
             background: white;
             border-radius: 12px;
@@ -253,7 +259,68 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <div class="dashboard-bg-layer"><div class="bg-img"></div></div>
         <div class="dashboard-topbar">
             <h2>Saint Michael College of Caraga</h2>
-            <div class="ms-auto">
+            <div class="ms-auto d-flex align-items-center gap-2">
+                <!-- Notification Bell -->
+                <div class="dropdown">
+                    <button class="btn position-relative" type="button" id="notifBell" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="fas fa-bell"></i>
+                        <?php if ($unread_count > 0): ?>
+                        <span class="position-absolute top-0 start-100 translate-middle p-1 bg-danger border border-light rounded-circle" style="font-size:0;">
+                            <span class="visually-hidden">New notifications</span>
+                        </span>
+                        <?php endif; ?>
+                    </button>
+                    <div class="dropdown-menu dropdown-menu-end shadow-lg" aria-labelledby="notifBell">
+                        <div class="d-flex justify-content-between align-items-center notif-head">
+                            <strong><i class="fas fa-bell me-2"></i>Notifications</strong>
+                            <?php if ($unread_count > 0): ?>
+                            <button class="notif-mark-all" onclick="event.stopPropagation();markAllRead()">Mark all as read</button>
+                            <?php endif; ?>
+                        </div>
+                        <?php if (!empty($notifications)): ?>
+                            <div id="notificationList">
+                            <?php foreach ($notifications as $notif): ?>
+                            <div class="notif-item <?php echo !$notif['is_read'] ? 'unread' : ''; ?>" id="notif-<?php echo (int)$notif['id']; ?>" <?php if (!empty($notif['link'])): ?>onclick="window.location.href='<?php echo htmlspecialchars($notif['link'], ENT_QUOTES); ?>'" style="cursor:pointer;"<?php endif; ?>>
+                                <div class="notif-avatar">
+                                    <?php if (!empty($notif['avatar'])): ?>
+                                        <img src="<?php echo htmlspecialchars($notif['avatar']); ?>" alt="avatar">
+                                    <?php else: ?>
+                                        <i class="fas fa-user-circle fa-lg text-secondary"></i>
+                                    <?php endif; ?>
+                                </div>
+                                <div style="flex:1;min-width:0;">
+                                    <div class="d-flex align-items-start justify-content-between">
+                                        <div class="notif-title">
+                                            <?php echo htmlspecialchars($notif['title']); ?>
+                                        </div>
+                                        <?php if (!$notif['is_read']): ?>
+                                            <span class="notif-unread-dot" aria-hidden="true"></span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="notif-message"><?php echo htmlspecialchars($notif['message']); ?></div>
+                                    <div class="d-flex align-items-center justify-content-between mt-2">
+                                        <small class="text-muted"><i class="far fa-clock me-1"></i><?php echo date('M j, Y g:i A', strtotime($notif['created_at'])); ?></small>
+                                        <div class="text-end">
+                                            <span class="badge bg-light text-dark me-2"><?php echo htmlspecialchars($notif['type']); ?></span>
+                                            <?php if (!$notif['is_read']): ?>
+                                                <button class="btn btn-sm btn-outline-primary notif-read-btn" onclick="event.stopPropagation();markRead(<?php echo (int)$notif['id']; ?>)" title="Mark as read">
+                                                    <i class="fas fa-check me-1"></i>Read
+                                                </button>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <?php endforeach; ?>
+                            </div>
+                            <div class="dropdown-footer">
+                                <button class="btn btn-link p-0" onclick="event.stopPropagation();markAllRead()"><i class="fas fa-check-double me-1"></i>Mark all as read</button>
+                            </div>
+                        <?php else: ?>
+                            <div class="notif-empty"><i class="far fa-bell-slash me-2"></i>No notifications</div>
+                        <?php endif; ?>
+                    </div>
+                </div>
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" id="teacherMenu" data-bs-toggle="dropdown" aria-expanded="false">
                         <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (Teacher)
@@ -288,10 +355,6 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
             <div class="teacher-info-card">
                 <h3>
                     Welcome, <?php echo htmlspecialchars($teacher_data['name']); ?>!
-                    <button type="button" class="btn btn-sm schedule-bell ms-2 position-relative" id="scheduleBell" data-bs-toggle="popover" data-bs-placement="bottom">
-                        <i class="fas fa-bell"></i>
-                        <span class="schedule-dot"></span>
-                    </button>
                 </h3>
                 <p><i class="fas fa-building me-2"></i>Department: <?php echo htmlspecialchars($teacher_data['department']); ?></p>
                 <p><i class="fas fa-check-circle me-2"></i>Status: <span class="badge bg-success">Active</span></p>
@@ -457,38 +520,69 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <?php include '../includes/footer.php'; ?>
 
     <script>
-        (function () {
-            const bell = document.getElementById('scheduleBell');
-            if (!bell) return;
-
-            const scheduleText = <?php echo json_encode(!empty($teacher_data['evaluation_schedule'])
-                ? date('F d, Y \a\t h:i A', strtotime($teacher_data['evaluation_schedule']))
-                : 'No schedule assigned'); ?>;
-            const roomText = <?php echo json_encode($teacher_data['evaluation_room'] ?? 'Not assigned yet'); ?>;
-            const hasSchedule = <?php echo !empty($teacher_data['evaluation_schedule']) ? 'true' : 'false'; ?>;
-            const teacherId = <?php echo json_encode($teacher_data['id'] ?? ''); ?>;
-            const scheduleKey = `schedule_seen_${teacherId}_${scheduleText}_${roomText}`;
-
-            const content = hasSchedule
-                ? `<div><strong>Schedule:</strong> ${scheduleText}</div><div><strong>Room:</strong> ${roomText}</div>`
-                : '<div>No schedule assigned yet.</div>';
-
-            new bootstrap.Popover(bell, {
-                html: true,
-                trigger: 'focus',
-                content: content
-            });
-
-            if (hasSchedule && !localStorage.getItem(scheduleKey)) {
-                bell.classList.add('show-dot');
+    function syncNotificationUI() {
+        var list = document.getElementById('notificationList');
+        var itemCount = list ? list.querySelectorAll('.notif-item').length : 0;
+        var badge = document.querySelector('#notifBell .bg-danger');
+        if (itemCount === 0) {
+            if (badge) badge.remove();
+            if (list) {
+                list.innerHTML = '<div class="notif-empty"><i class="far fa-bell-slash me-2"></i>No notifications</div>';
             }
-
-            bell.addEventListener('click', () => {
-                if (!hasSchedule) return;
-                localStorage.setItem(scheduleKey, 'seen');
-                bell.classList.remove('show-dot');
+            document.querySelectorAll('.notif-mark-all, .dropdown-footer button[onclick*="markAllRead"]').forEach(function(btn) {
+                btn.remove();
             });
-        })();
+            var footer = document.querySelector('.dropdown-footer');
+            if (footer && footer.querySelectorAll('button, a').length === 0) {
+                footer.remove();
+            }
+        }
+    }
+
+    function markRead(id) {
+        fetch('../includes/notification_mark_read.php', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'id=' + id
+        }).then(r => r.json()).then(d => {
+            if (d.success) {
+                var el = document.getElementById('notif-' + id);
+                if (el) {
+                    el.style.opacity = '0';
+                    el.style.maxHeight = '0';
+                    el.style.padding = '0';
+                    el.style.overflow = 'hidden';
+                    setTimeout(function() {
+                        el.remove();
+                        syncNotificationUI();
+                    }, 300);
+                } else {
+                    syncNotificationUI();
+                }
+            }
+        });
+    }
+
+    function markAllRead() {
+        fetch('../includes/notification_mark_read.php', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'mark_all=1'
+        }).then(r => r.json()).then(d => {
+            if (d.success) {
+                document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
+                    el.style.opacity = '0';
+                    el.style.maxHeight = '0';
+                    el.style.padding = '0';
+                    el.style.overflow = 'hidden';
+                    setTimeout(function() { el.remove(); }, 300);
+                });
+                setTimeout(syncNotificationUI, 320);
+            }
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', syncNotificationUI);
     </script>
     <?php include '../includes/email_verify_prompt.php'; ?>
     <script>

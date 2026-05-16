@@ -338,7 +338,6 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                             </div>
                             <div class="dropdown-footer">
                                 <button class="btn btn-link p-0" onclick="event.stopPropagation();markAllRead()"><i class="fas fa-check-double me-1"></i>Mark all as read</button>
-                                <a href="notifications.php" class="btn btn-primary btn-sm">View all notifications</a>
                             </div>
                         <?php else: ?>
                             <div class="notif-empty"><i class="far fa-bell-slash me-2"></i>No notifications</div>
@@ -473,6 +472,25 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
     </div>
     
     <script>
+    function syncNotificationUI() {
+        var list = document.getElementById('notificationList');
+        var itemCount = list ? list.querySelectorAll('.notif-item').length : 0;
+        var badge = document.querySelector('#notifBell .bg-danger');
+        if (itemCount === 0) {
+            if (badge) badge.remove();
+            if (list) {
+                list.innerHTML = '<div class="notif-empty"><i class="far fa-bell-slash me-2"></i>No notifications</div>';
+            }
+            document.querySelectorAll('.notif-mark-all, .dropdown-footer button[onclick*="markAllRead"]').forEach(function(btn) {
+                btn.remove();
+            });
+            var footer = document.querySelector('.dropdown-footer');
+            if (footer && footer.querySelectorAll('button, a').length === 0) {
+                footer.remove();
+            }
+        }
+    }
+
     function markRead(id) {
         fetch('../includes/notification_mark_read.php', {
             method: 'POST',
@@ -481,8 +499,18 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
         }).then(r => r.json()).then(d => {
             if (d.success) {
                 var el = document.getElementById('notif-' + id);
-                if (el) { el.style.opacity = '0'; el.style.maxHeight = '0'; el.style.padding = '0'; el.style.overflow = 'hidden'; setTimeout(function(){ el.remove(); checkEmpty(); }, 300); }
-                updateBellDot();
+                if (el) {
+                    el.style.opacity = '0';
+                    el.style.maxHeight = '0';
+                    el.style.padding = '0';
+                    el.style.overflow = 'hidden';
+                    setTimeout(function() {
+                        el.remove();
+                        syncNotificationUI();
+                    }, 300);
+                } else {
+                    syncNotificationUI();
+                }
             }
         });
     }
@@ -493,22 +521,18 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
             body: 'mark_all=1'
         }).then(r => r.json()).then(d => {
             if (d.success) {
-                document.querySelectorAll('#notificationList .notif-item').forEach(function(el){ el.style.opacity = '0'; el.style.maxHeight = '0'; el.style.padding = '0'; el.style.overflow = 'hidden'; setTimeout(function(){ el.remove(); checkEmpty(); }, 300); });
-                updateBellDot();
+                document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
+                    el.style.opacity = '0';
+                    el.style.maxHeight = '0';
+                    el.style.padding = '0';
+                    el.style.overflow = 'hidden';
+                    setTimeout(function() { el.remove(); }, 300);
+                });
+                setTimeout(syncNotificationUI, 320);
             }
         });
     }
-    function updateBellDot() {
-        var remaining = document.querySelectorAll('#notificationList .notif-item');
-        var badge = document.querySelector('#notifBell .bg-danger');
-        if (remaining.length === 0 && badge) badge.remove();
-    }
-    function checkEmpty() {
-        var list = document.getElementById('notificationList');
-        if (list && list.querySelectorAll('.notif-item').length === 0) {
-            list.innerHTML = '<div class="notif-empty"><i class="far fa-bell-slash me-2"></i>No notifications</div>';
-        }
-    }
+    document.addEventListener('DOMContentLoaded', syncNotificationUI);
     </script>
 
     <?php include '../includes/footer.php'; ?>

@@ -116,6 +116,21 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
                 $setterName
             );
         }
+        if ($tdata && !empty($tdata['user_id'])) {
+            $teacherScheduleText = $schedule ? date('F d, Y \a\t h:i A', strtotime($schedule)) : 'TBA';
+            $teacherRoomText = !empty($room) ? $room : 'TBA';
+            $teacherNotif = $db->prepare(
+                "INSERT INTO notifications (user_id, teacher_id, type, title, message, link)
+                 VALUES (:user_id, :teacher_id, 'schedule', :title, :message, :link)"
+            );
+            $teacherNotif->execute([
+                ':user_id' => (int)$tdata['user_id'],
+                ':teacher_id' => (int)$teacherId,
+                ':title' => 'Evaluation Schedule Updated',
+                ':message' => "Your evaluation schedule is set for {$teacherScheduleText} in {$teacherRoomText}. Set by {$setterName}.",
+                ':link' => 'observation_plan.php?view=my_observation',
+            ]);
+        }
         $teacherName = $tdata['name'] ?? 'Teacher';
 
         // 2. Find evaluators to notify based on setter's role:
