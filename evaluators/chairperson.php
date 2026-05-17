@@ -120,7 +120,7 @@ $recent_evals = $evaluation->getRecentEvaluations($_SESSION['user_id'], 5);
 $notifications = [];
 $unread_count = 0;
 try {
-    $notif_q = "SELECT * FROM notifications WHERE user_id = :user_id AND type IN ('schedule','reschedule_request') AND is_read = 0 ORDER BY created_at DESC LIMIT 10";
+    $notif_q = "SELECT * FROM notifications WHERE user_id = :user_id AND type IN ('schedule','reschedule_request','observer_accept','reschedule_accepted') ORDER BY created_at DESC LIMIT 10";
     $notif_stmt = $db->prepare($notif_q);
     $notif_stmt->bindParam(':user_id', $_SESSION['user_id']);
     $notif_stmt->execute();

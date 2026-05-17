@@ -31,6 +31,7 @@ $department_map = [
 ];
 
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
+$is_department_head = in_array($_SESSION['role'], ['dean', 'principal']);
 $is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
 $all_departments = array_keys($department_map);
 $session_department = trim((string)($_SESSION['department'] ?? ''));
@@ -50,16 +51,17 @@ if ($is_leader) {
     if (empty($available_filter_departments) && $session_department !== '' && in_array($session_department, $all_departments, true)) {
         $available_filter_departments[] = $session_department;
     }
-    $raw_department = in_array($requested_department, $available_filter_departments, true)
-        ? $requested_department
-        : ($available_filter_departments[0] ?? $session_department);
+    // Hard guard: block manual URL edits to departments outside assigned programs.
+    $raw_department = guardCoordinatorDepartment($requested_department, $available_filter_departments, $session_department);
 } else {
     $available_filter_departments = $session_department !== '' ? [$session_department] : [];
     $raw_department = $session_department;
 }
 $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
 
-$scoped_evaluator_id = $_SESSION['user_id'] ?? null;
+// Leaders and department heads can view completed evaluations in their scope.
+// Coordinators are scoped to only their own completed evaluations.
+$scoped_evaluator_id = ($is_leader || $is_department_head) ? null : (int)($_SESSION['user_id'] ?? 0);
 
 // Build Academic Year list based on actual evaluations (so dropdown only shows years with data)
 $available_years = [];
@@ -93,7 +95,7 @@ try {
     $yearsQuery = "SELECT DISTINCT e.academic_year
         FROM evaluations e
         INNER JOIN teachers t ON e.teacher_id = t.id
-        WHERE (t.department = :department OR e.evaluator_id = :current_user_id)
+        WHERE t.department = :department
           AND e.academic_year IS NOT NULL
           AND e.academic_year <> ''
           AND e.status = 'completed'
@@ -106,7 +108,6 @@ try {
 
     $yearsStmt = $db->prepare($yearsQuery);
     $yearsStmt->bindValue(':department', $raw_department);
-    $yearsStmt->bindValue(':current_user_id', $_SESSION['user_id']);
     if ($scoped_evaluator_id !== null) {
         $yearsStmt->bindValue(':evaluator_id', $scoped_evaluator_id);
     }
@@ -116,7 +117,7 @@ try {
     $teachersQuery = "SELECT DISTINCT t.id, t.name
         FROM evaluations e
         INNER JOIN teachers t ON e.teacher_id = t.id
-        WHERE (t.department = :department OR e.evaluator_id = :current_user_id)
+        WHERE t.department = :department
           AND e.status = 'completed'
           AND e.overall_avg IS NOT NULL
           AND e.overall_avg > 0";
@@ -130,7 +131,6 @@ try {
 
     $teachersStmt = $db->prepare($teachersQuery);
     $teachersStmt->bindValue(':department', $raw_department);
-    $teachersStmt->bindValue(':current_user_id', $_SESSION['user_id']);
     if ($scoped_evaluator_id !== null) {
         $teachersStmt->bindValue(':evaluator_id', $scoped_evaluator_id);
     }
@@ -165,12 +165,74 @@ foreach ($available_teachers as $teacher_option) {
 }
 
 // Get evaluations for reporting
-// Leaders see all departments; others see their own department + cross-dept evaluations
+// Leaders can view all; non-leaders are scoped to their own completed evaluations.
 $report_department = $is_leader ? $raw_department : '';
 // Exclude the current user from appearing as an observed teacher (dean/principal see department reports)
 $exclude_self = ($scoped_evaluator_id === null) ? $_SESSION['user_id'] : null;
-$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, $is_leader ? null : $_SESSION['user_id'], $is_leader ? '' : $raw_department, $form_type_filter, $exclude_self);
+$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', $form_type_filter, $exclude_self);
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+$format_day_time = static function(array $eval): string {
+    $obsDate = trim((string)($eval['observation_date'] ?? ''));
+    if ($obsDate === '') return '';
+    $day = date('D', strtotime($obsDate));
+    $subjectObserved = trim((string)($eval['subject_observed'] ?? ''));
+    $obsTime = trim((string)($eval['observation_time'] ?? ''));
+    $start = '';
+    $end = '';
+    if ($obsTime !== '' && $obsTime !== '00:00' && $obsTime !== '00:00:00') {
+        $start = date('g:i A', strtotime($obsTime));
+    }
+    if (preg_match('/(\d{1,2}:\d{2}\s*(?:AM|PM))(?:\s*-\s*(\d{1,2}:\d{2}\s*(?:AM|PM)))?/i', $subjectObserved, $m)) {
+        if ($start === '' && !empty($m[1])) $start = strtoupper(trim($m[1]));
+        if (!empty($m[2])) $end = strtoupper(trim($m[2]));
+    }
+    if ($start !== '' && $end !== '') return $day . '<br>' . $start . ' - ' . $end;
+    if ($start !== '') return $day . '<br>' . $start;
+    return $day;
+};
+
+// Deduplicate report rows that represent the same schedule slot.
+// Keep the latest evaluation record for the same teacher/date/time/subject/form.
+$deduped = [];
+foreach ($evaluations as $row) {
+    $key = implode('|', [
+        (string)($row['teacher_id'] ?? ''),
+        (string)($row['observation_date'] ?? ''),
+        (string)($row['observation_time'] ?? ''),
+        (string)($row['subject_observed'] ?? ''),
+        (string)($row['evaluation_form_type'] ?? ''),
+    ]);
+    $currentId = (int)($row['id'] ?? 0);
+    if (!isset($deduped[$key]) || $currentId > (int)($deduped[$key]['id'] ?? 0)) {
+        $deduped[$key] = $row;
+    }
+}
+$evaluations = array_values($deduped);
+
+// Teacher signature lookup by evaluation_id.
+$report_ack_sig_map = [];
+try {
+    if (!empty($evaluations)) {
+        $evalIds = [];
+        foreach ($evaluations as $er) {
+            $eid = (int)($er['id'] ?? 0);
+            if ($eid > 0) $evalIds[$eid] = true;
+        }
+        $evalIds = array_keys($evalIds);
+        if (!empty($evalIds)) {
+            $ph = implode(',', array_fill(0, count($evalIds), '?'));
+            $ackStmt = $db->prepare("SELECT evaluation_id, signature FROM observation_plan_acknowledgments WHERE evaluation_id IN ($ph) ORDER BY id DESC");
+            $ackStmt->execute($evalIds);
+            while ($ar = $ackStmt->fetch(PDO::FETCH_ASSOC)) {
+                $aeid = (int)($ar['evaluation_id'] ?? 0);
+                if ($aeid > 0 && !isset($report_ack_sig_map[$aeid])) {
+                    $report_ack_sig_map[$aeid] = trim((string)($ar['signature'] ?? ''));
+                }
+            }
+        }
+    }
+} catch (Exception $e) {}
 
 $deanPrintEvaluation = null;
 foreach ($evaluations as $evaluationRow) {
@@ -181,8 +243,8 @@ foreach ($evaluations as $evaluationRow) {
     }
 }
 
-// Calculate statistics (include cross-department evaluations by this user)
-$stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') : $_SESSION['department'], $academic_year, $semester, $is_leader ? null : $_SESSION['user_id']);
+// Calculate statistics using the same scoping rule as report rows.
+$stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') : $_SESSION['department'], $academic_year, $semester, null);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -701,6 +763,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                 <th width="14%">Recommendation/s</th>
                                 <th width="7%">Agreement</th>
                                 <th width="8%">Ratings</th>
+                                <th width="8%">Teacher Signature</th>
                                 <th width="6%" class="no-print form-type-col">Form Type</th>
                             </tr>
                         </thead>
@@ -779,6 +842,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                     </td>
                                     <td>
                                         <?php echo htmlspecialchars($eval['subject_observed']); ?><br>
+                                        <small class="text-muted"><?php echo $format_day_time($eval); ?></small><br>
                                         <?php if (!empty($eval['observation_type']) && strtolower($eval['observation_type']) !== 'formal'): ?>
                                             <small class="text-muted"><?php echo htmlspecialchars($eval['observation_type']); ?> Observation</small>
                                         <?php endif; ?>
@@ -855,6 +919,20 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                             </span>
                                         </div>
                                     </td>
+                                    <td class="text-center">
+                                        <?php
+                                            $eid = (int)($eval['id'] ?? 0);
+                                            $tsig = trim((string)($report_ack_sig_map[$eid] ?? ''));
+                                            if ($tsig === '') {
+                                                $tsig = trim((string)($eval['faculty_signature'] ?? ''));
+                                            }
+                                        ?>
+                                        <?php if ($tsig !== '' && strpos($tsig, 'data:image/') === 0): ?>
+                                            <img src="<?php echo htmlspecialchars($tsig); ?>" alt="Teacher signature" style="max-height:28px; max-width:80px;">
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="no-print text-center form-type-col">
                                         <?php $ft = $eval['evaluation_form_type'] ?? 'iso'; ?>
                                         <span class="badge <?php echo $ft === 'peac' ? 'bg-success' : 'bg-primary'; ?>"><?php echo strtoupper($ft); ?></span>
@@ -863,7 +941,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                 <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="9" class="text-center py-4">
+                                    <td colspan="10" class="text-center py-4">
                                         <i class="fas fa-clipboard-list fa-2x text-muted mb-3"></i>
                                         <h5>No Evaluation Data</h5>
                                         <p class="text-muted">No evaluations found for the selected academic year / semester / teacher.</p>
@@ -875,7 +953,6 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                 </div>
                 
                 
-
                 <!-- Print Signature (Prepared by) -->
                 <?php
                     $deanPrintedName = '';
@@ -900,10 +977,11 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                             <div class="print-signature-line">
                                 <?php echo htmlspecialchars($deanPrintedName !== '' ? $deanPrintedName : ''); ?>
                             </div>
-                            <div class="print-signature-role">Dean</div>
+                            <div class="print-signature-role"><?php echo htmlspecialchars('Dean' . (!empty($raw_department) ? ', ' . $raw_department : '')); ?></div>
                         </div>
                     </div>
                 <?php endif; ?>
+
             </div>
         </div>
     </div>

@@ -400,7 +400,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 }
                             }
                         ?>
-                        <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'Schedule required for next evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? '', ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
+                        <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'Schedule required for next evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? '', ENT_QUOTES); ?>" data-schedule-end-raw="<?php echo htmlspecialchars($teacher_row['evaluation_schedule_end'] ?? '', ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_row['name']); ?></h6>
@@ -1288,9 +1288,17 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             });
         }
 
+        function toLocalDateInputValue(dateObj) {
+            if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) return '';
+            const y = dateObj.getFullYear();
+            const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const d = String(dateObj.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
         // Set current date for forms
         document.addEventListener('DOMContentLoaded', function() {
-            const today = new Date().toISOString().split('T')[0];
+            const today = toLocalDateInputValue(new Date());
             const observationDate = document.getElementById('observationDate');
             const raterDate = document.getElementById('raterDate');
             const facultyDate = document.getElementById('facultyDate');
@@ -1479,17 +1487,28 @@ if($_POST && isset($_POST['submit_evaluation'])) {
 
             // Auto-fill observation date from schedule, fallback to today
             const scheduleRaw = teacherItem?.getAttribute('data-schedule-raw') || '';
-            let obsDate = new Date().toISOString().split('T')[0];
-            let scheduleTime = '';
+            const scheduleEndRaw = teacherItem?.getAttribute('data-schedule-end-raw') || '';
+            let obsDate = toLocalDateInputValue(new Date());
+            let scheduleStartTime = '';
+            let scheduleEndTime = '';
+            const formatTime12h = (d) => {
+                const hours = d.getHours();
+                const minutes = d.getMinutes();
+                const ampm = hours >= 12 ? 'PM' : 'AM';
+                const h12 = hours % 12 || 12;
+                return h12 + ':' + String(minutes).padStart(2, '0') + ' ' + ampm;
+            };
             if (scheduleRaw) {
                 const schedDt = new Date(scheduleRaw);
                 if (!isNaN(schedDt.getTime())) {
-                    obsDate = schedDt.toISOString().split('T')[0];
-                    const hours = schedDt.getHours();
-                    const minutes = schedDt.getMinutes();
-                    const ampm = hours >= 12 ? 'PM' : 'AM';
-                    const h12 = hours % 12 || 12;
-                    scheduleTime = h12 + ':' + String(minutes).padStart(2, '0') + ' ' + ampm;
+                    obsDate = toLocalDateInputValue(schedDt);
+                    scheduleStartTime = formatTime12h(schedDt);
+                }
+            }
+            if (scheduleEndRaw) {
+                const schedEndDt = new Date(scheduleEndRaw);
+                if (!isNaN(schedEndDt.getTime())) {
+                    scheduleEndTime = formatTime12h(schedEndDt);
                 }
             }
             document.getElementById('observationDate').value = obsDate;
@@ -1503,8 +1522,12 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             const subjectTimeInput = document.getElementById('subjectTime');
             if (subjectTimeInput) {
                 let subjectTimeVal = subject;
-                if (scheduleTime) {
-                    subjectTimeVal = subject ? subject + ' ' + scheduleTime : scheduleTime;
+                if (scheduleStartTime && scheduleEndTime) {
+                    subjectTimeVal = subject
+                        ? (subject + ' ' + scheduleStartTime + ' - ' + scheduleEndTime)
+                        : (scheduleStartTime + ' - ' + scheduleEndTime);
+                } else if (scheduleStartTime) {
+                    subjectTimeVal = subject ? (subject + ' ' + scheduleStartTime) : scheduleStartTime;
                 }
                 subjectTimeInput.value = subjectTimeVal;
             }

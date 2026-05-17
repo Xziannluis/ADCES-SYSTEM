@@ -22,14 +22,48 @@ $total_teachers = $teacher->getTotalTeachers();
 $total_evaluators = $user->getTotalEvaluators(); // Total users who can evaluate
 
 
-// Get users by role for the summary
-$presidents = $user->getUsersByRole('president')->rowCount();
-$vice_presidents = $user->getUsersByRole('vice_president')->rowCount();
-$deans = $user->getUsersByRole('dean')->rowCount();
-$principals = $user->getUsersByRole('principal')->rowCount();
-$chairpersons = $user->getUsersByRole('chairperson')->rowCount();
-$coordinators = $user->getUsersByRole('subject_coordinator')->rowCount();
-$glc_count = $user->getUsersByRole('grade_level_coordinator')->rowCount();
+// Get users by role for the summary (active only, normalized role names)
+$role_counts = [
+    'president' => 0,
+    'vice_president' => 0,
+    'dean' => 0,
+    'principal' => 0,
+    'chairperson' => 0,
+    'subject_coordinator' => 0,
+    'grade_level_coordinator' => 0
+];
+try {
+    $counts_stmt = $db->query("
+        SELECT LOWER(REPLACE(TRIM(role), ' ', '_')) AS role_key, COUNT(*) AS total
+        FROM users
+        WHERE status = 'active'
+          AND LOWER(REPLACE(TRIM(role), ' ', '_')) IN (
+              'president',
+              'vice_president',
+              'dean',
+              'principal',
+              'chairperson',
+              'subject_coordinator',
+              'grade_level_coordinator'
+          )
+        GROUP BY LOWER(REPLACE(TRIM(role), ' ', '_'))
+    ");
+    while ($row = $counts_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $k = (string)($row['role_key'] ?? '');
+        if ($k !== '' && array_key_exists($k, $role_counts)) {
+            $role_counts[$k] = (int)($row['total'] ?? 0);
+        }
+    }
+} catch (Exception $e) {
+    // Keep safe fallback zeros
+}
+$presidents = $role_counts['president'];
+$vice_presidents = $role_counts['vice_president'];
+$deans = $role_counts['dean'];
+$principals = $role_counts['principal'];
+$chairpersons = $role_counts['chairperson'];
+$coordinators = $role_counts['subject_coordinator'];
+$glc_count = $role_counts['grade_level_coordinator'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -179,6 +213,14 @@ $glc_count = $user->getUsersByRole('grade_level_coordinator')->rowCount();
                         </div>
                         <div class="card-body p-0">
                             <ul class="list-group list-group-flush">
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    President
+                                    <span class="badge bg-primary rounded-pill"><?php echo $presidents; ?></span>
+                                </li>
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    Vice President
+                                    <span class="badge bg-primary rounded-pill"><?php echo $vice_presidents; ?></span>
+                                </li>
                                 <li class="list-group-item d-flex justify-content-between align-items-center">
                                     Deans
                                     <span class="badge bg-primary rounded-pill"><?php echo $deans; ?></span>

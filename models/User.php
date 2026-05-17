@@ -288,9 +288,18 @@ class User {
 
     // Get total number of evaluators (all roles except EDP)
     public function getTotalEvaluators() {
-        $query = "SELECT COUNT(*) as total FROM " . $this->table_name . " 
-                 WHERE role IN ('president', 'vice_president', 'dean', 'principal', 
-                              'chairperson', 'subject_coordinator') AND status = 'active'";
+        $query = "SELECT COUNT(*) as total
+                  FROM " . $this->table_name . "
+                  WHERE LOWER(REPLACE(TRIM(role), ' ', '_')) IN (
+                        'president',
+                        'vice_president',
+                        'dean',
+                        'principal',
+                        'chairperson',
+                        'subject_coordinator',
+                        'grade_level_coordinator'
+                  )
+                    AND status = 'active'";
         $stmt = $this->conn->prepare($query);
         $stmt->execute();
         $result = $stmt->fetch(PDO::FETCH_ASSOC);

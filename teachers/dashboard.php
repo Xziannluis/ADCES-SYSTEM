@@ -167,6 +167,157 @@ foreach ($params as $k => $v) {
 }
 $stmt->execute();
 $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Normalize subject text to prevent duplicate slot cards when subject strings
+// include appended time text (e.g. "DBMS 8:00 AM - 10:00 AM").
+$normalize_subject_slot = static function(string $subject): string {
+    $s = strtolower(trim($subject));
+    if ($s === '') return '';
+    $s = preg_replace('/\s+\d{1,2}:\d{2}\s*(am|pm)(?:\s*-\s*(?:\d{1,2}:\d{2}\s*(am|pm))?)?\s*$/i', '', $s);
+    return trim((string)$s);
+};
+
+// Build card rows per observer for each schedule slot so the teacher sees
+// one card per evaluator/observer (completed or pending), not a single merged card.
+$display_evaluations = [];
+try {
+    // Group real evaluation rows by schedule slot.
+    $slots = [];
+    foreach ($evaluations as $row) {
+        $slotSubject = $normalize_subject_slot((string)($row['subject_observed'] ?? ''));
+        $slotRoom = strtolower(trim((string)($row['observation_room'] ?? '')));
+        $slotArea = strtolower(trim((string)($row['subject_area'] ?? '')));
+        $slotKey = implode('|', [
+            (string)($row['academic_year'] ?? ''),
+            (string)($row['semester'] ?? ''),
+            (string)($row['observation_date'] ?? ''),
+            (string)($row['department'] ?? ''),
+            $slotArea,
+            $slotSubject,
+            $slotRoom,
+        ]);
+        if (!isset($slots[$slotKey])) {
+            $slots[$slotKey] = [
+                'row' => $row,
+                'eval_ids' => [],
+                'by_evaluator' => []
+            ];
+        }
+        $eid = (int)($row['id'] ?? 0);
+        if ($eid > 0) $slots[$slotKey]['eval_ids'][] = $eid;
+        $evalUid = (int)($row['evaluator_id'] ?? 0);
+        if ($evalUid > 0) {
+            $existing = $slots[$slotKey]['by_evaluator'][$evalUid] ?? null;
+            if ($existing === null) {
+                $slots[$slotKey]['by_evaluator'][$evalUid] = $row;
+            } else {
+                // Prefer completed rows; if same completion state, prefer newest timestamp.
+                $existingCompleted = strtolower(trim((string)($existing['status'] ?? ''))) === 'completed';
+                $incomingCompleted = strtolower(trim((string)($row['status'] ?? ''))) === 'completed';
+                $existingTs = strtotime((string)($existing['updated_at'] ?? $existing['created_at'] ?? '')) ?: 0;
+                $incomingTs = strtotime((string)($row['updated_at'] ?? $row['created_at'] ?? '')) ?: 0;
+                if (($incomingCompleted && !$existingCompleted) || ($incomingCompleted === $existingCompleted && $incomingTs >= $existingTs)) {
+                    $slots[$slotKey]['by_evaluator'][$evalUid] = $row;
+                }
+            }
+        }
+    }
+
+    foreach ($slots as $slot) {
+        $base = $slot['row'];
+        $tid = (int)($base['teacher_id'] ?? 0);
+        $dept = trim((string)($base['department'] ?? $base['evaluator_department'] ?? ''));
+        if ($tid <= 0) continue;
+
+        $observers = [];
+
+        // Slot observers from assignments (slot-specific + legacy).
+        if (!empty($slot['eval_ids'])) {
+            $ph = implode(',', array_fill(0, count($slot['eval_ids']), '?'));
+            $sql = "SELECT DISTINCT u.id, u.name, u.role
+                    FROM teacher_assignments ta
+                    JOIN users u ON u.id = ta.evaluator_id
+                    WHERE ta.teacher_id = ?
+                      AND u.status = 'active'
+                      AND ((ta.eval_id IN ($ph)) OR ta.eval_id IS NULL)
+                      AND (u.department = ? OR u.role IN ('president','vice_president'))";
+            $paramsObs = array_merge([$tid], $slot['eval_ids'], [$dept]);
+            $obsStmt = $db->prepare($sql);
+            $obsStmt->execute($paramsObs);
+            $observers = $obsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        }
+
+        // Always include dean/principal in owning department.
+        if ($dept !== '') {
+            $leadStmt = $db->prepare("SELECT id, name, role FROM users WHERE department = :dept AND role IN ('dean','principal') AND status = 'active'");
+            $leadStmt->execute([':dept' => $dept]);
+            $observers = array_merge($observers, $leadStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        }
+
+        // Ensure unique observer IDs.
+        $obsMap = [];
+        foreach ($observers as $o) {
+            $oid = (int)($o['id'] ?? 0);
+            if ($oid > 0) $obsMap[$oid] = $o;
+        }
+
+        // Build one card per observer/evaluator.
+        foreach ($obsMap as $oid => $odata) {
+            if (isset($slot['by_evaluator'][$oid])) {
+                $display_evaluations[] = $slot['by_evaluator'][$oid];
+            } else {
+                $synthetic = $base;
+                $synthetic['id'] = null;
+                $synthetic['evaluator_id'] = $oid;
+                $synthetic['evaluator_name'] = (string)($odata['name'] ?? 'Evaluator');
+                $synthetic['evaluator_role'] = (string)($odata['role'] ?? 'evaluator');
+                $synthetic['status'] = 'pending';
+                $display_evaluations[] = $synthetic;
+            }
+        }
+
+        // Keep any existing evaluation rows not covered by observer set.
+        foreach ($slot['by_evaluator'] as $oid => $r) {
+            if (!isset($obsMap[$oid])) $display_evaluations[] = $r;
+        }
+    }
+} catch (Exception $e) {
+    $display_evaluations = $evaluations;
+}
+if (empty($display_evaluations)) {
+    $display_evaluations = $evaluations;
+}
+
+// Final dedupe guard: if a pending/draft and a completed row exist for the
+// same evaluator+slot, keep only the completed/newest row.
+if (!empty($display_evaluations)) {
+    $final_map = [];
+    foreach ($display_evaluations as $row) {
+        $k = implode('|', [
+            (string)($row['academic_year'] ?? ''),
+            (string)($row['semester'] ?? ''),
+            (string)($row['observation_date'] ?? ''),
+            (string)($row['department'] ?? ''),
+            strtolower(trim((string)($row['subject_area'] ?? ''))),
+            $normalize_subject_slot((string)($row['subject_observed'] ?? '')),
+            strtolower(trim((string)($row['observation_room'] ?? ''))),
+            (string)((int)($row['evaluator_id'] ?? 0)),
+        ]);
+        if (!isset($final_map[$k])) {
+            $final_map[$k] = $row;
+            continue;
+        }
+        $keep = $final_map[$k];
+        $keepCompleted = strtolower(trim((string)($keep['status'] ?? ''))) === 'completed';
+        $rowCompleted = strtolower(trim((string)($row['status'] ?? ''))) === 'completed';
+        $keepTs = strtotime((string)($keep['updated_at'] ?? $keep['created_at'] ?? '')) ?: 0;
+        $rowTs = strtotime((string)($row['updated_at'] ?? $row['created_at'] ?? '')) ?: 0;
+        if (($rowCompleted && !$keepCompleted) || ($rowCompleted === $keepCompleted && $rowTs >= $keepTs)) {
+            $final_map[$k] = $row;
+        }
+    }
+    $display_evaluations = array_values($final_map);
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -213,6 +364,23 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
             color: #2c3e50;
             font-weight: 600;
             margin-bottom: 10px;
+        }
+        .observers-card {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 10px 12px;
+            margin: 10px 0;
+        }
+        .observers-card .label {
+            font-size: 0.82rem;
+            color: #6c757d;
+            margin-bottom: 4px;
+        }
+        .observers-card .value {
+            color: #2c3e50;
+            font-weight: 600;
+            font-size: 0.92rem;
         }
         .btn-view {
             background: #3498db;
@@ -360,33 +528,6 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 <p><i class="fas fa-check-circle me-2"></i>Status: <span class="badge bg-success">Active</span></p>
             </div>
 
-            <!-- Evaluation Schedule Info -->
-            <div class="content-area">
-                <h4 class="mb-4">
-                    <i class="fas fa-calendar-alt me-2"></i>Evaluation Schedule & Room
-                </h4>
-                
-                <?php if($teacher_data['evaluation_schedule']): ?>
-                <div class="alert alert-info">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <strong><i class="fas fa-clock me-2"></i>Scheduled Date & Time:</strong>
-                            <p class="mb-0"><?php echo date('F d, Y \a\t h:i A', strtotime($teacher_data['evaluation_schedule'])); ?></p>
-                        </div>
-                        <div class="col-md-6">
-                            <strong><i class="fas fa-door-open me-2"></i>Room Location:</strong>
-                            <p class="mb-0"><?php echo htmlspecialchars($teacher_data['evaluation_room'] ?? 'Not assigned yet'); ?></p>
-                        </div>
-                    </div>
-                </div>
-                <?php else: ?>
-                <div class="alert alert-warning">
-                    <i class="fas fa-info-circle me-2"></i>
-                    <strong>No evaluation schedule assigned yet.</strong> 
-                </div>
-                <?php endif; ?>
-            </div>
-
             <!-- Filters -->
             <div class="content-area">
                 <h5 class="mb-3"><i class="fas fa-filter me-2"></i>Filter Evaluations</h5>
@@ -462,8 +603,8 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php endif; ?>
                 </h4>
 
-                <?php if(count($evaluations) > 0): ?>
-                    <?php foreach($evaluations as $eval): ?>
+                <?php if(count($display_evaluations) > 0): ?>
+                    <?php foreach($display_evaluations as $eval): ?>
                     <div class="evaluation-card">
                         <div class="row align-items-center">
                             <div class="col-md-8">
@@ -491,7 +632,7 @@ $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                 </p>
                             </div>
                             <div class="col-md-4 text-md-end">
-                                <?php if($eval['status'] === 'completed'): ?>
+                                <?php if($eval['status'] === 'completed' && !empty($eval['id'])): ?>
                                 <a href="view-evaluation.php?eval_id=<?php echo $eval['id']; ?>" class="btn-view">
                                     <i class="fas fa-eye me-2"></i>View 
                                 </a>

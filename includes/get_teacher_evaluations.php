@@ -24,11 +24,12 @@ $userId = $_SESSION['user_id'] ?? 0;
 $department = $_SESSION['department'] ?? '';
 
 // Build query based on role
-$query = "SELECT e.id, e.observation_date, e.academic_year, e.semester, e.subject_observed,
-                 e.overall_avg, e.evaluation_form_type, u.name AS evaluator_name
+$query = "SELECT e.id, e.observation_date, e.observation_time, e.academic_year, e.semester, e.subject_observed,
+                 e.overall_avg, e.evaluation_form_type, e.status, u.name AS evaluator_name
           FROM evaluations e
           JOIN users u ON u.id = e.evaluator_id
-          WHERE e.teacher_id = :teacher_id";
+          WHERE e.teacher_id = :teacher_id
+            AND e.status = 'completed'";
 $params = [':teacher_id' => $teacher_id];
 
 // Optional form type filter
@@ -59,6 +60,26 @@ $query .= " ORDER BY e.observation_date DESC, e.id DESC";
 $stmt = $db->prepare($query);
 $stmt->execute($params);
 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Deduplicate rows for the same schedule slot + form type + evaluator.
+// Keep only the newest record (highest id).
+$deduped = [];
+foreach ($results as $row) {
+    $k = implode('|', [
+        (string)($row['observation_date'] ?? ''),
+        (string)($row['observation_time'] ?? ''),
+        mb_strtolower(trim((string)($row['subject_observed'] ?? ''))),
+        (string)($row['academic_year'] ?? ''),
+        (string)($row['semester'] ?? ''),
+        (string)($row['evaluation_form_type'] ?? 'iso'),
+        (string)($row['evaluator_name'] ?? ''),
+    ]);
+    $id = (int)($row['id'] ?? 0);
+    if (!isset($deduped[$k]) || $id > (int)$deduped[$k]['id']) {
+        $deduped[$k] = $row;
+    }
+}
+$results = array_values($deduped);
 
 // Format for display
 $output = [];

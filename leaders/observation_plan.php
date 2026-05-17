@@ -224,11 +224,24 @@ foreach ($eval_teachers as $t) {
         'room' => $t['evaluation_room'] ?? $t['eval_room'] ?? '',
     ];
     $sched_dt = $t['evaluation_schedule'] ?? '';
+    $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
     if (!empty($sched_dt)) {
         $ts = strtotime($sched_dt);
-        $schedule_data[$tid]['day_time'] = date('D', $ts) . "\n" . date('g:ia', $ts);
+        $day_str = date('D', $ts);
+        $start_time = date('g:ia', $ts);
+        if (!empty($sched_dt_end)) {
+            $ts_end = strtotime($sched_dt_end);
+            $end_time = date('g:ia', $ts_end);
+            $schedule_data[$tid]['day_time'] = $day_str . "\n" . $start_time . ' - ' . $end_time;
+        } else {
+            $schedule_data[$tid]['day_time'] = $day_str . "\n" . $start_time;
+        }
     } elseif (!empty($obs_date)) {
         $schedule_data[$tid]['day_time'] = date('D', strtotime($obs_date));
+        $obs_time_fmt = trim((string)($t['observation_time'] ?? ''));
+        if ($obs_time_fmt !== '' && $obs_time_fmt !== '00:00:00' && $obs_time_fmt !== '00:00') {
+            $schedule_data[$tid]['day_time'] .= "\n" . date('g:ia', strtotime($obs_time_fmt));
+        }
     }
 
     // Get observers (filtered to current department + president/VP)
@@ -317,7 +330,16 @@ foreach ($scheduled_teachers as $t) {
     ];
     if (!empty($sched_dt)) {
         $ts = strtotime($sched_dt);
-        $schedule_data[$tid]['day_time'] = date('D', $ts) . "\n" . date('g:ia', $ts);
+        $day_str = date('D', $ts);
+        $start_time = date('g:ia', $ts);
+        $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
+        if (!empty($sched_dt_end)) {
+            $ts_end = strtotime($sched_dt_end);
+            $end_time = date('g:ia', $ts_end);
+            $schedule_data[$tid]['day_time'] = $day_str . "\n" . $start_time . ' - ' . $end_time;
+        } else {
+            $schedule_data[$tid]['day_time'] = $day_str . "\n" . $start_time;
+        }
     }
 
     $assign_query = "SELECT DISTINCT u.name FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE ta.teacher_id = :teacher_id AND (u.department = :department OR u.role IN ('president','vice_president')) ORDER BY u.name";

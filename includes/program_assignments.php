@@ -30,13 +30,25 @@ function getEvaluatorAssignedPrograms($db, $evaluatorId) {
 
 function resolveEvaluatorPrograms($db, $evaluatorId, $fallbackDepartment = null) {
     $programs = getEvaluatorAssignedPrograms($db, $evaluatorId);
-    if (!empty($programs)) {
-        return $programs;
+    $result = [];
+    foreach ($programs as $p) {
+        $p = trim((string)$p);
+        if ($p !== '' && !in_array($p, $result, true)) {
+            $result[] = $p;
+        }
     }
 
-    // Fallback to the coordinator's own department when no explicit programs are assigned
+    // Always include the coordinator's own department as part of allowed programs.
+    // This prevents assigned program rows from unintentionally hiding their base department.
     if ($fallbackDepartment !== null && trim((string)$fallbackDepartment) !== '') {
-        return [trim((string)$fallbackDepartment)];
+        $fb = trim((string)$fallbackDepartment);
+        if (!in_array($fb, $result, true)) {
+            $result[] = $fb;
+        }
+    }
+
+    if (!empty($result)) {
+        return $result;
     }
 
     $deptStmt = $db->prepare("SELECT department FROM users WHERE id = :id LIMIT 1");
@@ -48,5 +60,27 @@ function resolveEvaluatorPrograms($db, $evaluatorId, $fallbackDepartment = null)
     }
 
     return [];
+}
+
+/**
+ * Hard guard for coordinator department filters.
+ * Returns a safe department value scoped to allowed programs.
+ */
+function guardCoordinatorDepartment($requestedDepartment, array $allowedDepartments, $fallbackDepartment = '') {
+    $requested = trim((string)$requestedDepartment);
+    $fallback = trim((string)$fallbackDepartment);
+    $allowed = array_values(array_unique(array_filter(array_map(function($d) {
+        return trim((string)$d);
+    }, $allowedDepartments), function($d) {
+        return $d !== '';
+    })));
+
+    if (!empty($allowed) && in_array($requested, $allowed, true)) {
+        return $requested;
+    }
+    if ($fallback !== '' && in_array($fallback, $allowed, true)) {
+        return $fallback;
+    }
+    return $allowed[0] ?? $fallback;
 }
 ?>

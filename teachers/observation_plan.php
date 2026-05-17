@@ -47,13 +47,29 @@ if (!$teacher_id) {
 $success_message = '';
 $error_message = '';
 
+function normalizeSemesterValue($value) {
+    $v = strtolower(trim((string)$value));
+    if ($v === '') return '';
+    $v = str_replace('semester', '', $v);
+    $v = preg_replace('/\s+/', '', $v);
+    if ($v === '1st' || $v === 'first' || $v === '1') return '1st';
+    if ($v === '2nd' || $v === 'second' || $v === '2') return '2nd';
+    return '';
+}
+
+function semesterVariants($canonical) {
+    if ($canonical !== '1st' && $canonical !== '2nd') return [];
+    return [$canonical, $canonical . ' Semester'];
+}
+
 // Handle acknowledgment POST — per-schedule signing
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'acknowledge') {
-    $ack_semester = trim($_POST['semester'] ?? '');
+    $ack_semester = normalizeSemesterValue($_POST['semester'] ?? '');
     $ack_academic_year = trim($_POST['academic_year'] ?? '');
     $signed_items = $_POST['signed_items'] ?? [];
 
     if (in_array($ack_semester, ['1st', '2nd']) && !empty($ack_academic_year) && is_array($signed_items) && count($signed_items) > 0) {
+        $ack_semester_variants = semesterVariants($ack_semester);
         $signature_data = $_POST['signature_data'] ?? null;
         if ($signature_data && !preg_match('/^data:image\/png;base64,[A-Za-z0-9+\/=]+$/', $signature_data)) {
             $signature_data = null;
@@ -62,7 +78,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $signed_eval_ids = [];
         $has_upcoming = false;
         foreach ($signed_items as $item) {
-            $eval_id = ($item === 'upcoming') ? null : (int)$item;
+            $target_eval_ids = [];
+            if ($item === 'upcoming') {
+                // Strict mode bridge: when a teacher signs an "upcoming/current" row,
+                // map it to concrete evaluation rows for the same schedule date if they exist.
+                $schedDate = null;
+                $schedStmt = $db->prepare("SELECT evaluation_schedule FROM teachers WHERE id = :tid LIMIT 1");
+                $schedStmt->execute([':tid' => $teacher_id]);
+                $schedRaw = trim((string)$schedStmt->fetchColumn());
+                if ($schedRaw !== '' && strtotime($schedRaw) !== false) {
+                    $schedDate = date('Y-m-d', strtotime($schedRaw));
+                }
+                if ($schedDate !== null) {
+                    $evStmt = $db->prepare("SELECT id
+                                            FROM evaluations
+                                            WHERE teacher_id = :tid
+                                              AND academic_year = :ay
+                                              AND semester IN (:sem1, :sem2)
+                                              AND observation_date IS NOT NULL
+                                              AND DATE(observation_date) = :sdate");
+                    $evStmt->execute([
+                        ':tid' => $teacher_id,
+                        ':ay' => $ack_academic_year,
+                        ':sem1' => $ack_semester_variants[0],
+                        ':sem2' => $ack_semester_variants[1],
+                        ':sdate' => $schedDate
+                    ]);
+                    $target_eval_ids = array_map('intval', $evStmt->fetchAll(PDO::FETCH_COLUMN));
+                }
+                if (empty($target_eval_ids)) {
+                    $target_eval_ids = [null];
+                }
+            } else {
+                $target_eval_ids = [(int)$item];
+            }
+            foreach ($target_eval_ids as $eval_id) {
             // Determine department for this signature
             $sign_dept = null;
             if ($eval_id !== null) {
@@ -78,11 +128,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $sign_dept = $tRow['department'] ?? null;
             }
             if ($eval_id === null) {
-                $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id IS NULL AND (department = :dept OR (department IS NULL AND :dept2 IS NULL)) LIMIT 1");
-                $check->execute([':tid' => $teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':dept' => $sign_dept, ':dept2' => $sign_dept]);
+                $check = $db->prepare("SELECT id
+                                       FROM observation_plan_acknowledgments
+                                       WHERE teacher_id = :tid
+                                         AND academic_year = :ay
+                                         AND semester IN (:sem1, :sem2)
+                                         AND evaluation_id IS NULL
+                                         AND (department = :dept OR (department IS NULL AND :dept2 IS NULL))
+                                       LIMIT 1");
+                $check->execute([
+                    ':tid' => $teacher_id,
+                    ':ay' => $ack_academic_year,
+                    ':sem1' => $ack_semester_variants[0],
+                    ':sem2' => $ack_semester_variants[1],
+                    ':dept' => $sign_dept,
+                    ':dept2' => $sign_dept
+                ]);
             } else {
-                $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id = :eid LIMIT 1");
-                $check->execute([':tid' => $teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id]);
+                $check = $db->prepare("SELECT id
+                                       FROM observation_plan_acknowledgments
+                                       WHERE teacher_id = :tid
+                                         AND academic_year = :ay
+                                         AND semester IN (:sem1, :sem2)
+                                         AND evaluation_id = :eid
+                                       LIMIT 1");
+                $check->execute([
+                    ':tid' => $teacher_id,
+                    ':ay' => $ack_academic_year,
+                    ':sem1' => $ack_semester_variants[0],
+                    ':sem2' => $ack_semester_variants[1],
+                    ':eid' => $eval_id
+                ]);
             }
             if ($check->rowCount() === 0) {
                 $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, department, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :dept, :eid, NOW(), :sig)");
@@ -93,6 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 } else {
                     $has_upcoming = true;
                 }
+            }
             }
         }
         if ($signed_count > 0) {
@@ -123,11 +200,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     } else {
         $error_message = "Please select at least one schedule to sign.";
     }
+
+    // PRG: prevent browser Back/Refresh from resubmitting the signature form.
+    $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? $ack_semester)
+        . '&academic_year=' . urlencode($_GET['academic_year'] ?? $ack_academic_year);
+    if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode((string)$_GET['department']);
+    if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode((string)$_GET['month']);
+    if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode((string)$_GET['status']);
+    if (!empty($success_message)) $_SESSION['success'] = $success_message;
+    if (!empty($error_message)) $_SESSION['error'] = $error_message;
+    header("Location: $redirect");
+    exit();
 }
 
 // Handle teacher reschedule request
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'request_reschedule_my') {
-    $req_semester = trim((string)($_POST['semester'] ?? ''));
+    $req_semester = normalizeSemesterValue($_POST['semester'] ?? '');
+    if ($req_semester === '') $req_semester = '1st';
+    $req_semester_variants = semesterVariants($req_semester);
     $req_academic_year = trim((string)($_POST['academic_year'] ?? ''));
     $req_item = trim((string)($_POST['reschedule_item'] ?? ''));
     $req_reason = trim((string)($_POST['reschedule_reason'] ?? ''));
@@ -161,13 +251,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $eReqStmt = $db->prepare("SELECT e.observation_date, e.observation_time, e.observation_room, e.subject_observed, u.department AS evaluator_department
                                               FROM evaluations e
                                               LEFT JOIN users u ON u.id = e.evaluator_id
-                                              WHERE e.id = :eid AND e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem
+                                              WHERE e.id = :eid AND e.teacher_id = :tid AND e.academic_year = :ay AND e.semester IN (:sem1, :sem2)
                                               LIMIT 1");
                     $eReqStmt->execute([
                         ':eid' => $req_eval_id,
                         ':tid' => $teacher_id,
                         ':ay' => $req_academic_year,
-                        ':sem' => $req_semester
+                        ':sem1' => $req_semester_variants[0],
+                        ':sem2' => $req_semester_variants[1]
                     ]);
                     $eReq = $eReqStmt->fetch(PDO::FETCH_ASSOC);
                     if ($eReq) {
@@ -284,6 +375,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $notifLink = 'observation_plan.php?' . http_build_query([
                 'open_reschedule' => 1,
                 'teacher_id' => (int)$teacher_id,
+                'eval_id' => (int)($req_eval_id ?? 0),
                 'semester' => $req_semester,
                 'academic_year' => $req_academic_year
             ]);
@@ -314,6 +406,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $error_message = 'Failed to send reschedule request.';
         }
     }
+
+    // PRG: prevent browser Back/Refresh from resubmitting reschedule request form.
+    $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? $req_semester)
+        . '&academic_year=' . urlencode($_GET['academic_year'] ?? $req_academic_year);
+    if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode((string)$_GET['department']);
+    if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode((string)$_GET['month']);
+    if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode((string)$_GET['status']);
+    if (!empty($success_message)) $_SESSION['success'] = $success_message;
+    if (!empty($error_message)) $_SESSION['error'] = $error_message;
+    header("Location: $redirect");
+    exit();
 }
 
 // Flash messages
@@ -343,7 +446,9 @@ try {
 }
 
 // Filters
-$semester = $_GET['semester'] ?? '1st';
+$semester = normalizeSemesterValue($_GET['semester'] ?? '1st');
+if ($semester === '') $semester = '1st';
+$semester_variants = semesterVariants($semester);
 $academic_year = $_GET['academic_year'] ?? '';
 $filter_month = $_GET['month'] ?? '';
 $filter_status = $_GET['status'] ?? '';
@@ -396,14 +501,10 @@ if ($owning_dept !== '') {
                   FROM teacher_assignments ta
                   JOIN users u ON ta.evaluator_id = u.id
                   WHERE ta.teacher_id = :tid
-                    AND (
-                        u.department = :dept
-                        OR u.role IN ('president','vice_president')
-                    )
                     AND u.status = 'active'
                   ORDER BY u.name";
     $obs_stmt = $db->prepare($obs_query);
-    $obs_stmt->execute([':tid' => $teacher_id, ':dept' => $owning_dept]);
+    $obs_stmt->execute([':tid' => $teacher_id]);
     $all_observer_names = $obs_stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
 
     // Always include active dean/principal of the schedule-owning department
@@ -436,7 +537,8 @@ $all_observer_names = array_values(array_filter(array_unique($all_observer_names
 
 // Build observation plan data
 $has_schedule = !empty($teacher_data['evaluation_schedule']);
-$has_matching_schedule = $has_schedule && ($teacher_data['evaluation_semester'] === $semester || empty($teacher_data['evaluation_semester']));
+$teacher_schedule_semester = normalizeSemesterValue($teacher_data['evaluation_semester'] ?? '');
+$has_matching_schedule = $has_schedule && ($teacher_schedule_semester === $semester || $teacher_schedule_semester === '');
 // Schedule ownership (used by department filter)
 $schedule_owning_dept = trim((string)($teacher_data['scheduled_department'] ?? ''));
 if ($schedule_owning_dept === '') {
@@ -444,19 +546,33 @@ if ($schedule_owning_dept === '') {
 }
 
 // Get completed evaluations for this semester
-$eval_query = "SELECT e.id, e.observation_date, e.status, e.subject_area, e.subject_observed, e.observation_room, e.semester, e.evaluation_focus, u.name as evaluator_name, u.department as evaluator_department
+$eval_query = "SELECT e.id, e.observation_date, e.observation_time, e.status, e.subject_area, e.subject_observed, e.observation_room, e.semester, e.evaluation_focus, u.name as evaluator_name, u.department as evaluator_department
                FROM evaluations e
                JOIN users u ON e.evaluator_id = u.id
-               WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester = :sem
+               WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester IN (:sem1, :sem2)
                ORDER BY e.observation_date ASC";
 $eval_stmt = $db->prepare($eval_query);
-$eval_stmt->execute([':tid' => $teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
+$eval_stmt->execute([
+    ':tid' => $teacher_id,
+    ':ay' => $academic_year,
+    ':sem1' => $semester_variants[0],
+    ':sem2' => $semester_variants[1]
+]);
 $evaluations = $eval_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Check acknowledgment status — per-item
-$ack_query = "SELECT * FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem";
+$ack_query = "SELECT *
+              FROM observation_plan_acknowledgments
+              WHERE teacher_id = :tid
+                AND academic_year = :ay
+                AND semester IN (:sem1, :sem2)";
 $ack_stmt = $db->prepare($ack_query);
-$ack_stmt->execute([':tid' => $teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
+$ack_stmt->execute([
+    ':tid' => $teacher_id,
+    ':ay' => $academic_year,
+    ':sem1' => $semester_variants[0],
+    ':sem2' => $semester_variants[1]
+]);
 $ack_rows = $ack_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Build lookup: evaluation_id => acknowledgment row (null/'upcoming' for upcoming schedule)
@@ -529,8 +645,17 @@ if (!empty($filter_status)) {
 // - an in-progress current-date evaluation group.
 $unsigned_count = 0;
 $has_unsigned_current_group = false;
-if ($has_matching_schedule && !isset($signed_map['upcoming']) && $schedule_date_key !== null && isset($eval_groups[$schedule_date_key])) {
+if ($has_matching_schedule && $schedule_date_key !== null && isset($eval_groups[$schedule_date_key])) {
     $current_group = $eval_groups[$schedule_date_key];
+    // Treat legacy/upcoming signature as signed for the current group too.
+    $current_group_signed = isset($signed_map['upcoming']);
+    foreach ($current_group as $cev_signed) {
+        $cev_id = (int)($cev_signed['id'] ?? 0);
+        if ($cev_id > 0 && isset($signed_map[$cev_id])) {
+            $current_group_signed = true;
+            break;
+        }
+    }
     $current_completed_evaluators = [];
     foreach ($current_group as $cev) {
         if (($cev['status'] ?? '') === 'completed') {
@@ -539,7 +664,7 @@ if ($has_matching_schedule && !isset($signed_map['upcoming']) && $schedule_date_
     }
     $current_completed_evaluators = array_values(array_unique(array_filter($current_completed_evaluators)));
     $current_all_done = count($current_completed_evaluators) >= count($all_observer_names) && count($all_observer_names) > 0;
-    $has_unsigned_current_group = !$current_all_done;
+    $has_unsigned_current_group = !$current_all_done && !$current_group_signed;
 }
 if ($show_upcoming && !isset($signed_map['upcoming'])) {
     $unsigned_count++;
@@ -858,21 +983,52 @@ try {
                                         $ts = strtotime($teacher_data['evaluation_schedule']);
                                         $row_date = date('M d, Y', $ts);
                                         $row_day_time = date('D', $ts) . '<br>' . date('g:i A', $ts);
+                                        $sched_end = trim((string)($teacher_data['evaluation_schedule_end'] ?? ''));
+                                        if ($sched_end !== '' && strtotime($sched_end) !== false) {
+                                            $row_day_time .= ' - ' . date('g:i A', strtotime($sched_end));
+                                        }
                                         $row_subject_area = $teacher_data['evaluation_subject_area'] ?? '';
                                         $row_subject = $teacher_data['evaluation_subject'] ?? '';
                                         $row_room = $teacher_data['evaluation_room'] ?? '';
                                         $row_semester_display = ($teacher_data['evaluation_semester'] ?? '') . ' Semester';
                                         $row_observers = $all_observer_names;
+                                        $group_evaluators = array_values(array_unique(array_filter(array_map(function($g) {
+                                            return trim((string)($g['evaluator_name'] ?? ''));
+                                        }, $group))));
+                                        foreach ($group_evaluators as $gev) {
+                                            if (!in_array($gev, $row_observers, true)) {
+                                                $row_observers[] = $gev;
+                                            }
+                                        }
                                     } else {
                                         $focus_raw = $first_ev['evaluation_focus'] ?? '';
                                         $row_date = !empty($first_ev['observation_date']) ? date('M d, Y', strtotime($first_ev['observation_date'])) : '';
                                         $row_day_time = !empty($first_ev['observation_date']) ? date('D', strtotime($first_ev['observation_date'])) : '';
+                                        $first_time = trim((string)($first_ev['observation_time'] ?? ''));
+                                        if ($first_time !== '' && $first_time !== '00:00:00' && $first_time !== '00:00') {
+                                            $row_day_time .= '<br>' . date('g:i A', strtotime($first_time));
+                                            $sched_end = trim((string)($teacher_data['evaluation_schedule_end'] ?? ''));
+                                            if ($sched_end !== '' && strtotime($sched_end) !== false) {
+                                                $row_day_time .= ' - ' . date('g:i A', strtotime($sched_end));
+                                            }
+                                        }
                                         $row_subject_area = $first_ev['subject_area'] ?? '';
                                         $row_subject = $first_ev['subject_observed'] ?? '';
                                         $row_room = $first_ev['observation_room'] ?? '';
                                         $row_semester_display = ($first_ev['semester'] ?? '') . ' Semester';
-                                        $row_observers = array_values(array_unique(array_column($group, 'evaluator_name')));
+                                        $row_observers = $all_observer_names;
+                                        $group_observers = array_values(array_unique(array_filter(array_column($group, 'evaluator_name'))));
+                                        foreach ($group_observers as $gobs) {
+                                            $gobs = trim((string)$gobs);
+                                            if ($gobs !== '' && !in_array($gobs, $row_observers, true)) {
+                                                $row_observers[] = $gobs;
+                                            }
+                                        }
                                     }
+                                    $row_observers = array_values(array_filter($row_observers, function($n) use ($self_name) {
+                                        $n = trim((string)$n);
+                                        return $n !== '' && $n !== trim((string)$self_name);
+                                    }));
 
                                     $focus_arr = [];
                                     if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
@@ -893,6 +1049,15 @@ try {
 
                                     if ($is_current) {
                                         $all_done = count($completed_evaluators) >= count($all_observer_names) && count($all_observer_names) > 0;
+                                        // Treat legacy/upcoming signature as signed for current group.
+                                        $current_group_signed = isset($signed_map['upcoming']);
+                                        foreach ($group as $g_sig_ev) {
+                                            $g_sig_id = (int)($g_sig_ev['id'] ?? 0);
+                                            if ($g_sig_id > 0 && isset($signed_map[$g_sig_id])) {
+                                                $current_group_signed = true;
+                                                break;
+                                            }
+                                        }
                                         if ($all_done) {
                                             $status_badge = '<span class="badge bg-success">Completed</span>';
                                         } elseif (count($completed_evaluators) > 0) {
@@ -900,7 +1065,7 @@ try {
                                         } else {
                                             $status_badge = '<span class="badge bg-info">Upcoming</span>';
                                         }
-                                        $row_can_sign = !$all_done && !isset($signed_map['upcoming']);
+                                        $row_can_sign = !$all_done && !$current_group_signed;
                                     } else {
                                         if ($group_all_rows_completed) {
                                             $status_badge = '<span class="badge bg-success">Completed</span>';
@@ -914,7 +1079,16 @@ try {
                                     <?php if ($is_current): ?>
                                         <input type="checkbox" class="form-check-input schedule-item-check <?php echo $row_can_sign ? 'sign-item-check' : ''; ?>" value="upcoming" data-schedule-label="<?php echo htmlspecialchars('Current: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
                                     <?php else: ?>
-                                        <i class="fas fa-check-circle text-success" title="Evaluation completed"></i>
+                                        <?php
+                                            $group_rep_id = (int)($first_ev['id'] ?? 0);
+                                            $group_signed = ($group_rep_id > 0 && isset($signed_map[$group_rep_id]));
+                                            $group_can_select = (!$group_all_rows_completed && !$group_signed && $group_rep_id > 0);
+                                        ?>
+                                        <?php if ($group_all_rows_completed): ?>
+                                            <i class="fas fa-check-circle text-success" title="Evaluation completed"></i>
+                                        <?php else: ?>
+                                            <input type="checkbox" class="form-check-input schedule-item-check <?php echo $group_can_select ? 'sign-item-check' : ''; ?>" value="<?php echo $group_rep_id; ?>" data-schedule-label="<?php echo htmlspecialchars('Schedule: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
                                 <td class="text-center"><?php echo htmlspecialchars($row_semester_display); ?></td>
@@ -1197,9 +1371,7 @@ var reqReschedBtn = document.getElementById('reqReschedBtn');
     }
 
     function getSelectedRescheduleChecks() {
-        var selected = Array.from(document.querySelectorAll('.schedule-item-check:checked'));
-        if (selected.length > 0) return selected;
-        return Array.from(document.querySelectorAll('.schedule-item-check'));
+        return Array.from(document.querySelectorAll('.schedule-item-check:checked'));
     }
 
     function updateCheckboxState() {
@@ -1238,7 +1410,7 @@ var reqReschedBtn = document.getElementById('reqReschedBtn');
             }
         }
         if (reqReschedBtn) {
-            reqReschedBtn.disabled = (reschedCount !== 1);
+            reqReschedBtn.disabled = (reschedCount === 0);
         }
     }
 
@@ -1270,10 +1442,12 @@ var reqReschedBtn = document.getElementById('reqReschedBtn');
 
     function openRescheduleRequestModal() {
         var checks = getSelectedRescheduleChecks();
-        if (checks.length !== 1) {
-            alert('Please select exactly one schedule.');
+        if (checks.length === 0) {
+            alert('Please select a schedule first.');
             return;
         }
+        // Reschedule request is per schedule item; when multiple are checked,
+        // use the first checked row to keep the action workable.
         var selected = checks[0];
         var itemInput = document.getElementById('rescheduleItemInput');
         var selectedText = document.getElementById('rescheduleSelectedText');

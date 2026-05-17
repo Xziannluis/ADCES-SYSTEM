@@ -138,9 +138,26 @@ foreach ($eval_teachers as $t) {
     if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
     $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
     $sched_dt = $t['evaluation_schedule'] ?? '';
+    $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
     $day_time = '';
-    if (!empty($sched_dt)) { $ts = strtotime($sched_dt); $day_time = date('D', $ts) . "\n" . date('g:ia', $ts); }
-    elseif (!empty($obs_date)) { $day_time = date('D', strtotime($obs_date)); }
+    if (!empty($sched_dt)) {
+        $ts = strtotime($sched_dt);
+        $day_str = date('D', $ts);
+        $start_time = date('g:ia', $ts);
+        if (!empty($sched_dt_end)) {
+            $ts_end = strtotime($sched_dt_end);
+            $end_time = date('g:ia', $ts_end);
+            $day_time = $day_str . "\n" . $start_time . ' - ' . $end_time;
+        } else {
+            $day_time = $day_str . "\n" . $start_time;
+        }
+    } elseif (!empty($obs_date)) {
+        $day_time = date('D', strtotime($obs_date));
+        $obs_time_fmt = trim((string)($t['observation_time'] ?? ''));
+        if ($obs_time_fmt !== '' && $obs_time_fmt !== '00:00:00' && $obs_time_fmt !== '00:00') {
+            $day_time .= "\n" . date('g:ia', strtotime($obs_time_fmt));
+        }
+    }
     $schedule_data[$tid] = [
         'semester' => $t['evaluation_semester'] ?? $t['eval_semester'] ?? '',
         'focus' => implode(', ', $focus_display),
@@ -178,7 +195,19 @@ foreach ($scheduled_teachers as $t) {
     if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
     $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
     $day_time = '';
-    if (!empty($sched_dt)) { $ts = strtotime($sched_dt); $day_time = date('D', $ts) . "\n" . date('g:ia', $ts); }
+    if (!empty($sched_dt)) {
+        $ts = strtotime($sched_dt);
+        $day_str = date('D', $ts);
+        $start_time = date('g:ia', $ts);
+        $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
+        if (!empty($sched_dt_end)) {
+            $ts_end = strtotime($sched_dt_end);
+            $end_time = date('g:ia', $ts_end);
+            $day_time = $day_str . "\n" . $start_time . ' - ' . $end_time;
+        } else {
+            $day_time = $day_str . "\n" . $start_time;
+        }
+    }
     $schedule_data[$tid] = [
         'semester' => $t['evaluation_semester'] ?? '',
         'focus' => implode(', ', $focus_display),

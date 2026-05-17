@@ -79,6 +79,8 @@ class EvaluationController {
     private $aiController;
 
     private const EVALUATION_TIMEZONE = 'Asia/Manila';
+    private const SIGNATURE_DATAURL_PATTERN = '/^data:image\/png;base64,[A-Za-z0-9+\/=]+$/';
+    private $reusedEvaluationId = 0;
 
     public function __construct($database) {
         $this->db = $database;
@@ -142,6 +144,7 @@ class EvaluationController {
 
     public function submitEvaluation($postData, $evaluatorId) {
         try {
+            $this->reusedEvaluationId = 0;
             if (empty($evaluatorId)) {
                 throw new Exception('Unauthorized');
             }
@@ -234,6 +237,16 @@ class EvaluationController {
                 }
             }
 
+            // Enforce signatures for both ISO and PEAC submissions (server-side).
+            $raterSig = trim((string)($postData['rater_signature'] ?? ''));
+            $facultySig = trim((string)($postData['faculty_signature'] ?? ''));
+            if ($raterSig === '' || !preg_match(self::SIGNATURE_DATAURL_PATTERN, $raterSig)) {
+                throw new Exception('Rater/Observer signature is required.');
+            }
+            if ($facultySig === '' || !preg_match(self::SIGNATURE_DATAURL_PATTERN, $facultySig)) {
+                throw new Exception('Faculty signature is required.');
+            }
+
             // Log submission for debugging
             error_log("Submission: evaluatorId=$evaluatorId, teacher_id=" . ($postData['teacher_id'] ?? 'MISSING'));
 
@@ -252,6 +265,9 @@ class EvaluationController {
             error_log("Created evaluation record: $evaluationId for teacher_id=" . ($postData['teacher_id'] ?? 'MISSING'));
 
             // 2. Save evaluation details (ratings and comments)
+            // Ensure details are replaced cleanly when reusing an existing draft slot row.
+            $delDetailsStmt = $this->db->prepare("DELETE FROM evaluation_details WHERE evaluation_id = :evaluation_id");
+            $delDetailsStmt->execute([':evaluation_id' => $evaluationId]);
             $this->saveEvaluationDetails($evaluationId, $postData);
 
             // 3. Calculate averages (use model method)
@@ -356,18 +372,64 @@ class EvaluationController {
             $evaluation_form_type = 'iso';
         }
 
-        // Prevent duplicate: check if this evaluator already completed this form type for this teacher
-        if (!empty($teacher_id)) {
+        // Idempotency guard:
+        // If submit is triggered again for the same schedule slot, reuse
+        // the existing completed record instead of inserting a duplicate row.
+        if (!empty($teacher_id) && !empty($observation_date)) {
             $dupeStmt = $this->db->prepare(
-                "SELECT COUNT(*) FROM evaluations WHERE evaluator_id = :eid AND teacher_id = :tid AND evaluation_form_type = :ft AND status = 'completed'"
+                "SELECT id
+                 FROM evaluations
+                 WHERE evaluator_id = :eid
+                   AND teacher_id = :tid
+                   AND evaluation_form_type = :ft
+                   AND academic_year = :ay
+                   AND semester = :sem
+                   AND observation_date = :obs_date
+                   AND COALESCE(observation_time, '') = COALESCE(:obs_time, '')
+                   AND status = 'completed'
+                 ORDER BY id DESC
+                 LIMIT 1"
             );
             $dupeStmt->bindValue(':eid', $evaluatorId);
             $dupeStmt->bindValue(':tid', $teacher_id);
             $dupeStmt->bindValue(':ft', $evaluation_form_type);
+            $dupeStmt->bindValue(':ay', $academic_year);
+            $dupeStmt->bindValue(':sem', $semester);
+            $dupeStmt->bindValue(':obs_date', $observation_date);
+            $dupeStmt->bindValue(':obs_time', $observation_time);
             $dupeStmt->execute();
-            if ((int)$dupeStmt->fetchColumn() > 0) {
-                return null; // Already evaluated — block duplicate
+            $existingEvalId = (int)($dupeStmt->fetchColumn() ?: 0);
+            if ($existingEvalId > 0) {
+                return $existingEvalId;
             }
+        }
+
+        // Permanent fix:
+        // Reuse existing draft/rescheduled row for the same evaluator+teacher+slot
+        // instead of inserting a new completed row (prevents duplicate IDs per slot).
+        $slotDraftId = 0;
+        if (!empty($teacher_id) && !empty($observation_date)) {
+            $slotStmt = $this->db->prepare(
+                "SELECT id
+                 FROM evaluations
+                 WHERE evaluator_id = :eid
+                   AND teacher_id = :tid
+                   AND evaluation_form_type = :ft
+                   AND academic_year = :ay
+                   AND semester = :sem
+                   AND observation_date = :obs_date
+                   AND status IN ('draft','rescheduled','pending')
+                 ORDER BY id DESC
+                 LIMIT 1"
+            );
+            $slotStmt->bindValue(':eid', $evaluatorId);
+            $slotStmt->bindValue(':tid', $teacher_id);
+            $slotStmt->bindValue(':ft', $evaluation_form_type);
+            $slotStmt->bindValue(':ay', $academic_year);
+            $slotStmt->bindValue(':sem', $semester);
+            $slotStmt->bindValue(':obs_date', $observation_date);
+            $slotStmt->execute();
+            $slotDraftId = (int)($slotStmt->fetchColumn() ?: 0);
         }
 
         // Fetch teacher's schedule details (room, subject_area, focus) before they are cleared
@@ -394,6 +456,64 @@ class EvaluationController {
         $fsStmt = $this->db->query("SELECT setting_key, setting_value FROM form_settings");
         while ($r = $fsStmt->fetch(PDO::FETCH_ASSOC)) { $_fsSnap[$r['setting_key']] = $r['setting_value']; }
     } catch (PDOException $e) {}
+
+    if ($slotDraftId > 0) {
+        $updateQuery = "UPDATE evaluations
+                        SET faculty_name = :faculty_name,
+                            department = :department,
+                            academic_year = :academic_year,
+                            semester = :semester,
+                            subject_observed = :subject_observed,
+                            observation_time = :observation_time,
+                            observation_date = :observation_date,
+                            observation_type = :observation_type,
+                            observation_room = :observation_room,
+                            subject_area = :subject_area,
+                            evaluation_focus = :evaluation_focus,
+                            evaluation_form_type = :evaluation_form_type,
+                            seat_plan = :seat_plan,
+                            course_syllabi = :course_syllabi,
+                            others_requirements = :others_requirements,
+                            others_specify = :others_specify,
+                            status = 'completed',
+                            fs_form_code_no = :fs_form_code_no,
+                            fs_issue_status = :fs_issue_status,
+                            fs_revision_no = :fs_revision_no,
+                            fs_date_effective = :fs_date_effective,
+                            fs_approved_by = :fs_approved_by,
+                            updated_at = NOW()
+                        WHERE id = :id";
+        $u = $this->db->prepare($updateQuery);
+        $u->bindValue(':faculty_name', $faculty_name);
+        $u->bindValue(':department', $department);
+        $u->bindValue(':academic_year', $academic_year);
+        $u->bindValue(':semester', $semester);
+        $u->bindValue(':subject_observed', $subject_observed);
+        $u->bindValue(':observation_time', $observation_time);
+        $u->bindValue(':observation_date', $observation_date);
+        $u->bindValue(':observation_type', $observation_type);
+        $u->bindValue(':observation_room', $observation_room);
+        $u->bindValue(':subject_area', $subject_area);
+        $u->bindValue(':evaluation_focus', $evaluation_focus);
+        $u->bindValue(':evaluation_form_type', $evaluation_form_type);
+        $u->bindValue(':seat_plan', $seat_plan);
+        $u->bindValue(':course_syllabi', $course_syllabi);
+        $u->bindValue(':others_requirements', $others_requirements);
+        $u->bindValue(':others_specify', $others_specify);
+        $u->bindValue(':fs_form_code_no', $_fsSnap['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04');
+        $u->bindValue(':fs_issue_status', $_fsSnap['issue_status'] ?? '02');
+        $u->bindValue(':fs_revision_no', $_fsSnap['revision_no'] ?? '02');
+        $u->bindValue(':fs_date_effective', $_fsSnap['date_effective'] ?? '13 September 2023');
+        $u->bindValue(':fs_approved_by', $_fsSnap['approved_by'] ?? 'President');
+        $u->bindValue(':id', $slotDraftId, PDO::PARAM_INT);
+        if ($u->execute()) {
+            $this->reusedEvaluationId = $slotDraftId;
+            return $slotDraftId;
+        }
+        $err = $u->errorInfo();
+        error_log('DB Error updating draft evaluation record: ' . ($err[2] ?? json_encode($err)));
+        throw new Exception('Failed to finalize existing draft evaluation. Please try again.');
+    }
 
     $query = "INSERT INTO evaluations 
           (teacher_id, faculty_name, department, evaluator_id, academic_year, semester, 
@@ -859,3 +979,4 @@ class EvaluationController {
     }
 }
 ?>
+

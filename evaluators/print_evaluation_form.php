@@ -206,14 +206,15 @@ $autoPrint = !empty($_GET['auto_print']);
         .sig-section { margin-top: 6px; page-break-inside: avoid; font-size: 10px; }
         .sig-section h6 { font-size: 11px; font-weight: 700; margin: 0 0 2px; }
         .sig-section p.cert { margin: 0 0 6px; font-size: 9px; font-style: italic; }
-        .sig-row { display: flex; gap: 30px; margin-bottom: 4px; }
+        .sig-row { display: flex; gap: 30px; margin-bottom: 4px; align-items: flex-end; }
         .sig-col { flex: 1; }
-        .sig-col:last-child { flex: 1.5; }
+        .sig-col:last-child { flex: 1; }
         .sig-img { height: 50px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 4px; }
         .sig-img img { max-height: 46px; max-width: 100%; object-fit: contain; }
         .sig-name { text-align: center; font-weight: 600; font-size: 10px; margin: 4px 0; }
         .sig-line { border-top: 1px solid #000; text-align: center; padding-top: 0; font-weight: 600; font-size: 10px; width: 120px; margin: 0 auto; }
         .sig-caption { text-align: center; font-size: 8.5px; color: #444; }
+        .sig-date-value { height: 54px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; font-size: 10px; margin: 0 0 4px; }
         .sig-date-row { display: flex; gap: 30px; margin-top: 2px; }
         .sig-date-col { flex: 1; font-size: 10px; }
 
@@ -280,7 +281,7 @@ $autoPrint = !empty($_GET['auto_print']);
         <div style="font-size:9px; margin:1px 0;">Brgy. 4, Nasipit, Agusan del Norte, Philippines</div>
         <div style="font-size:9px; margin:1px 0;">District 8, Brgy. Triangulo, Nasipit, Agusan del Norte, Philippines</div>
         <div style="font-size:9px; margin:1px 0;">Tel. Nos. +63 085 343-3251 / +63 085 283-3113</div>
-        <a href="http://www.smccnasipit.edu.ph" style="font-size:9px; color:#000; text-decoration:underline;">www.smccnasipit.edu.ph</a>
+        <a href="http://www.smccnasipit.edu.ph" style="font-size:9px; color:#0d6efd; text-decoration:underline;">www.smccnasipit.edu.ph</a>
     </div>
 </div>
 
@@ -482,9 +483,8 @@ foreach ($domains as $domain):
             <div class="sig-caption">Signature over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['rater_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
-            <div class="sig-line" style="width: 80px;"></div>
+            <div class="sig-date-value"><?php echo h($eval['rater_date'] ?? ''); ?></div>
+            <div class="sig-line"></div>
             <div class="sig-caption">Date</div>
         </div>
     </div>
@@ -508,9 +508,8 @@ foreach ($domains as $domain):
             <div class="sig-caption">Signature of Faculty over printed name</div>
         </div>
         <div class="sig-col">
-            <div style="height: 50px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; margin-bottom: 4px;"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
-            <div style="height: auto; margin: 4px 0;"></div>
-            <div class="sig-line" style="width: 80px;"></div>
+            <div class="sig-date-value"><?php echo h($eval['faculty_date'] ?? ''); ?></div>
+            <div class="sig-line"></div>
             <div class="sig-caption">Date</div>
         </div>
     </div>

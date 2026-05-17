@@ -50,6 +50,156 @@ if ($teacher_data) {
     }
     $stmt->execute();
     $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // 1) Build completed-index for strict and loose slot matching.
+    $completedStrict = [];
+    $completedLoose = [];
+    foreach ($evaluations as $row) {
+        $status = strtolower(trim((string)($row['status'] ?? '')));
+        if ($status !== 'completed') continue;
+        $ft = strtolower(trim((string)($row['evaluation_form_type'] ?? 'iso')));
+        if ($ft === '') $ft = 'iso';
+        $strict = implode('|', [
+            (string)($row['evaluator_id'] ?? ''),
+            $ft,
+            (string)($row['academic_year'] ?? ''),
+            (string)($row['semester'] ?? ''),
+            (string)($row['observation_date'] ?? ''),
+            (string)($row['observation_time'] ?? ''),
+        ]);
+        $loose = implode('|', [
+            (string)($row['evaluator_id'] ?? ''),
+            $ft,
+            (string)($row['academic_year'] ?? ''),
+            (string)($row['semester'] ?? ''),
+            (string)($row['observation_date'] ?? ''),
+        ]);
+        $completedStrict[$strict] = true;
+        $completedLoose[$loose] = true;
+    }
+
+    // 2) Drop non-completed rows that already have a matching completed row.
+    $filtered = [];
+    foreach ($evaluations as $row) {
+        $status = strtolower(trim((string)($row['status'] ?? '')));
+        $ft = strtolower(trim((string)($row['evaluation_form_type'] ?? 'iso')));
+        if ($ft === '') $ft = 'iso';
+        if ($status !== 'completed') {
+            $strict = implode('|', [
+                (string)($row['evaluator_id'] ?? ''),
+                $ft,
+                (string)($row['academic_year'] ?? ''),
+                (string)($row['semester'] ?? ''),
+                (string)($row['observation_date'] ?? ''),
+                (string)($row['observation_time'] ?? ''),
+            ]);
+            $loose = implode('|', [
+                (string)($row['evaluator_id'] ?? ''),
+                $ft,
+                (string)($row['academic_year'] ?? ''),
+                (string)($row['semester'] ?? ''),
+                (string)($row['observation_date'] ?? ''),
+            ]);
+            if (isset($completedStrict[$strict]) || isset($completedLoose[$loose])) {
+                continue;
+            }
+        }
+        $filtered[] = $row;
+    }
+
+    // 3) Collapse remaining exact duplicates and prefer completed/newest.
+    $slotMap = [];
+    foreach ($filtered as $row) {
+        $ft = strtolower(trim((string)($row['evaluation_form_type'] ?? 'iso')));
+        if ($ft === '') $ft = 'iso';
+        $slotKey = implode('|', [
+            (string)($row['evaluator_id'] ?? ''),
+            $ft,
+            (string)($row['academic_year'] ?? ''),
+            (string)($row['semester'] ?? ''),
+            (string)($row['observation_date'] ?? ''),
+            (string)($row['observation_time'] ?? ''),
+        ]);
+
+        if (!isset($slotMap[$slotKey])) {
+            $slotMap[$slotKey] = $row;
+            continue;
+        }
+
+        $keep = $slotMap[$slotKey];
+        $keepCompleted = (strtolower((string)($keep['status'] ?? '')) === 'completed');
+        $rowCompleted = (strtolower((string)($row['status'] ?? '')) === 'completed');
+        if ($rowCompleted && !$keepCompleted) {
+            $slotMap[$slotKey] = $row;
+        } elseif ($rowCompleted === $keepCompleted && (int)($row['id'] ?? 0) > (int)($keep['id'] ?? 0)) {
+            $slotMap[$slotKey] = $row;
+        }
+    }
+    $evaluations = array_values($slotMap);
+
+    // Keep newest first for display
+    usort($evaluations, function ($a, $b) {
+        return strtotime((string)($b['created_at'] ?? '')) <=> strtotime((string)($a['created_at'] ?? ''));
+    });
+
+    // 4) Collapse to one card per evaluator per schedule slot and summarize form completion.
+    $grouped = [];
+    foreach ($evaluations as $row) {
+        $groupKey = implode('|', [
+            (string)($row['evaluator_id'] ?? ''),
+            (string)($row['academic_year'] ?? ''),
+            (string)($row['semester'] ?? ''),
+            (string)($row['observation_date'] ?? ''),
+            (string)($row['observation_time'] ?? ''),
+        ]);
+        $ft = strtolower(trim((string)($row['evaluation_form_type'] ?? 'iso')));
+        if (!in_array($ft, ['iso', 'peac'], true)) $ft = 'iso';
+        $isCompleted = (strtolower(trim((string)($row['status'] ?? ''))) === 'completed');
+
+        if (!isset($grouped[$groupKey])) {
+            $grouped[$groupKey] = [
+                'row' => $row,
+                'forms' => ['iso' => false, 'peac' => false],
+                'has_completed' => false
+            ];
+        }
+
+        if ($isCompleted) {
+            $grouped[$groupKey]['forms'][$ft] = true;
+            $grouped[$groupKey]['has_completed'] = true;
+        }
+
+        // Prefer completed row for view button; else keep latest row by id.
+        $keep = $grouped[$groupKey]['row'];
+        $keepCompleted = (strtolower(trim((string)($keep['status'] ?? ''))) === 'completed');
+        if (($isCompleted && !$keepCompleted) || ((int)($row['id'] ?? 0) > (int)($keep['id'] ?? 0) && $isCompleted === $keepCompleted)) {
+            $grouped[$groupKey]['row'] = $row;
+        }
+    }
+
+    $evaluations = [];
+    foreach ($grouped as $g) {
+        $row = $g['row'];
+        $isoDone = !empty($g['forms']['iso']);
+        $peacDone = !empty($g['forms']['peac']);
+        if ($isoDone && $peacDone) {
+            $row['forms_status_text'] = 'ISO & PEAC Done';
+        } elseif ($isoDone) {
+            $row['forms_status_text'] = 'ISO Done';
+        } elseif ($peacDone) {
+            $row['forms_status_text'] = 'PEAC Done';
+        } else {
+            $row['forms_status_text'] = 'No completed form yet';
+        }
+        if (!empty($g['has_completed'])) {
+            $row['status'] = 'completed';
+        }
+        $evaluations[] = $row;
+    }
+
+    usort($evaluations, function ($a, $b) {
+        return strtotime((string)($b['created_at'] ?? '')) <=> strtotime((string)($a['created_at'] ?? ''));
+    });
 }
 ?>
 <!DOCTYPE html>
@@ -188,46 +338,6 @@ if ($teacher_data) {
             </div>
             <?php else: ?>
 
-            <!-- Schedule Info -->
-            <?php
-            // Only show upcoming schedule if:
-            // 1. A schedule exists
-            // 2. The schedule date hasn't passed OR there's no completed evaluation for that date
-            $showSchedule = false;
-            if (!empty($teacher_data['evaluation_schedule'])) {
-                $scheduleTime = strtotime($teacher_data['evaluation_schedule']);
-                $scheduleDate = date('Y-m-d', $scheduleTime);
-                // Check if a completed evaluation already exists on or after the scheduled date
-                $checkStmt = $db->prepare(
-                    "SELECT COUNT(*) FROM evaluations 
-                     WHERE teacher_id = :teacher_id AND status = 'completed' 
-                     AND observation_date >= :schedule_date"
-                );
-                $checkStmt->bindValue(':teacher_id', $teacher_data['id']);
-                $checkStmt->bindValue(':schedule_date', $scheduleDate);
-                $checkStmt->execute();
-                $completedCount = (int)$checkStmt->fetchColumn();
-                $showSchedule = ($completedCount === 0);
-            }
-            ?>
-            <?php if($showSchedule): ?>
-            <div class="content-area">
-                <h5><i class="fas fa-calendar-alt me-2"></i>Upcoming Evaluation Schedule</h5>
-                <div class="alert alert-info mb-0 mt-3">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <strong><i class="fas fa-clock me-2"></i>Date & Time:</strong>
-                            <p class="mb-0"><?php echo date('F d, Y \a\t h:i A', strtotime($teacher_data['evaluation_schedule'])); ?></p>
-                        </div>
-                        <div class="col-md-6">
-                            <strong><i class="fas fa-door-open me-2"></i>Room:</strong>
-                            <p class="mb-0"><?php echo htmlspecialchars($teacher_data['evaluation_room'] ?? 'Not assigned yet'); ?></p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <?php endif; ?>
-
             <!-- Filters -->
             <div class="content-area">
                 <h5 class="mb-3"><i class="fas fa-filter me-2"></i>Filter Evaluations</h5>
@@ -304,6 +414,10 @@ if ($teacher_data) {
                                 <p class="text-muted mb-2">
                                     <i class="fas fa-user-tag me-2"></i>
                                     Evaluator Role: <strong><?php echo ucfirst(str_replace('_', ' ', $eval['evaluator_role'])); ?></strong>
+                                </p>
+                                <p class="text-muted mb-2">
+                                    <i class="fas fa-layer-group me-2"></i>
+                                    Form Completion: <strong><?php echo htmlspecialchars($eval['forms_status_text'] ?? ''); ?></strong>
                                 </p>
                                 <p class="text-muted mb-0">
                                     <i class="fas fa-calendar me-2"></i>

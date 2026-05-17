@@ -79,6 +79,24 @@ $dept_display = $department_map[$teacher_data['department']] ?? $teacher_data['d
 $m = (int)date('n'); $y = (int)date('Y');
 $currentAY = ($m >= 6) ? "$y-" . ($y+1) : ($y-1) . "-$y";
 $today = date('Y-m-d');
+$peac_subject_observed = trim((string)($teacher_data['evaluation_subject'] ?? ''));
+$peac_sched_start_raw = trim((string)($teacher_data['evaluation_schedule'] ?? ''));
+$peac_sched_end_raw = trim((string)($teacher_data['evaluation_schedule_end'] ?? ''));
+$peac_observation_time = '';
+if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) {
+    $peac_observation_time = date('H:i:s', strtotime($peac_sched_start_raw));
+}
+if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) {
+    $peac_start = date('g:i A', strtotime($peac_sched_start_raw));
+    $peac_end = '';
+    if ($peac_sched_end_raw !== '' && strtotime($peac_sched_end_raw) !== false) {
+        $peac_end = date('g:i A', strtotime($peac_sched_end_raw));
+    }
+    $peac_time_range = $peac_start . ($peac_end !== '' ? (' - ' . $peac_end) : '');
+    $peac_subject_observed = $peac_subject_observed !== ''
+        ? ($peac_subject_observed . ' ' . $peac_time_range)
+        : $peac_time_range;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -251,8 +269,8 @@ $today = date('Y-m-d');
                                 </div>
                             </div>
                             <div class="d-flex flex-wrap gap-4">
-                                <div>Subject of Instruction: <strong><u><?php echo htmlspecialchars($teacher_data['evaluation_subject'] ?? ''); ?></u></strong>
-                                    <input type="hidden" id="subjectObserved" name="subject_observed" value="<?php echo htmlspecialchars($teacher_data['evaluation_subject'] ?? ''); ?>">
+                                <div>Subject of Instruction: <strong><u><?php echo htmlspecialchars($peac_subject_observed); ?></u></strong>
+                                    <input type="hidden" id="subjectObserved" name="subject_observed" value="<?php echo htmlspecialchars($peac_subject_observed); ?>">
                                 </div>
                                 <div>Date of Observation: <strong><u><?php echo date('F d, Y'); ?></u></strong>
                                     <input type="hidden" id="observationDate" name="observation_date" value="<?php echo $today; ?>">
@@ -263,6 +281,7 @@ $today = date('Y-m-d');
                             <input type="hidden" name="semester" value="<?php echo htmlspecialchars($teacher_data['evaluation_semester'] ?? '1st'); ?>">
                             <input type="hidden" name="department" value="<?php echo htmlspecialchars($teacher_data['department']); ?>">
                             <input type="hidden" name="observation_type" value="Formal">
+                            <input type="hidden" name="observation_time" value="<?php echo htmlspecialchars($peac_observation_time); ?>">
                             <input type="hidden" name="observation_room" value="<?php echo htmlspecialchars($teacher_data['evaluation_room'] ?? ''); ?>">
                             <input type="hidden" name="subject_area" value="<?php echo htmlspecialchars($teacher_data['evaluation_subject_area'] ?? ''); ?>">
                             <input type="hidden" name="evaluation_focus" value="<?php echo htmlspecialchars($teacher_data['evaluation_focus'] ?? ''); ?>">
@@ -990,9 +1009,6 @@ $today = date('Y-m-d');
                     const val = fd.get('student_action' + i);
                     fd.set('student_learning_actions' + i, val || '');
                 }
-
-                // Set observation_time from the subject field
-                fd.set('observation_time', fd.get('subject_observed') || '');
 
                 const submitBtn = form.querySelector('button[type="submit"]');
                 submitBtn.disabled = true;
