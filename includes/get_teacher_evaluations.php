@@ -9,6 +9,7 @@ if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'sub
 
 require_once '../config/database.php';
 
+
 header('Content-Type: application/json');
 
 $teacher_id = isset($_GET['teacher_id']) ? (int)$_GET['teacher_id'] : 0;
