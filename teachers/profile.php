@@ -187,6 +187,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $update = $db->prepare("UPDATE teachers SET email_verified = 1, email_verification_code = NULL, email_verification_expires = NULL, updated_at = NOW() WHERE id = :id");
             $update->bindParam(':id', $_SESSION['teacher_id']);
             if ($update->execute()) {
+                $verifiedEmail = trim((string)($teacher_data['email'] ?? ''));
+                if ($verifiedEmail !== '') {
+                    sendEmailVerifiedSuccessEmail($verifiedEmail, $teacher_data['name'] ?? 'Teacher');
+                }
                 $_SESSION['success'] = "Email verified successfully!";
             } else {
                 $_SESSION['error'] = "Unable to verify email. Please try again.";

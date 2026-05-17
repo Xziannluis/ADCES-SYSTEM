@@ -47,7 +47,7 @@ class FeedbackTemplateBackend:
     def ensure_schema(self) -> None:
         raise NotImplementedError
 
-    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes) -> int:
+    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes, form_type: str = "") -> int:
         raise NotImplementedError
 
     def fetch_templates(self, field_name: str, form_type: str = "") -> List[Dict[str, Any]]:
@@ -86,7 +86,7 @@ class SQLiteFeedbackTemplateBackend(FeedbackTemplateBackend):
         )
         self.connection.commit()
 
-    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes) -> int:
+    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes, form_type: str = "") -> int:
         cursor = self.connection.execute(
             """
             INSERT INTO feedback_templates (field_name, evaluation_comment, feedback_text, embedding_vector)
@@ -158,16 +158,28 @@ class MySQLFeedbackTemplateBackend(FeedbackTemplateBackend):
             )
         self.connection.commit()
 
-    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes, auto_commit: bool = True) -> int:
+    def insert_template(self, field_name: str, evaluation_comment: str, feedback_text: str, embedding_vector: bytes, form_type: str = "", auto_commit: bool = True) -> int:
         self._ensure_connected()
+        normalized_form_type = (form_type or "").strip().lower()
+        if normalized_form_type not in ("iso", "peac"):
+            normalized_form_type = "iso"
         with self.connection.cursor() as cur:
-            cur.execute(
-                f"""
-                INSERT INTO `{self.table_name}` (field_name, evaluation_comment, feedback_text, embedding_vector)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (field_name, evaluation_comment, feedback_text, embedding_vector),
-            )
+            if self._has_form_type_column():
+                cur.execute(
+                    f"""
+                    INSERT INTO `{self.table_name}` (field_name, evaluation_comment, feedback_text, embedding_vector, form_type)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (field_name, evaluation_comment, feedback_text, embedding_vector, normalized_form_type),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    INSERT INTO `{self.table_name}` (field_name, evaluation_comment, feedback_text, embedding_vector)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (field_name, evaluation_comment, feedback_text, embedding_vector),
+                )
             inserted_id = int(cur.lastrowid)
         if auto_commit:
             self.connection.commit()
@@ -182,7 +194,7 @@ class MySQLFeedbackTemplateBackend(FeedbackTemplateBackend):
                     SELECT id, field_name, evaluation_comment, feedback_text, embedding_vector
                     FROM `{self.table_name}`
                     WHERE field_name = %s AND is_active = 1
-                      AND (form_type = %s OR form_type IS NULL OR form_type = '')
+                      AND form_type = %s
                     ORDER BY id ASC
                     """,
                     (field_name, form_type),
@@ -283,6 +295,7 @@ class FeedbackRetrievalSystem:
         field_name: str,
         evaluation_comment: str,
         feedback_text: str,
+        form_type: str = "iso",
         auto_commit: bool = True,
     ) -> int:
         if field_name not in SUPPORTED_FIELDS:
@@ -294,6 +307,7 @@ class FeedbackRetrievalSystem:
             evaluation_comment.strip(),
             feedback_text.strip(),
             self.serialize_embedding(embedding),
+            form_type=(form_type or "iso"),
             auto_commit=auto_commit,
         )
 
@@ -441,6 +455,7 @@ class FeedbackRetrievalSystem:
                 field_name=template["field_name"],
                 evaluation_comment=template["evaluation_comment"],
                 feedback_text=template["feedback_text"],
+                form_type=(template.get("form_type") or "iso"),
                 auto_commit=False,
             )
             count += 1

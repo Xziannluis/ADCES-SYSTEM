@@ -154,7 +154,7 @@ class Evaluation {
     // Get admin statistics
     public function getAdminStats($admin_id) {
         $query = "SELECT 
-                    COUNT(*) as completed_evaluations,
+                    COUNT(DISTINCT e.id) as completed_evaluations,
                     COUNT(ai.id) as ai_recommendations
                   FROM " . $this->table_name . " e
                   LEFT JOIN ai_recommendations ai ON e.id = ai.evaluation_id

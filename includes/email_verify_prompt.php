@@ -49,15 +49,23 @@ if (isset($_SESSION['user_id']) && !isset($_SESSION['email_verify_prompt_shown']
                     <div class="text-start mx-auto" style="max-width:320px;">
                         <div class="d-flex align-items-start mb-2">
                             <i class="fas fa-key text-primary me-2 mt-1" style="font-size:0.85rem;"></i>
-                            <span style="font-size:0.88rem;"><strong>Password Recovery</strong> — Reset your password securely through a verification code sent to your email.</span>
+                            <span style="font-size:0.88rem;"><strong>Password Recovery</strong> - Reset your password securely through a verification code sent to your email.</span>
                         </div>
                         <div class="d-flex align-items-start mb-2">
                             <i class="fas fa-calendar-check text-success me-2 mt-1" style="font-size:0.85rem;"></i>
-                            <span style="font-size:0.88rem;"><strong>Schedule Notifications</strong> — Receive email alerts when an evaluation schedule is set for you.</span>
+                            <span style="font-size:0.88rem;"><strong>Schedule Notifications</strong> - Receive email alerts when an evaluation schedule is set for you.</span>
                         </div>
                         <div class="d-flex align-items-start mb-2">
                             <i class="fas fa-clipboard-check text-info me-2 mt-1" style="font-size:0.85rem;"></i>
-                            <span style="font-size:0.88rem;"><strong>Evaluation Updates</strong> — Get notified via email when an evaluation has been submitted.</span>
+                            <span style="font-size:0.88rem;"><strong>Evaluation Updates</strong> - Get notified via email when an evaluation has been submitted.</span>
+                        </div>
+                        <div class="d-flex align-items-start mb-2">
+                            <i class="fas fa-calendar-times text-warning me-2 mt-1" style="font-size:0.85rem;"></i>
+                            <span style="font-size:0.88rem;"><strong>Reschedule Requests</strong> - Get email alerts when a teacher requests to reschedule.</span>
+                        </div>
+                        <div class="d-flex align-items-start mb-2">
+                            <i class="fas fa-check-circle text-primary me-2 mt-1" style="font-size:0.85rem;"></i>
+                            <span style="font-size:0.88rem;"><strong>Reschedule Accepted</strong> - Get email alerts when a reschedule request is accepted.</span>
                         </div>
                     </div>
                 </div>

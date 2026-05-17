@@ -324,7 +324,7 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                                     <div class="d-flex align-items-center justify-content-between mt-2">
                                         <small class="text-muted"><i class="far fa-clock me-1"></i><?php echo date('M j, Y g:i A', strtotime($notif['created_at'])); ?></small>
                                         <div class="text-end">
-                                            <span class="badge bg-light text-dark me-2"><?php echo htmlspecialchars($notif['type']); ?></span>
+                                            <span class="badge bg-light text-dark me-2"><?php echo htmlspecialchars(ucwords(str_replace('_', ' ', (string)$notif['type']))); ?></span>
                                             <?php if (!$notif['is_read']): ?>
                                                 <button class="btn btn-sm btn-outline-primary notif-read-btn" onclick="event.stopPropagation();markRead(<?php echo (int)$notif['id']; ?>)" title="Mark as read">
                                                     <i class="fas fa-check me-1"></i>Read
@@ -467,6 +467,7 @@ if(in_array($_SESSION['role'], ['subject_coordinator', 'chairperson', 'grade_lev
                         </div>
                     </div>
             </div>
+
         </div>
         </div>
     </div>

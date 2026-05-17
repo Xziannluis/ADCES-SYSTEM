@@ -426,16 +426,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                         if ($owning_dept !== '') {
                             $rcpt_stmt = $db->prepare("
-                                SELECT id FROM users
+                                SELECT id, name, email FROM users
                                 WHERE department = :dept
                                   AND status = 'active'
                                   AND LOWER(REPLACE(TRIM(role), ' ', '_')) IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator')
                             ");
                             $rcpt_stmt->execute([':dept' => $owning_dept]);
-                            while ($uid = (int)$rcpt_stmt->fetchColumn()) {
+                            while ($rc = $rcpt_stmt->fetch(PDO::FETCH_ASSOC)) {
+                                $uid = (int)($rc['id'] ?? 0);
                                 if ($uid <= 0 || isset($sent[$uid]) || $uid === (int)($_SESSION['user_id'] ?? 0)) continue;
                                 $insN->execute([':uid' => $uid, ':tid' => $tid, ':title' => $title, ':msg' => $msg, ':link' => $link]);
+                                $rcEmail = trim((string)($rc['email'] ?? ''));
+                                if ($rcEmail !== '') {
+                                    sendGenericNotificationEmail(
+                                        $rcEmail,
+                                        trim((string)($rc['name'] ?? 'Evaluator')),
+                                        $title,
+                                        $msg
+                                    );
+                                }
                                 $sent[$uid] = true;
+                            }
+                        }
+
+                        // Send email to teacher if we notified them in-app.
+                        if ($teacher_uid > 0 && !empty($row['teacher_name'])) {
+                            $teacherEmailStmt = $db->prepare("SELECT email FROM users WHERE id = :uid LIMIT 1");
+                            $teacherEmailStmt->execute([':uid' => $teacher_uid]);
+                            $teacherEmail = trim((string)$teacherEmailStmt->fetchColumn());
+                            if ($teacherEmail !== '') {
+                                sendGenericNotificationEmail(
+                                    $teacherEmail,
+                                    $teacher_name,
+                                    $title,
+                                    $msg
+                                );
                             }
                         }
                     } catch (Exception $e) {}
@@ -467,15 +492,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $notif_id_accept = (int)($_POST['notification_id'] ?? 0);
         $teacher_id_accept = 0;
 
-        if ($eval_id_accept <= 0) {
-            $_SESSION['error'] = 'Invalid evaluation selected.';
+        // Permanent fix:
+        // Use notification row as source of truth when available, because
+        // displayed row eval_id can differ from request-linked eval_id.
+        if ($notif_id_accept > 0) {
+            try {
+                $notifSrc = $db->prepare("SELECT teacher_id, link, request_eval_id, request_schedule_key
+                                          FROM notifications
+                                          WHERE id = :nid
+                                            AND user_id = :uid
+                                            AND type = 'reschedule_request'
+                                          LIMIT 1");
+                $notifSrc->execute([
+                    ':nid' => $notif_id_accept,
+                    ':uid' => (int)($_SESSION['user_id'] ?? 0)
+                ]);
+                $notifRow = $notifSrc->fetch(PDO::FETCH_ASSOC);
+                if ($notifRow) {
+                    $teacher_id_accept = (int)($notifRow['teacher_id'] ?? 0);
+                    $dbEval = (int)($notifRow['request_eval_id'] ?? 0);
+                    if ($dbEval > 0) $eval_id_accept = $dbEval;
+                    $lnk = trim((string)($notifRow['link'] ?? ''));
+                    if ($eval_id_accept <= 0 && $lnk !== '') {
+                        $parts = parse_url($lnk);
+                        if (!empty($parts['query'])) {
+                            parse_str($parts['query'], $qsNotif);
+                            $parsedEval = (int)($qsNotif['eval_id'] ?? 0);
+                            $parsedTeacher = (int)($qsNotif['teacher_id'] ?? 0);
+                            if ($parsedEval > 0) $eval_id_accept = $parsedEval;
+                            if ($parsedTeacher > 0) $teacher_id_accept = $parsedTeacher;
+                        }
+                    }
+                }
+            } catch (Exception $e) {}
+        }
+
+        if ($eval_id_accept <= 0 && $teacher_id_accept <= 0) {
+            $_SESSION['error'] = 'Invalid reschedule request selection.';
         } else {
             try {
-                $evalTeacherStmt = $db->prepare("SELECT teacher_id FROM evaluations WHERE id = :eid LIMIT 1");
-                $evalTeacherStmt->execute([':eid' => $eval_id_accept]);
-                $teacher_id_accept = (int)$evalTeacherStmt->fetchColumn();
+                if ($teacher_id_accept <= 0 && $eval_id_accept > 0) {
+                    $evalTeacherStmt = $db->prepare("SELECT teacher_id FROM evaluations WHERE id = :eid LIMIT 1");
+                    $evalTeacherStmt->execute([':eid' => $eval_id_accept]);
+                    $teacher_id_accept = (int)$evalTeacherStmt->fetchColumn();
+                }
                 if ($teacher_id_accept <= 0) {
-                    throw new Exception('Evaluation row not found.');
+                    throw new Exception('Teacher for request not found.');
                 }
 
                 // Mark request notification(s) as read for current approver.
@@ -517,7 +579,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $approver_name = trim((string)($_SESSION['name'] ?? 'Evaluator'));
                     $approver_role = ucfirst(str_replace('_', ' ', (string)($_SESSION['role'] ?? 'evaluator')));
                     $title = 'Reschedule Request Accepted';
-                    $message = "{$approver_name} ({$approver_role}) accepted your reschedule request and will set your new schedule.";
+                    $message = "{$approver_name} ({$approver_role}) has accepted your reschedule request and will set a new schedule.";
                     $teacherLink = 'observation_plan.php?view=my_observation';
                     if ($eval_id_accept > 0) {
                         $teacherLink .= '&eval_id=' . urlencode((string)$eval_id_accept);
@@ -562,11 +624,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
     if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
     if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode($_GET['status']);
-    if (!empty($_POST['eval_id'])) {
-        $redirect .= '&open_reschedule=1&eval_id=' . urlencode((string)((int)$_POST['eval_id']));
-        if (!empty($teacher_id_accept)) {
-            $redirect .= '&teacher_id=' . urlencode((string)$teacher_id_accept);
-        }
+    $redirect_eval_id = (int)($eval_id_accept ?? 0);
+    if ($redirect_eval_id <= 0) {
+        $redirect_eval_id = (int)($_POST['eval_id'] ?? 0);
+    }
+    if ($redirect_eval_id > 0) {
+        $redirect .= '&open_reschedule=1&eval_id=' . urlencode((string)$redirect_eval_id);
+    }
+    if (!empty($teacher_id_accept)) {
+        $redirect .= '&teacher_id=' . urlencode((string)$teacher_id_accept);
     }
     header("Location: $redirect");
     exit();
@@ -629,13 +695,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
         
-        // Get teacher info
-        $teacher_stmt = $db->prepare("SELECT name AS faculty_name, department FROM teachers WHERE id = :id LIMIT 1");
+        // Get teacher info + current active schedule
+        $teacher_stmt = $db->prepare("SELECT name AS faculty_name, department, evaluation_schedule, evaluation_schedule_end FROM teachers WHERE id = :id LIMIT 1");
         $teacher_stmt->bindParam(':id', $teacher_id);
         $teacher_stmt->execute();
         $teacher_row = $teacher_stmt->fetch(PDO::FETCH_ASSOC);
         $faculty_name = $teacher_row['faculty_name'] ?? '';
         $teacher_dept = $teacher_row['department'] ?? '';
+        $current_teacher_schedule = trim((string)($teacher_row['evaluation_schedule'] ?? ''));
         
         // Determine if this is an explicit reschedule operation. Only treat
         // as a reschedule when the modal sent the flag value '1' and the
@@ -648,6 +715,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $reschedule_teacher_id_post !== '' &&
             ((string)$reschedule_teacher_id_post === (string)$teacher_id)
         );
+        // If a teacher already has an active schedule, require using
+        // explicit reschedule mode (instead of creating another schedule).
+        if (!$is_reschedule && $current_teacher_schedule !== '') {
+            $_SESSION['error'] = 'This teacher already has an active schedule. Use Reschedule to correct or update the existing schedule.';
+            $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
+            if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
+            if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
+            if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode($_GET['status']);
+            header("Location: $redirect");
+            exit();
+        }
         // After saving a new schedule (including reschedule), the active row
         // should be in "Scheduled" state again in the remarks column.
         $target_eval_status = 'draft';
@@ -655,48 +733,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $debug_action = null;
         
         if ($is_reschedule) {
-            // Enforce: another reschedule is allowed only when there is a fresh
-            // request or an immediate one-time token from "Accept Request".
-            $reschedule_allowed = false;
-            $target_eval_for_gate = (int)$reschedule_eval_id;
-            if ($target_eval_for_gate > 0) {
-                try {
-                    $gate_pat = '%eval_id=' . $target_eval_for_gate . '%';
-                    $gate_stmt = $db->prepare("SELECT 1 FROM notifications
-                                               WHERE user_id = :uid
-                                                 AND teacher_id = :tid
-                                                 AND type = 'reschedule_request'
-                                                 AND is_read = 0
-                                                 AND link LIKE :pat
-                                               LIMIT 1");
-                    $gate_stmt->execute([
-                        ':uid' => (int)($_SESSION['user_id'] ?? 0),
-                        ':tid' => (int)$teacher_id,
-                        ':pat' => $gate_pat
-                    ]);
-                    $reschedule_allowed = (bool)$gate_stmt->fetchColumn();
-                } catch (Exception $e) {}
-            }
-            if (!$reschedule_allowed) {
-                $tok = $_SESSION['reschedule_once'] ?? null;
-                if (is_array($tok)) {
-                    $tok_teacher = (int)($tok['teacher_id'] ?? 0);
-                    $tok_eval = (int)($tok['eval_id'] ?? 0);
-                    $tok_exp = (int)($tok['expires_at'] ?? 0);
-                    if ($tok_exp >= time() && $tok_teacher === (int)$teacher_id && $tok_eval > 0 && $tok_eval === $target_eval_for_gate) {
-                        $reschedule_allowed = true;
-                    }
-                }
-            }
-            if (!$reschedule_allowed) {
-                $_SESSION['error'] = 'Cannot reschedule again until the teacher submits a new reschedule request.';
-                $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
-                if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
-                if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
-                if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode($_GET['status']);
-                header("Location: $redirect");
-                exit();
-            }
 
             // For explicit RESCHEDULE: target only the selected schedule/eval row.
             if ($reschedule_eval_id > 0) {
@@ -868,8 +904,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             } catch (Exception $e) {}
         }
 
+        // For reschedule: capture current accepted President/VP observers first,
+        // so we can notify them to accept again after clearing assignment.
+        $pvp_reschedule_recipients = [];
+        if ($is_reschedule) {
+            try {
+                $pvp_rec_stmt = $db->prepare("
+                    SELECT DISTINCT u.id, u.name, u.email
+                    FROM teacher_assignments ta
+                    JOIN users u ON u.id = ta.evaluator_id
+                    WHERE ta.teacher_id = :tid
+                      AND u.role IN ('president','vice_president')
+                      AND u.status = 'active'
+                      AND u.email IS NOT NULL
+                      AND u.email != ''
+                ");
+                $pvp_rec_stmt->execute([':tid' => $teacher_id]);
+                $pvp_reschedule_recipients = $pvp_rec_stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            } catch (Exception $e) {}
+        }
+
         // New schedule/reschedule requires fresh observer acceptance for President/VP.
-        // Dean/Principal are auto-included by department, so only clear President/VP assignments.
+        // Keep teacher/evaluator signatures intact; clear only President/VP observer assignments.
         try {
             $clr_pvp = $db->prepare("
                 DELETE ta
@@ -892,7 +948,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (!$teacher_update_ok) {
             $error_message = "Failed to set schedule.";
         }
-        notifyScheduleParticipants($db, $teacher_id, $schedule, $room, $_SESSION['user_id'], $_SESSION['name'] ?? 'Evaluator', $_SESSION['role'] ?? '', $sched_dept_val ?? '');
+        notifyScheduleParticipants(
+            $db,
+            $teacher_id,
+            $schedule,
+            $room,
+            $_SESSION['user_id'],
+            $_SESSION['name'] ?? 'Evaluator',
+            $_SESSION['role'] ?? '',
+            $sched_dept_val ?? '',
+            $is_reschedule,
+            $pvp_reschedule_recipients
+        );
     } else {
         $error_message = "Teacher ID is required.";
     }
@@ -1122,6 +1189,17 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                     'semester' => $req_semester,
                     'academic_year' => $req_academic_year
                 ]);
+                $req_schedule_key = '';
+                if ($req_sched) {
+                    $req_schedule_key = implode('|', [
+                        date('Y-m-d H:i', strtotime((string)$req_sched)),
+                        strtolower(trim((string)$req_semester)),
+                        strtolower(trim((string)$req_academic_year)),
+                        strtolower(trim((string)$req_room)),
+                        strtolower(trim((string)$req_subject_area)),
+                        strtolower(trim((string)$req_subject))
+                    ]);
+                }
 
                 foreach ($recipients as $rcp) {
                     if (!empty($rcp['email'])) {
@@ -1133,15 +1211,31 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                         );
                     }
                     try {
-                        $notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, is_read) VALUES (:uid, :tid, 'reschedule_request', :title, :msg, :link, 0)");
+                        $notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, request_eval_id, request_schedule_key, is_read)
+                                               VALUES (:uid, :tid, 'reschedule_request', :title, :msg, :link, :request_eval_id, :request_schedule_key, 0)");
                         $notif->execute([
                             ':uid' => (int)$rcp['id'],
                             ':tid' => (int)$my_teacher_id,
                             ':title' => $subject,
                             ':msg' => $msg,
-                            ':link' => $notifLink
+                            ':link' => $notifLink,
+                            ':request_eval_id' => (int)($req_eval_id ?? 0),
+                            ':request_schedule_key' => $req_schedule_key
                         ]);
-                    } catch (Exception $e) {}
+                    } catch (Exception $e) {
+                        // Backward-compatibility fallback if migration has not run yet.
+                        try {
+                            $notifLegacy = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, is_read)
+                                                         VALUES (:uid, :tid, 'reschedule_request', :title, :msg, :link, 0)");
+                            $notifLegacy->execute([
+                                ':uid' => (int)$rcp['id'],
+                                ':tid' => (int)$my_teacher_id,
+                                ':title' => $subject,
+                                ':msg' => $msg,
+                                ':link' => $notifLink
+                            ]);
+                        } catch (Exception $e2) {}
+                    }
                 }
 
                 $success_message = 'Reschedule request sent successfully.';
@@ -2405,8 +2499,9 @@ $dean_role_display = ucfirst(str_replace('_', ' ', $_SESSION['role']));
 
 // Pending reschedule requests for current evaluator (used in Observation Plan UI)
 $pending_reschedule_requests = [];
+$pending_reschedule_by_teacher = [];
 try {
-    $pendingStmt = $db->prepare("SELECT id, teacher_id, link, created_at
+    $pendingStmt = $db->prepare("SELECT id, teacher_id, link, created_at, request_eval_id
                                  FROM notifications
                                  WHERE user_id = :uid
                                    AND type = 'reschedule_request'
@@ -2416,9 +2511,9 @@ try {
     while ($pr = $pendingStmt->fetch(PDO::FETCH_ASSOC)) {
         $ptid = (int)($pr['teacher_id'] ?? 0);
         if ($ptid <= 0) continue;
-        $peval = 0;
+        $peval = (int)($pr['request_eval_id'] ?? 0);
         $plink = trim((string)($pr['link'] ?? ''));
-        if ($plink !== '') {
+        if ($peval <= 0 && $plink !== '') {
             $parts = parse_url($plink);
             if (!empty($parts['query'])) {
                 parse_str($parts['query'], $qs);
@@ -2429,6 +2524,13 @@ try {
         if (!isset($pending_reschedule_requests[$pkey])) {
             $pending_reschedule_requests[$pkey] = [
                 'notification_id' => (int)($pr['id'] ?? 0),
+                'created_at' => $pr['created_at'] ?? null
+            ];
+        }
+        if (!isset($pending_reschedule_by_teacher[$ptid])) {
+            $pending_reschedule_by_teacher[$ptid] = [
+                'notification_id' => (int)($pr['id'] ?? 0),
+                'eval_id' => $peval,
                 'created_at' => $pr['created_at'] ?? null
             ];
         }
@@ -3565,18 +3667,27 @@ try {
                                     $can_reschedule = $has_schedule;
                                     $row_eval_id_for_req = (int)($eval_data[$row_key]['eval_id'] ?? 0);
                                     $pending_req_key = $tid . '|' . $row_eval_id_for_req;
-                                    // Avoid false positives: for rows with a concrete eval_id,
-                                    // require exact request match to that eval_id. Only use the
-                                    // teacher-level fallback (|0) for legacy schedule-only rows.
+                                    // Prefer exact match first, but allow teacher-level fallback when
+                                    // representative eval_id differs from the requested row id.
                                     if ($row_eval_id_for_req > 0) {
-                                        $pending_req_info = $pending_reschedule_requests[$pending_req_key] ?? null;
+                                        $pending_req_info = $pending_reschedule_requests[$pending_req_key]
+                                            ?? $pending_reschedule_requests[$tid . '|0']
+                                            ?? ($pending_reschedule_by_teacher[$tid] ?? null);
                                     } else {
                                         $pending_req_info = $pending_reschedule_requests[$pending_req_key]
                                             ?? $pending_reschedule_requests[$tid . '|0']
+                                            ?? ($pending_reschedule_by_teacher[$tid] ?? null)
                                             ?? null;
                                     }
                                     $has_pending_req = !empty($pending_req_info);
                                     $pending_req_id = (int)($pending_req_info['notification_id'] ?? 0);
+                                    // Strict row-level request gating: only the exact requested eval row
+                                    // should enable Accept/Reschedule actions in UI.
+                                    $has_pending_req_strict = false;
+                                    if ($row_eval_id_for_req > 0) {
+                                        $strict_key = $tid . '|' . $row_eval_id_for_req;
+                                        $has_pending_req_strict = !empty($pending_reschedule_requests[$strict_key]);
+                                    }
                                 ?>
                                 <tr>
                                     <td>
@@ -3587,12 +3698,12 @@ try {
                                                     $scheduled_by_me = ((int)($t['scheduled_by'] ?? 0) === (int)($_SESSION['user_id'] ?? 0));
                                                 ?>
                                                 <?php if (!$is_observer_only && $scheduled_by_me): ?>
-                                                    <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;" title="Scheduled by you">
+                                                    <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;" title="Scheduled by you">
                                                 <?php else: ?>
-                                                    <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo $eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $is_opted ? 'You are an observer' : 'Check to join as observer'; ?>">
+                                                    <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo $eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $is_opted ? 'You are an observer' : 'Check to join as observer'; ?>">
                                                 <?php endif; ?>
                                             <?php else: ?>
-                                                <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
+                                                <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
                                             <?php endif; ?>
                                         <?php endif; ?>
                                         <?php echo $counter++ . '. ' . htmlspecialchars($t['name']); ?>
@@ -4254,22 +4365,6 @@ function openRescheduleModal() {
         return;
     }
     var rowOwningDept = (checked[0].dataset.owningDepartment || '').trim();
-    var hasPendingReq = (checked[0].dataset.hasPendingReq || '0') === '1';
-    var pendingNotifId = parseInt(checked[0].dataset.pendingNotifId || '0', 10);
-    var acceptBtn = document.getElementById('acceptRescheduleBtn');
-    var qs = new URLSearchParams(window.location.search || '');
-    var urlOpen = (qs.get('open_reschedule') || '') === '1';
-    var urlTeacher = parseInt(qs.get('teacher_id') || '0', 10);
-    var urlEval = parseInt(qs.get('eval_id') || '0', 10);
-    var allowOneTimeAfterAccept = urlOpen && urlTeacher === parseInt(teacherId || '0', 10) && urlEval > 0 && urlEval === evalId;
-    if (hasPendingReq && acceptBtn) {
-        alert('Please click "Accept Reschedule Request" first before setting the new schedule.');
-        return;
-    }
-    if (!hasPendingReq && !allowOneTimeAfterAccept) {
-        alert('You cannot reschedule again unless the teacher submits a new reschedule request.');
-        return;
-    }
     var select = document.getElementById('schedule_teacher_id');
     
     if (!select) {
@@ -4386,7 +4481,7 @@ function acceptRescheduleRequest() {
     var teacherId = parseInt(target.value || '0', 10);
     var evalId = parseInt(target.dataset.evalId || '0', 10);
     var notifId = parseInt(target.dataset.pendingNotifId || '0', 10);
-    var hasPendingReq = (target.dataset.hasPendingReq || '0') === '1';
+    var hasPendingReq = (target.dataset.hasPendingReqStrict || '0') === '1';
 
     if (!(evalId > 0)) {
         alert('Invalid evaluation selection.');
@@ -4407,6 +4502,7 @@ function acceptRescheduleRequest() {
     // Optimistically clear current pending markers in UI to avoid stale blocking
     // if the user re-opens the modal before page reload.
     target.dataset.hasPendingReq = '0';
+    target.dataset.hasPendingReqStrict = '0';
     target.dataset.pendingNotifId = '0';
     var acceptBtn = document.getElementById('acceptRescheduleBtn');
     if (acceptBtn) acceptBtn.disabled = true;
@@ -4647,14 +4743,15 @@ document.addEventListener('DOMContentLoaded', () => {
             var eid = parseInt(cb.dataset.evalId || '0', 10);
             if (!(eid > 0)) allWithEvalId = false;
         });
+        var canReschedule = (count === 1 && allWithEvalId);
         var canAcceptReq = false;
         if (count === 1) {
             var only = checked[0];
-            var hasPendingReq = (only.dataset.hasPendingReq || '0') === '1';
+            var hasPendingReq = (only.dataset.hasPendingReqStrict || '0') === '1';
             var onlyEvalId = parseInt(only.dataset.evalId || '0', 10);
             canAcceptReq = hasPendingReq && (onlyEvalId > 0);
         }
-        if (rescheduleBtn) rescheduleBtn.disabled = (count === 0 || !allWithEvalId);
+        if (rescheduleBtn) rescheduleBtn.disabled = !canReschedule;
         // Cancel supports mixed rows now (eval rows + schedule-only rows).
         if (cancelBtn) cancelBtn.disabled = (count === 0);
         if (acceptReqBtn) acceptReqBtn.disabled = !canAcceptReq;
@@ -4968,20 +5065,16 @@ document.addEventListener('DOMContentLoaded', function() {
         targetCheckbox = document.querySelector('.reschedule-check[value="' + targetTeacherId + '"][data-eval-id="' + targetEvalId + '"]');
     }
     if (!targetCheckbox) {
-        targetCheckbox = document.querySelector('.reschedule-check[value="' + targetTeacherId + '"]');
+        // Prefer teacher row that still has the pending request marker;
+        // fallback to the first row for that teacher.
+        targetCheckbox = document.querySelector('.reschedule-check[value="' + targetTeacherId + '"][data-has-pending-req-strict="1"]')
+            || document.querySelector('.reschedule-check[value="' + targetTeacherId + '"]');
     }
     if (targetCheckbox) {
         document.querySelectorAll('.reschedule-check').forEach(function(cb) { cb.checked = false; });
         targetCheckbox.checked = true;
         targetCheckbox.dispatchEvent(new Event('change'));
-        var hasPendingReq = (targetCheckbox.dataset.hasPendingReq || '0') === '1';
-        var pendingNotifId = parseInt(targetCheckbox.dataset.pendingNotifId || '0', 10);
-        var acceptBtn = document.getElementById('acceptRescheduleBtn');
-        if (hasPendingReq && acceptBtn) {
-            alert('Please click "Accept Reschedule Request" first before setting the new schedule.');
-        } else {
-            openRescheduleModal();
-        }
+        openRescheduleModal();
         return;
     }
 

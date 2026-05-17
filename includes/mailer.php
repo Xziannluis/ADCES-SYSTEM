@@ -3,6 +3,39 @@ use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
 /**
+ * Persist notification-email send attempt logs for audit/debugging.
+ */
+function logNotificationMailAttempt($recipientEmail, $recipientName, $subject, $messageText, $status, $errorMessage = '', $source = 'sendGenericNotificationEmail') {
+    try {
+        if (!class_exists('Database')) {
+            require_once __DIR__ . '/../config/database.php';
+        }
+        $db = (new Database())->getConnection();
+        if (!$db) {
+            return false;
+        }
+        $stmt = $db->prepare(
+            "INSERT INTO notification_mail_logs
+             (recipient_email, recipient_name, subject, message_text, status, error_message, source)
+             VALUES (:recipient_email, :recipient_name, :subject, :message_text, :status, :error_message, :source)"
+        );
+        $stmt->execute([
+            ':recipient_email' => (string)$recipientEmail,
+            ':recipient_name' => (string)$recipientName,
+            ':subject' => (string)$subject,
+            ':message_text' => (string)$messageText,
+            ':status' => ($status === 'sent' ? 'sent' : 'failed'),
+            ':error_message' => (string)$errorMessage,
+            ':source' => (string)$source,
+        ]);
+        return true;
+    } catch (Exception $e) {
+        error_log('notification_mail_logs insert failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
+/**
  * Send schedule notification email to an evaluator (dean, chairperson, principal, subject_coordinator, etc.)
  * Tells them that a teacher under their supervision has a scheduled evaluation.
  */
@@ -30,8 +63,8 @@ function sendScheduleNotificationToEvaluator($toEmail, $evaluatorName, $teacherN
     $today = date('Y-m-d');
 
     $subject = $scheduleDate === $today
-        ? 'Evaluation Schedule Today — ' . $teacherName
-        : 'Evaluation Schedule Set — ' . $teacherName;
+        ? 'Evaluation Scheduled Today - ' . $teacherName
+        : 'Evaluation Schedule Set - ' . $teacherName;
 
     $headline = $scheduleDate === $today
         ? 'A classroom evaluation is scheduled today for a teacher under your supervision.'
@@ -83,7 +116,7 @@ function sendScheduleNotificationToEvaluator($toEmail, $evaluatorName, $teacherN
  *
  * Works for both Higher Ed (Dean + Chairperson) and Basic Ed (Principal + Subject Coordinator).
  */
-function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId, $setterName, $setterRole = '', $scheduledDepartment = '') {
+function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId, $setterName, $setterRole = '', $scheduledDepartment = '', $isReschedule = false, $reschedulePvpRecipients = []) {
     if (empty($schedule) && empty($room)) {
         return;
     }
@@ -113,12 +146,17 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
                 $tdata['name'] ?? 'Teacher',
                 $schedule,
                 $room,
-                $setterName
+                $setterName,
+                $isReschedule
             );
         }
         if ($tdata && !empty($tdata['user_id'])) {
             $teacherScheduleText = $schedule ? date('F d, Y \a\t h:i A', strtotime($schedule)) : 'TBA';
             $teacherRoomText = !empty($room) ? $room : 'TBA';
+            $teacherTitle = $isReschedule ? 'Evaluation Schedule Rescheduled' : 'Evaluation Schedule Set';
+            $teacherMsg = $isReschedule
+                ? "Your evaluation schedule was rescheduled to {$teacherScheduleText} in {$teacherRoomText}. Updated by {$setterName}."
+                : "Your evaluation is scheduled on {$teacherScheduleText} in {$teacherRoomText}. Set by {$setterName}.";
             $teacherNotif = $db->prepare(
                 "INSERT INTO notifications (user_id, teacher_id, type, title, message, link)
                  VALUES (:user_id, :teacher_id, 'schedule', :title, :message, :link)"
@@ -126,8 +164,8 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
             $teacherNotif->execute([
                 ':user_id' => (int)$tdata['user_id'],
                 ':teacher_id' => (int)$teacherId,
-                ':title' => 'Evaluation Schedule Updated',
-                ':message' => "Your evaluation schedule is set for {$teacherScheduleText} in {$teacherRoomText}. Set by {$setterName}.",
+                ':title' => $teacherTitle,
+                ':message' => $teacherMsg,
                 ':link' => 'observation_plan.php?view=my_observation',
             ]);
         }
@@ -207,10 +245,47 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
         $notified = [];
         $allEvaluators = array_merge($assignedEvaluators, $deptEvaluators);
 
+        // Guarantee reciprocal counterpart notifications for this specific teacher only:
+        // - If coordinator/chair sets schedule, notify assigned dean account(s) for this teacher.
+        // - If dean sets schedule, notify assigned coordinator/chair account(s) for this teacher.
+        try {
+            $counterpartRoles = [];
+            if ($isCoordinatorOrChair) {
+                $counterpartRoles = ['dean'];
+            } elseif ($isDeanOrPrincipal) {
+                $counterpartRoles = ['chairperson', 'subject_coordinator', 'grade_level_coordinator'];
+            }
+
+            if (!empty($counterpartRoles) && !empty($setterDept)) {
+                $cpPlaceholders = implode(',', array_fill(0, count($counterpartRoles), '?'));
+
+                // Only counterpart accounts explicitly assigned to this teacher.
+                $cpAssignedStmt = $db->prepare(
+                    "SELECT DISTINCT u.id, u.name, u.email, u.role
+                     FROM teacher_assignments ta
+                     JOIN users u ON u.id = ta.evaluator_id
+                     WHERE ta.teacher_id = ?
+                       AND u.department = ?
+                       AND u.role IN ($cpPlaceholders)
+                       AND u.status = 'active'
+                       AND u.id != ?
+                       AND u.email IS NOT NULL
+                       AND u.email != ''"
+                );
+                $cpAssignedParams = [$teacherId, $setterDept];
+                foreach ($counterpartRoles as $r) { $cpAssignedParams[] = $r; }
+                $cpAssignedParams[] = $setterId;
+                $cpAssignedStmt->execute($cpAssignedParams);
+                $cpAssigned = $cpAssignedStmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $allEvaluators = array_merge($allEvaluators, $cpAssigned);
+            }
+        } catch (Exception $e) {}
+
         $formattedSchedule = $schedule ? date('F d, Y \a\t h:i A', strtotime($schedule)) : 'TBA';
-        $notifTitle = "Evaluation Schedule Set — {$teacherName}";
+        $notifTitle = "Evaluation Schedule Updated";
         $notifMessage = sprintf(
-            "Schedule set for %s on %s in %s. Set by %s.",
+            "The evaluation for %s is scheduled on %s in %s. Set by %s.",
             $teacherName,
             $formattedSchedule,
             $room ?: 'TBA',
@@ -252,6 +327,47 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
             ]);
         }
 
+        // 4b. On reschedule, notify President/VP who had previously accepted as observer
+        // so they can accept again for the new schedule time.
+        if ($isReschedule && is_array($reschedulePvpRecipients) && !empty($reschedulePvpRecipients)) {
+            $reschedTitle = "Schedule Rescheduled — Observer Re-acceptance Needed";
+            $reschedMessage = sprintf(
+                "%s's schedule was rescheduled to %s in %s by %s. Please accept again as observer if you are available.",
+                $teacherName,
+                $formattedSchedule,
+                $room ?: 'TBA',
+                $setterName
+            );
+            $reschedNotif = $db->prepare(
+                "INSERT INTO notifications (user_id, teacher_id, type, title, message, link) VALUES (:user_id, :teacher_id, 'schedule', :title, :message, :link)"
+            );
+            foreach ($reschedulePvpRecipients as $pvp) {
+                $pvpId = (int)($pvp['id'] ?? 0);
+                if ($pvpId <= 0 || isset($notified[$pvpId])) continue;
+                $notified[$pvpId] = true;
+
+                $pvpName = trim((string)($pvp['name'] ?? 'Observer'));
+                $pvpEmail = trim((string)($pvp['email'] ?? ''));
+
+                if ($pvpEmail !== '') {
+                    sendGenericNotificationEmail(
+                        $pvpEmail,
+                        $pvpName !== '' ? $pvpName : 'Observer',
+                        $reschedTitle,
+                        $reschedMessage
+                    );
+                }
+
+                $reschedNotif->execute([
+                    ':user_id' => $pvpId,
+                    ':teacher_id' => (int)$teacherId,
+                    ':title' => $reschedTitle,
+                    ':message' => $reschedMessage,
+                    ':link' => 'evaluators/observation_plan.php',
+                ]);
+            }
+        }
+
         // 5. Audit log
         if ($tdata && !empty($tdata['user_id'])) {
             $description = sprintf(
@@ -276,7 +392,7 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
     }
 }
 
-function sendScheduleNotificationEmail($toEmail, $teacherName, $schedule, $room, $setterName) {
+function sendScheduleNotificationEmail($toEmail, $teacherName, $schedule, $room, $setterName, $isReschedule = false) {
     $configPath = __DIR__ . '/../config/mail.php';
     if (!file_exists($configPath)) {
         error_log('Mailer config missing at ' . $configPath);
@@ -299,13 +415,17 @@ function sendScheduleNotificationEmail($toEmail, $teacherName, $schedule, $room,
     $scheduleDate = $schedule ? date('Y-m-d', strtotime($schedule)) : '';
     $today = date('Y-m-d');
 
-    $subject = $scheduleDate === $today
-        ? 'Evaluation Schedule Today'
-        : 'Evaluation Schedule Set';
-
-    $headline = $scheduleDate === $today
-        ? 'You have a classroom evaluation scheduled today.'
-        : 'Your classroom evaluation schedule has been set.';
+    if ($isReschedule) {
+        $subject = 'Evaluation Schedule Rescheduled';
+        $headline = 'Your classroom evaluation schedule has been rescheduled.';
+    } else {
+        $subject = $scheduleDate === $today
+            ? 'Evaluation Schedule Today'
+            : 'Evaluation Schedule Set';
+        $headline = $scheduleDate === $today
+            ? 'You have a classroom evaluation scheduled today.'
+            : 'Your classroom evaluation schedule has been set.';
+    }
 
     $roomLine = $room ? "Room: {$room}" : 'Room: To be announced';
 
@@ -363,13 +483,93 @@ function sendEmailVerificationCode($toEmail, $teacherName, $code, $expiresAt) {
     require_once $autoloadPath;
 
     $formattedExpiry = $expiresAt ? date('F d, Y \a\t h:i A', strtotime($expiresAt)) : 'soon';
+    $expiryMinutes = 10;
+    if (!empty($expiresAt)) {
+        $delta = strtotime((string)$expiresAt) - time();
+        if ($delta > 0) {
+            $expiryMinutes = max(1, (int)ceil($delta / 60));
+        }
+    }
 
     $subject = 'Verify your email address';
-    $body = "<p>Hi {$teacherName},</p>";
-    $body .= "<p>Your email verification code is:</p>";
-    $body .= "<h2 style=\"letter-spacing:2px;\">{$code}</h2>";
-    $body .= "<p>This code expires on <strong>{$formattedExpiry}</strong>.</p>";
-    $body .= "<p>If you did not request this, you can ignore this email.</p>";
+    $safeName = htmlspecialchars((string)$teacherName, ENT_QUOTES, 'UTF-8');
+    $safeCode = htmlspecialchars((string)$code, ENT_QUOTES, 'UTF-8');
+    $safeExpiry = htmlspecialchars((string)$formattedExpiry, ENT_QUOTES, 'UTF-8');
+    $body = '<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Email Verification</title>
+</head>
+<body style="margin:0;padding:0;background:#eef2f7;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef2f7;padding:28px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border-radius:18px;overflow:hidden;">
+          <tr>
+            <td style="padding:0;background:#ffffff;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td style="width:10px;background:#0f766e;"></td>
+                  <td style="padding:24px 24px 16px;">
+                    <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:1px;color:#0f766e;">SAINT MICHAEL COLLEGE OF CARAGA</p>
+                    <h1 style="margin:8px 0 0;font-size:28px;line-height:1.2;color:#0f172a;">Confirm Your Email Address</h1>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 24px 0;">
+              <p style="margin:0 0 10px;font-size:16px;">Hi ' . $safeName . ',</p>
+              <p style="margin:0;font-size:16px;line-height:1.65;color:#374151;">
+                Use the one-time code below to verify your account in the AI Classroom Evaluation System.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 24px 8px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;border:1px solid #dbeafe;border-radius:14px;">
+                <tr>
+                  <td style="padding:12px 14px 6px;font-size:12px;font-weight:700;color:#475569;letter-spacing:0.8px;">VERIFICATION CODE</td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding:8px 14px 16px;">
+                    <div style="display:inline-block;background:#ffffff;border:2px dashed #0ea5e9;border-radius:10px;padding:14px 18px;">
+                      <span style="font-size:38px;font-weight:700;color:#0f172a;letter-spacing:10px;">' . $safeCode . '</span>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 24px 4px;">
+              <p style="margin:0;font-size:15px;line-height:1.6;color:#334155;">
+                Expires in <strong>' . (int)$expiryMinutes . ' minute' . ((int)$expiryMinutes === 1 ? '' : 's') . '</strong>
+                <span style="color:#64748b;">(until ' . $safeExpiry . ')</span>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:14px 24px 24px;">
+              <p style="margin:0;font-size:14px;line-height:1.6;color:#64748b;">
+                If you did not request this code, you can ignore this message.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>';
+    $altBody = "Hello {$teacherName},\n\n"
+        . "Please use this verification code to confirm your email address: {$code}\n\n"
+        . "This code expires in {$expiryMinutes} minute" . ($expiryMinutes === 1 ? '' : 's') . ".\n"
+        . "Expiry time: {$formattedExpiry}\n\n"
+        . "If you did not request this code, you can ignore this email.";
 
     $mail = new PHPMailer(true);
 
@@ -390,11 +590,78 @@ function sendEmailVerificationCode($toEmail, $teacherName, $code, $expiresAt) {
         $mail->isHTML(true);
         $mail->Subject = $subject;
         $mail->Body = $body;
-        $mail->AltBody = strip_tags(str_replace('<br>', "\n", $body));
+        $mail->AltBody = $altBody;
 
         return $mail->send();
     } catch (Exception $e) {
         error_log('Mailer error: ' . $mail->ErrorInfo);
+        return false;
+    }
+}
+
+function sendEmailVerifiedSuccessEmail($toEmail, $userName) {
+    $configPath = __DIR__ . '/../config/mail.php';
+    if (!file_exists($configPath)) {
+        error_log('Mailer config missing at ' . $configPath);
+        return false;
+    }
+    $config = require $configPath;
+    if (empty($config['enabled'])) {
+        return false;
+    }
+
+    $autoloadPath = __DIR__ . '/../vendor/autoload.php';
+    if (!file_exists($autoloadPath)) {
+        error_log('Composer autoload not found at ' . $autoloadPath);
+        return false;
+    }
+    require_once $autoloadPath;
+
+    $safeName = htmlspecialchars((string)$userName, ENT_QUOTES, 'UTF-8');
+    $subject = 'Email Verification Successful';
+    $body = '<!doctype html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email Verified</title></head>
+<body style="margin:0;padding:0;background:#f4f7fb;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding:24px 12px;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border-radius:14px;overflow:hidden;">
+        <tr><td style="background:#0f766e;padding:18px 22px;color:#fff;font-size:20px;font-weight:700;">AI Classroom Evaluation System</td></tr>
+        <tr><td style="padding:24px 22px;">
+          <p style="margin:0 0 12px;font-size:16px;">Hi ' . $safeName . ',</p>
+          <p style="margin:0 0 14px;font-size:16px;line-height:1.6;">Your email address has been successfully verified.</p>
+          <p style="margin:0 0 10px;font-size:15px;color:#475569;">You can now receive schedule and evaluation notifications by email.</p>
+          <p style="margin:14px 0 0;font-size:14px;color:#64748b;">If you did not perform this action, please change your password immediately.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>';
+    $altBody = "Hi {$userName},\n\nYour email address has been successfully verified.\nYou can now receive schedule and evaluation notifications by email.\n\nIf you did not perform this action, please change your password immediately.";
+
+    $mail = new PHPMailer(true);
+    try {
+        $mail->isSMTP();
+        $mail->Host = $config['host'] ?? '';
+        $mail->Port = (int)($config['port'] ?? 587);
+        $mail->SMTPAuth = !empty($config['smtp_auth']);
+        $mail->Username = $config['username'] ?? '';
+        $mail->Password = $config['password'] ?? '';
+        $mail->SMTPSecure = $config['encryption'] ?? PHPMailer::ENCRYPTION_STARTTLS;
+
+        $fromEmail = $config['from_email'] ?? 'no-reply@example.com';
+        $fromName = $config['from_name'] ?? 'SMCC Evaluation System';
+        $mail->setFrom($fromEmail, $fromName);
+        $mail->addAddress($toEmail, $userName);
+
+        $mail->isHTML(true);
+        $mail->Subject = $subject;
+        $mail->Body = $body;
+        $mail->AltBody = $altBody;
+        return $mail->send();
+    } catch (Exception $e) {
+        error_log('Mailer error (verification success): ' . $mail->ErrorInfo);
         return false;
     }
 }
@@ -558,17 +825,20 @@ function sendGenericNotificationEmail($toEmail, $recipientName, $subject, $messa
     $configPath = __DIR__ . '/../config/mail.php';
     if (!file_exists($configPath)) {
         error_log('Mailer config missing at ' . $configPath);
+        logNotificationMailAttempt($toEmail, $recipientName, $subject, $messageText, 'failed', 'Mailer config missing', 'sendGenericNotificationEmail');
         return false;
     }
 
     $config = require $configPath;
     if (empty($config['enabled'])) {
+        logNotificationMailAttempt($toEmail, $recipientName, $subject, $messageText, 'failed', 'Mailer disabled', 'sendGenericNotificationEmail');
         return false;
     }
 
     $autoloadPath = __DIR__ . '/../vendor/autoload.php';
     if (!file_exists($autoloadPath)) {
         error_log('Composer autoload not found at ' . $autoloadPath);
+        logNotificationMailAttempt($toEmail, $recipientName, $subject, $messageText, 'failed', 'Composer autoload not found', 'sendGenericNotificationEmail');
         return false;
     }
     require_once $autoloadPath;
@@ -600,9 +870,12 @@ function sendGenericNotificationEmail($toEmail, $recipientName, $subject, $messa
         $mail->Body = $body;
         $mail->AltBody = strip_tags($messageText);
 
-        return $mail->send();
+        $ok = $mail->send();
+        logNotificationMailAttempt($toEmail, $recipientName, $subject, $messageText, $ok ? 'sent' : 'failed', $ok ? '' : (string)$mail->ErrorInfo, 'sendGenericNotificationEmail');
+        return $ok;
     } catch (Exception $e) {
         error_log('Mailer error (generic notification): ' . $mail->ErrorInfo);
+        logNotificationMailAttempt($toEmail, $recipientName, $subject, $messageText, 'failed', (string)$mail->ErrorInfo, 'sendGenericNotificationEmail');
         return false;
     }
 }

@@ -90,6 +90,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $update->bindParam(':id', $_SESSION['user_id']);
                 $update->execute();
                 $user['is_email_verified'] = 1;
+                if (!empty($user['email'])) {
+                    sendEmailVerifiedSuccessEmail($user['email'], $user['name'] ?? 'User');
+                }
                 $_SESSION['success'] = "Email verified successfully!";
             }
         }

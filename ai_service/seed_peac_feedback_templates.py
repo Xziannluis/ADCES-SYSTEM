@@ -61,6 +61,8 @@ def main() -> None:
     args = parser.parse_args()
 
     templates = generate_peac_seed_templates(per_field=args.per_field)
+    for t in templates:
+        t["form_type"] = "peac"
     print(f"Generated {len(templates)} PEAC templates ({args.per_field} per field x 3 fields).")
 
     system = build_mysql_seed_system(parse_php_db_config(), table_name=args.table)

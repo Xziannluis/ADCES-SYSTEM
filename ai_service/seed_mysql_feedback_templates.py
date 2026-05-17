@@ -47,6 +47,8 @@ def main() -> None:
     args = parser.parse_args()
 
     templates = generate_seed_templates(per_field=args.per_field)
+    for t in templates:
+        t["form_type"] = "iso"
     system = build_mysql_seed_system(parse_php_db_config(), table_name=args.table)
     try:
         if args.truncate:
