@@ -4,6 +4,13 @@ require_once '../auth/session-check.php';
 if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'])) {
     http_response_code(403);
     echo json_encode(['error' => 'Access denied']);
+    exit();
+}
+
+
+
+
+header('Content-Type: application/json');
 
 $teacher_id = isset($_GET['teacher_id']) ? (int)$_GET['teacher_id'] : 0;
 if ($teacher_id <= 0) {
