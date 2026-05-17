@@ -867,13 +867,15 @@ try {
             border: 1px solid #000;
         }
         .plan-table th {
-            background: #fff;
+            background: #E3A15A;
             color: #000;
             font-weight: 700;
             font-size: 10px;
             padding: 5px 6px;
             border: 1px solid #000;
             text-align: center;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
         }
         .plan-table td {
             font-size: 10px;
@@ -1034,9 +1036,13 @@ try {
         <!-- Prepared By -->
         <div class="prepared-by">
             <p class="label">Prepared by:</p>
-            <?php if (!empty($dean_signature)): ?>
-            <img class="sig-img" src="<?php echo htmlspecialchars($dean_signature); ?>" alt="Signature">
-            <?php endif; ?>
+            <img
+                id="preparedBySignatureImage"
+                class="sig-img"
+                src="<?php echo !empty($dean_signature) ? htmlspecialchars($dean_signature) : ''; ?>"
+                alt="Signature"
+                style="<?php echo !empty($dean_signature) ? '' : 'display:none;'; ?>"
+            >
             <p class="name-line"><?php echo htmlspecialchars(strtoupper($dean_name)); ?></p>
             <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
         </div>
@@ -1044,6 +1050,15 @@ try {
 
     <script>
         const urlParams = new URLSearchParams(window.location.search);
+        const usePreparedSig = urlParams.get('prepared_sig') === '1';
+        if (usePreparedSig) {
+            const sig = sessionStorage.getItem('prepared_by_signature_data') || '';
+            const sigImg = document.getElementById('preparedBySignatureImage');
+            if (sig && sigImg) {
+                sigImg.src = sig;
+                sigImg.style.display = 'block';
+            }
+        }
         if (urlParams.get('auto_print') === '1') {
             window.onload = function() { window.print(); };
         }

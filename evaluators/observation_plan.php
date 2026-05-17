@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 require_once '../auth/session-check.php';
 $session_role = strtolower(trim((string)($_SESSION['role'] ?? '')));
 $session_role = str_replace(' ', '_', $session_role);
@@ -1245,7 +1245,7 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
         }
     }
 
-    // Handle signature POST â€” per-schedule signing
+    // Handle signature POST — per-schedule signing
         // PRG safeguard: prevent browser Back/Refresh from re-submitting reschedule request POST.
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'request_reschedule_my') {
         $redirect = 'observation_plan.php?view=my_observation'
@@ -1551,7 +1551,7 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
             }));
         }
 
-        // Check acknowledgment/signature status â€” per-item
+        // Check acknowledgment/signature status — per-item
         $ack_stmt = $db->prepare("SELECT * FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem");
         $ack_stmt->execute([':tid' => $my_teacher_id, ':ay' => $academic_year, ':sem' => $semester]);
         $my_acknowledgments_raw = $ack_stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -1676,7 +1676,7 @@ if ($is_leader) {
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
 } else {
-// Dean/principal query â€” show evaluations only when the row belongs to this
+// Dean/principal query — show evaluations only when the row belongs to this
 // department via scheduled_department, or (legacy) primary teacher department.
 // Do not include rows just because evaluator department matches; ownership is schedule-based.
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
@@ -2079,7 +2079,7 @@ $seen_ids = [];
 $teachers_list = [];
 $exclude_current_user_from_observers = false;
 
-// Build teacher role map: teacher_id â†’ user role (for filtering observers)
+// Build teacher role map: teacher_id → user role (for filtering observers)
 $teacher_role_map = [];
 try {
     $role_stmt = $db->query("SELECT t.id, u.role FROM teachers t JOIN users u ON t.user_id = u.id WHERE t.user_id IS NOT NULL");
@@ -2223,7 +2223,7 @@ foreach ($eval_teachers as $t) {
         }
     }
 
-    // Get observers â€” based on the department that owns this schedule/evaluation
+    // Get observers — based on the department that owns this schedule/evaluation
     // Determine the "owning" department per row:
     // eval.department > scheduled_department > teacher primary department.
     $eval_dept_val = trim((string)($t['eval_department'] ?? ''));
@@ -2258,7 +2258,7 @@ foreach ([] as $t) {
     $eval_date = $eval_data[$tid]['date'] ?? '';
     $eval_date_formatted = !empty($eval_date) ? date('Y-m-d', strtotime($eval_date)) : '';
     if ($sched_date !== $eval_date_formatted && ($eval_data[$tid]['done'] ?? false)) {
-        // Teacher has a new schedule on a different date â€” show schedule, not old eval
+        // Teacher has a new schedule on a different date — show schedule, not old eval
         $eval_data[$tid] = [
             'date' => $sched_date,
             'done' => false,
@@ -2485,12 +2485,31 @@ if (!empty($filter_month)) {
 if (!empty($filter_status)) {
     $teachers_list = array_filter($teachers_list, function($t) use ($eval_data, $filter_status) {
         $row_key = $t['_row_key'] ?? $t['id'];
-        $is_done = $eval_data[$row_key]['done'] ?? false;
+        $is_done = !empty($eval_data[$row_key]['done']);
         $row_status = strtolower(trim((string)($eval_data[$row_key]['status'] ?? '')));
         $has_sched = !empty($t['evaluation_schedule']);
-        if ($filter_status === 'done') return $is_done;
+
+        $is_overdue_not_evaluated = false;
+        if (!$is_done) {
+            $row_sched_end_raw = trim((string)($t['evaluation_schedule_end'] ?? ''));
+            $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
+            $cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
+            if ($cutoff_raw !== '') {
+                try {
+                    $tz = new DateTimeZone('Asia/Manila');
+                    $cutoff_at = new DateTime($cutoff_raw, $tz);
+                    $now_at = new DateTime('now', $tz);
+                    if ($now_at > $cutoff_at) {
+                        $is_overdue_not_evaluated = true;
+                    }
+                } catch (Exception $e) {}
+            }
+        }
+
+        if ($filter_status === 'done') return $is_done || $row_status === 'completed';
         if ($filter_status === 'rescheduled') return ($row_status === 'rescheduled');
-        if ($filter_status === 'scheduled') return $has_sched && !$is_done;
+        if ($filter_status === 'did_not_evaluate') return $is_overdue_not_evaluated;
+        if ($filter_status === 'scheduled') return $has_sched && !$is_done && $row_status !== 'rescheduled' && !$is_overdue_not_evaluated;
         return true;
     });
     $teachers_list = array_values($teachers_list);
@@ -2874,9 +2893,10 @@ try {
             }
             body { background: #fff !important; }
             .plan-table th {
-                background: #fff !important;
+                background: #E3A15A !important;
                 color: #000 !important;
                 border: 1.5px solid #000 !important;
+                -webkit-print-color-adjust: exact;
                 print-color-adjust: exact;
             }
             .plan-table td {
@@ -3025,6 +3045,7 @@ try {
                                 <option value="scheduled" <?php echo $filter_status === 'scheduled' ? 'selected' : ''; ?>>Scheduled</option>
                                 <option value="rescheduled" <?php echo $filter_status === 'rescheduled' ? 'selected' : ''; ?>>Rescheduled</option>
                                 <option value="done" <?php echo $filter_status === 'done' ? 'selected' : ''; ?>>Conducted</option>
+                                <option value="did_not_evaluate" <?php echo $filter_status === 'did_not_evaluate' ? 'selected' : ''; ?>>Did Not Evaluate</option>
                             </select>
                         </div>
                         <?php if ($view_mode === 'my_observation' && $has_teacher_record): ?>
@@ -4035,7 +4056,7 @@ try {
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label fw-bold" id="modal_label_subject">Subject <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control" id="modal_evaluation_subject" name="evaluation_subject" required placeholder="e.g., GEC 9 â€“ Ethics">
+                                <input type="text" class="form-control" id="modal_evaluation_subject" name="evaluation_subject" required placeholder="e.g., GEC 9 – Ethics">
                             </div>
                         </div>
 
@@ -4159,9 +4180,117 @@ function applyTeacherFilterByDepartment() {
 }
 
 function openPrintPlan() {
-    const params = new URLSearchParams(window.location.search);
-    params.set('auto_print', '1');
-    window.open('observation_plan_print.php?' + params.toString(), '_blank');
+    const modalId = 'preparedBySignaturePrintModal';
+    let modalEl = document.getElementById(modalId);
+    if (!modalEl) {
+        modalEl = document.createElement('div');
+        modalEl.className = 'modal fade';
+        modalEl.id = modalId;
+        modalEl.tabIndex = -1;
+        modalEl.setAttribute('aria-hidden', 'true');
+        modalEl.innerHTML = ''
+            + '<div class="modal-dialog modal-dialog-centered" style="max-width:500px;">'
+            + '  <div class="modal-content">'
+            + '    <div class="modal-header">'
+            + '      <h5 class="modal-title"><i class="fas fa-signature me-2"></i>Signature</h5>'
+            + '      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>'
+            + '    </div>'
+            + '    <div class="modal-body">'
+            + '      <p class="text-muted small mb-2">Draw your signature before printing the observation plan.</p>'
+            + '      <div style="border:1px solid #ced4da;border-radius:8px;background:#fff;overflow:hidden;">'
+            + '        <canvas id="preparedBySigCanvas" width="440" height="140" style="display:block;width:100%;height:140px;touch-action:none;cursor:crosshair;"></canvas>'
+            + '      </div>'
+            + '      <div class="mt-2 text-end">'
+            + '        <button type="button" class="btn btn-sm btn-outline-secondary" id="preparedBySigClearBtn"><i class="fas fa-eraser me-1"></i>Clear</button>'
+            + '      </div>'
+            + '    </div>'
+            + '    <div class="modal-footer">'
+            + '      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>'
+            + '      <button type="button" class="btn btn-primary" id="preparedBySigPrintBtn"><i class="fas fa-print me-1"></i>Use Signature & Print</button>'
+            + '    </div>'
+            + '  </div>'
+            + '</div>';
+        document.body.appendChild(modalEl);
+    }
+
+    const canvas = modalEl.querySelector('#preparedBySigCanvas');
+    const clearBtn = modalEl.querySelector('#preparedBySigClearBtn');
+    const printBtn = modalEl.querySelector('#preparedBySigPrintBtn');
+    const ctx = canvas.getContext('2d');
+    let drawing = false;
+    canvas.dataset.hasStroke = "0";
+
+    function getPoint(evt) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = evt.touches && evt.touches[0] ? evt.touches[0] : null;
+        const clientX = touch ? touch.clientX : evt.clientX;
+        const clientY = touch ? touch.clientY : evt.clientY;
+        return { x: clientX - rect.left, y: clientY - rect.top };
+    }
+
+    function startDraw(evt) {
+        evt.preventDefault();
+        const p = getPoint(evt);
+        drawing = true;
+        canvas.dataset.hasStroke = "1";
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+    }
+
+    function draw(evt) {
+        if (!drawing) return;
+        evt.preventDefault();
+        const p = getPoint(evt);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+    }
+
+    function endDraw(evt) {
+        if (evt) evt.preventDefault();
+        drawing = false;
+    }
+
+    if (!canvas.dataset.initialized) {
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#111';
+
+        canvas.addEventListener('mousedown', startDraw);
+        canvas.addEventListener('mousemove', draw);
+        window.addEventListener('mouseup', endDraw);
+
+        canvas.addEventListener('touchstart', startDraw, { passive: false });
+        canvas.addEventListener('touchmove', draw, { passive: false });
+        canvas.addEventListener('touchend', endDraw, { passive: false });
+
+        clearBtn.addEventListener('click', function() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            canvas.dataset.hasStroke = "0";
+        });
+
+        printBtn.addEventListener('click', function() {
+            if (canvas.dataset.hasStroke !== "1") {
+                alert('Please draw your signature first.');
+                return;
+            }
+            sessionStorage.setItem('prepared_by_signature_data', canvas.toDataURL('image/png'));
+            const params = new URLSearchParams(window.location.search);
+            params.set('auto_print', '1');
+            params.set('prepared_sig', '1');
+            bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+            window.open('observation_plan_print.php?' + params.toString(), '_blank');
+        });
+
+        modalEl.addEventListener('shown.bs.modal', function() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            canvas.dataset.hasStroke = "0";
+        });
+
+        canvas.dataset.initialized = '1';
+    }
+
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
 
 function setModalRescheduleMode(enabled) {
@@ -5093,6 +5222,8 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 </body>
 </html>
+
+
 
 
 

@@ -508,9 +508,10 @@ try {
             }
             body { background: #fff !important; }
             .plan-table th {
-                background: #fff !important;
+                background: #E3A15A !important;
                 color: #000 !important;
                 border: 1.5px solid #000 !important;
+                -webkit-print-color-adjust: exact;
                 print-color-adjust: exact;
             }
             .plan-table td {
@@ -735,9 +736,113 @@ try {
     <?php include '../includes/footer.php'; ?>
 <script>
 function openPrintPlan() {
-    const params = new URLSearchParams(window.location.search);
-    params.set('auto_print', '1');
-    window.open('observation_plan_print.php?' + params.toString(), '_blank');
+    const modalId = 'preparedBySignaturePrintModal';
+    let modalEl = document.getElementById(modalId);
+    if (!modalEl) {
+        modalEl = document.createElement('div');
+        modalEl.className = 'modal fade';
+        modalEl.id = modalId;
+        modalEl.tabIndex = -1;
+        modalEl.setAttribute('aria-hidden', 'true');
+        modalEl.innerHTML = ''
+            + '<div class="modal-dialog modal-dialog-centered" style="max-width:500px;">'
+            + '  <div class="modal-content">'
+            + '    <div class="modal-header">'
+            + '      <h5 class="modal-title"><i class="fas fa-signature me-2"></i>Signature</h5>'
+            + '      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>'
+            + '    </div>'
+            + '    <div class="modal-body">'
+            + '      <p class="text-muted small mb-2">Draw your signature before printing the observation plan.</p>'
+            + '      <div style="border:1px solid #ced4da;border-radius:8px;background:#fff;overflow:hidden;">'
+            + '        <canvas id="preparedBySigCanvas" width="440" height="140" style="display:block;width:100%;height:140px;touch-action:none;cursor:crosshair;"></canvas>'
+            + '      </div>'
+            + '      <div class="mt-2 text-end">'
+            + '        <button type="button" class="btn btn-sm btn-outline-secondary" id="preparedBySigClearBtn"><i class="fas fa-eraser me-1"></i>Clear</button>'
+            + '      </div>'
+            + '    </div>'
+            + '    <div class="modal-footer">'
+            + '      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>'
+            + '      <button type="button" class="btn btn-primary" id="preparedBySigPrintBtn"><i class="fas fa-print me-1"></i>Use Signature & Print</button>'
+            + '    </div>'
+            + '  </div>'
+            + '</div>';
+        document.body.appendChild(modalEl);
+    }
+
+    const canvas = modalEl.querySelector('#preparedBySigCanvas');
+    const clearBtn = modalEl.querySelector('#preparedBySigClearBtn');
+    const printBtn = modalEl.querySelector('#preparedBySigPrintBtn');
+    const ctx = canvas.getContext('2d');
+    let drawing = false;
+    canvas.dataset.hasStroke = "0";
+
+    function getPoint(evt) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = evt.touches && evt.touches[0] ? evt.touches[0] : null;
+        const clientX = touch ? touch.clientX : evt.clientX;
+        const clientY = touch ? touch.clientY : evt.clientY;
+        return { x: clientX - rect.left, y: clientY - rect.top };
+    }
+    function startDraw(evt) {
+        evt.preventDefault();
+        const p = getPoint(evt);
+        drawing = true;
+        canvas.dataset.hasStroke = "1";
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+    }
+    function draw(evt) {
+        if (!drawing) return;
+        evt.preventDefault();
+        const p = getPoint(evt);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+    }
+    function endDraw(evt) {
+        if (evt) evt.preventDefault();
+        drawing = false;
+    }
+
+    if (!canvas.dataset.initialized) {
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#111';
+
+        canvas.addEventListener('mousedown', startDraw);
+        canvas.addEventListener('mousemove', draw);
+        window.addEventListener('mouseup', endDraw);
+        canvas.addEventListener('touchstart', startDraw, { passive: false });
+        canvas.addEventListener('touchmove', draw, { passive: false });
+        canvas.addEventListener('touchend', endDraw, { passive: false });
+
+        clearBtn.addEventListener('click', function() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            canvas.dataset.hasStroke = "0";
+        });
+
+        printBtn.addEventListener('click', function() {
+            if (canvas.dataset.hasStroke !== "1") {
+                alert('Please draw your signature first.');
+                return;
+            }
+            sessionStorage.setItem('prepared_by_signature_data', canvas.toDataURL('image/png'));
+            const params = new URLSearchParams(window.location.search);
+            params.set('auto_print', '1');
+            params.set('prepared_sig', '1');
+            bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+            window.open('observation_plan_print.php?' + params.toString(), '_blank');
+        });
+
+        modalEl.addEventListener('shown.bs.modal', function() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            canvas.dataset.hasStroke = "0";
+        });
+
+        canvas.dataset.initialized = '1';
+    }
+
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
 }
 
 document.querySelectorAll('.inline-edit').forEach(input => {
@@ -764,4 +869,6 @@ document.querySelectorAll('.inline-edit').forEach(input => {
 </script>
 </body>
 </html>
+
+
 
