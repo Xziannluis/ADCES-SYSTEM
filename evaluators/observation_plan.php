@@ -109,6 +109,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 // Cancel specific schedule row(s) via evaluation id(s).
                 $ph_eval = implode(',', array_fill(0, count($eval_ids), '?'));
 
+                // SAFETY GUARD: never delete completed evaluations.
+                $completed_ids = [];
+                try {
+                    $completed_q = $db->prepare("SELECT id FROM evaluations WHERE id IN ($ph_eval) AND status = 'completed'");
+                    $completed_q->execute($eval_ids);
+                    $completed_ids = array_map('intval', $completed_q->fetchAll(PDO::FETCH_COLUMN) ?: []);
+                } catch (Exception $e) {
+                    $completed_ids = [];
+                }
+
+                if (!empty($completed_ids)) {
+                    // Log blocked attempt for audit trail.
+                    try {
+                        $desc = "Blocked cancel_schedule delete for completed evaluation IDs: " . implode(',', $completed_ids)
+                            . " by user_id=" . (int)($_SESSION['user_id'] ?? 0);
+                        $log = $db->prepare("INSERT INTO audit_logs (user_id, action, description, ip_address) VALUES (:uid, :act, :desc, :ip)");
+                        $log->execute([
+                            ':uid' => (int)($_SESSION['user_id'] ?? 0),
+                            ':act' => 'CANCEL_SCHEDULE_DELETE_BLOCKED',
+                            ':desc' => $desc,
+                            ':ip' => $_SERVER['REMOTE_ADDR'] ?? ''
+                        ]);
+                    } catch (Exception $e) {}
+                }
+
+                // Keep only non-completed IDs for deletion path.
+                $eval_ids = array_values(array_filter($eval_ids, function($id) use ($completed_ids) {
+                    return !in_array((int)$id, $completed_ids, true);
+                }));
+                if (empty($eval_ids)) {
+                    throw new Exception('Selected evaluation(s) are already completed and cannot be deleted.');
+                }
+
+                // Rebuild placeholder list after filtering.
+                $ph_eval = implode(',', array_fill(0, count($eval_ids), '?'));
+
                 $eval_tid_stmt = $db->prepare("SELECT DISTINCT teacher_id FROM evaluations WHERE id IN ($ph_eval)");
                 $eval_tid_stmt->execute($eval_ids);
                 while ($tid = $eval_tid_stmt->fetchColumn()) {
@@ -2180,44 +2216,39 @@ foreach ($eval_teachers as $t) {
     $sched_dt = $t['evaluation_schedule'] ?? '';
     $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
     if ($is_eval_row && !empty($obs_date)) {
-        $schedule_data[$row_key]['day_time'] = date('D', strtotime($obs_date));
+        $schedule_data[$row_key]['day_time'] = date('l', strtotime($obs_date));
         $obs_time_fmt = trim((string)($t['observation_time'] ?? ''));
-        // If observation_time is missing on completed rows, fallback to current
-        // schedule start time when it matches the same calendar date.
+        // If observation_time is missing, fallback to current schedule start time.
         if (($obs_time_fmt === '' || $obs_time_fmt === '00:00:00' || $obs_time_fmt === '00:00') && !empty($sched_dt)) {
-            $obs_date_key = date('Y-m-d', strtotime($obs_date));
-            $sched_date_key = date('Y-m-d', strtotime($sched_dt));
-            if ($obs_date_key === $sched_date_key) {
-                $obs_time_fmt = date('H:i:s', strtotime($sched_dt));
-            }
+            $obs_time_fmt = date('H:i:s', strtotime($sched_dt));
         }
         if ($obs_time_fmt !== '' && $obs_time_fmt !== '00:00:00' && $obs_time_fmt !== '00:00') {
-            $start_fmt = date('g:ia', strtotime($obs_time_fmt));
+            $start_fmt = date('g:i A', strtotime($obs_time_fmt));
             $end_fmt = '';
             if (!empty($sched_dt_end)) {
-                $end_fmt = date('g:ia', strtotime($sched_dt_end));
+                $end_fmt = date('g:i A', strtotime($sched_dt_end));
             }
             $schedule_data[$row_key]['day_time'] .= "\n" . $start_fmt . ($end_fmt !== '' ? (' - ' . $end_fmt) : '');
         }
     } elseif (!empty($sched_dt)) {
         $ts = strtotime($sched_dt);
-        $day_str = date('D', $ts);
-        $start_time = date('g:ia', $ts);
+        $day_str = date('l', $ts);
+        $start_time = date('g:i A', $ts);
         if (!empty($sched_dt_end)) {
             $ts_end = strtotime($sched_dt_end);
-            $end_time = date('g:ia', $ts_end);
+            $end_time = date('g:i A', $ts_end);
             $schedule_data[$row_key]['day_time'] = $day_str . "\n" . $start_time . ' - ' . $end_time;
         } else {
             $schedule_data[$row_key]['day_time'] = $day_str . "\n" . $start_time;
         }
     } elseif (!empty($obs_date)) {
-        $schedule_data[$row_key]['day_time'] = date('D', strtotime($obs_date));
+        $schedule_data[$row_key]['day_time'] = date('l', strtotime($obs_date));
         $obs_time_fmt = trim((string)($t['observation_time'] ?? ''));
         if ($obs_time_fmt !== '' && $obs_time_fmt !== '00:00:00' && $obs_time_fmt !== '00:00') {
-            $start_fmt = date('g:ia', strtotime($obs_time_fmt));
+            $start_fmt = date('g:i A', strtotime($obs_time_fmt));
             $end_fmt = '';
             if (!empty($sched_dt_end)) {
-                $end_fmt = date('g:ia', strtotime($sched_dt_end));
+                $end_fmt = date('g:i A', strtotime($sched_dt_end));
             }
             $schedule_data[$row_key]['day_time'] .= "\n" . $start_fmt . ($end_fmt !== '' ? (' - ' . $end_fmt) : '');
         }
@@ -2272,13 +2303,13 @@ foreach ([] as $t) {
         if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
         $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
         $ts = strtotime($sched_dt);
-        $day_str = date('D', $ts);
-        $start_time = date('g:ia', $ts);
+        $day_str = date('l', $ts);
+        $start_time = date('g:i A', $ts);
         $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
         $day_time_str = '';
         if (!empty($sched_dt_end)) {
             $ts_end = strtotime($sched_dt_end);
-            $end_time = date('g:ia', $ts_end);
+            $end_time = date('g:i A', $ts_end);
             $day_time_str = $day_str . "\n" . $start_time . ' - ' . $end_time;
         } else {
             $day_time_str = $day_str . "\n" . $start_time;
@@ -2334,12 +2365,12 @@ foreach ($scheduled_teachers as $t) {
     ];
     if (!empty($sched_dt)) {
         $ts = strtotime($sched_dt);
-        $day_str = date('D', $ts);
-        $start_time = date('g:ia', $ts);
+        $day_str = date('l', $ts);
+        $start_time = date('g:i A', $ts);
         $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
         if (!empty($sched_dt_end)) {
             $ts_end = strtotime($sched_dt_end);
-            $end_time = date('g:ia', $ts_end);
+            $end_time = date('g:i A', $ts_end);
             $schedule_data[$row_key]['day_time'] = $day_str . "\n" . $start_time . ' - ' . $end_time;
         } else {
             $schedule_data[$row_key]['day_time'] = $day_str . "\n" . $start_time;
@@ -2734,6 +2765,24 @@ try {
     <title>Classroom Observation Plan - <?php echo htmlspecialchars($raw_department); ?></title>
     <?php include '../includes/header.php'; ?>
     <style>
+        html {
+            font-size: clamp(14px, 0.95vw, 16px);
+        }
+        .dashboard-topbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.65rem;
+            align-items: center;
+        }
+        .dashboard-topbar h2 {
+            font-size: clamp(1.45rem, 2.3vw, 2.05rem);
+            line-height: 1.18;
+            margin: 0;
+            word-break: break-word;
+        }
+        .dashboard-topbar .ms-auto {
+            margin-left: auto !important;
+        }
         .plan-table {
             width: 100%;
             min-width: 620px;
@@ -2809,17 +2858,46 @@ try {
         .print-only { display: none; }
         .no-print {}
 
-        /* Keep Set Schedule modal compact for leaders and evaluators */
+        /* Fast, zoom-safe modal sizing (applies immediately at any browser zoom) */
         #scheduleModal .modal-dialog {
-            max-width: 760px;
-            width: calc(100% - 1.5rem);
-            margin: 1rem auto;
+            width: min(680px, calc(100vw - 1.25rem));
+            max-width: min(680px, calc(100vw - 1.25rem));
+            margin: 0.8rem auto;
         }
         #scheduleModal .modal-content {
-            max-height: calc(100vh - 2rem);
+            max-height: min(88dvh, 820px);
+            height: auto;
+        }
+        /* Keep footer visible: only body scrolls inside dialog */
+        #scheduleModal .modal-dialog.modal-dialog-scrollable .modal-content {
+            max-height: calc(100dvh - 1.6rem);
+        }
+        #scheduleModal .modal-dialog.modal-dialog-scrollable .modal-body {
+            overflow-y: auto;
         }
         #scheduleModal .modal-body {
             overflow-y: auto;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
+            padding: 0.85rem 1rem 1rem;
+        }
+        #scheduleModal .modal-header {
+            padding: 0.75rem 1rem;
+        }
+        #scheduleModal .modal-footer {
+            padding: 0.75rem 1rem;
+            position: sticky;
+            bottom: 0;
+            z-index: 3;
+            background: #fff;
+            border-top: 1px solid #dee2e6;
+        }
+        #scheduleModal .form-control,
+        #scheduleModal .form-select {
+            min-height: 42px;
+        }
+        #scheduleModal .row.g-2 > [class*="col-"] {
+            min-width: 0;
         }
         .observation-plan-container {
             padding: 24px;
@@ -2933,14 +3011,14 @@ try {
             }
             #scheduleModal .modal-dialog {
                 max-width: 100%;
-                width: calc(100% - 1rem);
+                width: calc(100vw - 0.75rem);
                 margin: 0.5rem auto;
             }
             #scheduleModal .modal-content {
-                max-height: calc(100vh - 1rem);
+                max-height: calc(100dvh - 0.75rem);
             }
             #scheduleModal .modal-body {
-                padding: 0.9rem;
+                padding: 0.8rem 0.85rem 0.95rem;
             }
             #scheduleModal .modal-footer {
                 gap: 0.5rem;
@@ -2952,6 +3030,76 @@ try {
             #scheduleModal .d-flex.gap-3 {
                 flex-direction: column;
                 gap: 0.4rem !important;
+            }
+            /* Stack paired fields like Start/End and Subject/Room on mobile */
+            #scheduleModal .row.g-2 > [class*="col-6"],
+            #scheduleModal .row.g-2 > [class*="col-md-6"] {
+                width: 100%;
+                flex: 0 0 100%;
+                max-width: 100%;
+            }
+            #scheduleModal .form-check-label {
+                font-size: 0.95rem;
+            }
+        }
+        @media (max-width: 992px) {
+            .dashboard-topbar h2 {
+                width: 100%;
+            }
+            .dashboard-topbar .ms-auto {
+                width: 100%;
+                display: flex;
+                justify-content: flex-end;
+            }
+            .observation-plan-container .card .row.g-2 > [class*="col-md-"] {
+                flex: 0 0 50%;
+                max-width: 50%;
+            }
+            .observation-plan-container .card .row.g-2 > [class*="col-md-"] button {
+                width: 100%;
+            }
+            #scheduleModal .modal-body {
+                padding: 0.95rem;
+            }
+        }
+        @media (max-width: 1200px) {
+            .observation-plan-container .card .row.g-2 > [class*="col-md-"] {
+                flex: 0 0 33.3333%;
+                max-width: 33.3333%;
+            }
+        }
+        @media (max-width: 640px) {
+            .dashboard-topbar .ms-auto {
+                justify-content: stretch;
+            }
+            .dashboard-topbar .ms-auto .no-print,
+            .dashboard-topbar .ms-auto .dropdown {
+                width: 100%;
+            }
+            .dashboard-topbar .ms-auto .btn {
+                width: 100%;
+            }
+            .observation-plan-container .card .row.g-2 > [class*="col-md-"] {
+                flex: 0 0 100%;
+                max-width: 100%;
+            }
+            .plan-table {
+                min-width: 820px;
+            }
+            #scheduleModal .modal-dialog {
+                width: calc(100vw - 0.5rem);
+                max-width: calc(100vw - 0.5rem);
+                margin: 0.25rem auto;
+            }
+            #scheduleModal .modal-content {
+                max-height: calc(100dvh - 0.5rem);
+            }
+            #scheduleModal .modal-header,
+            #scheduleModal .modal-footer {
+                padding: 0.65rem 0.75rem;
+            }
+            #scheduleModal .modal-body {
+                padding: 0.72rem 0.75rem 0.9rem;
             }
         }
     </style>
@@ -3288,7 +3436,7 @@ try {
                                 if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
                                 $focus_display = array_map(function($f) use ($focus_labels_my) { return $focus_labels_my[$f] ?? $f; }, $focus_arr);
                                 $ts = strtotime($my_teacher_data['evaluation_schedule']);
-                                $my_day_time = date('D', $ts) . '<br>' . date('g:i A', $ts);
+                                $my_day_time = date('l', $ts) . '<br>' . date('g:i A', $ts);
                                 $my_sched_end = $my_teacher_data['evaluation_schedule_end'] ?? '';
                                 if (!empty($my_sched_end)) {
                                     $ts_end = strtotime($my_sched_end);
@@ -3347,7 +3495,7 @@ try {
                                 $slot_group = $my_slot_groups[$slot_key] ?? null;
                                 $ev_day_time = '';
                                 if (!empty($ev['observation_date'])) {
-                                    $ev_day_time = date('D', strtotime($ev['observation_date']));
+                                    $ev_day_time = date('l', strtotime($ev['observation_date']));
                                     $ev_time = trim((string)($ev['observation_time'] ?? ''));
                                     if (($ev_time === '' || $ev_time === '00:00:00' || $ev_time === '00:00') && !empty($slot_group['times'])) {
                                         $slot_times = array_keys($slot_group['times']);
@@ -3590,7 +3738,7 @@ try {
                 <!-- Action Buttons -->
                 <div class="mb-3 action-toolbar no-print">
                     <?php if (!$is_observer_only): ?>
-                    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#scheduleModal" onclick="openScheduleModal()">
+                    <button type="button" class="btn btn-primary" onclick="openScheduleModal()">
                         <i class="fas fa-calendar-plus me-1"></i>Set Schedule
                     </button>
                     <button type="button" class="btn btn-primary" onclick="openRescheduleModal()">
@@ -4368,6 +4516,18 @@ function openScheduleModal() {
     // Keep Set Schedule blank by default
     if (select) select.selectedIndex = 0;
     applyTeacherFilterByDepartment();
+
+    // Open only after content is fully prepared to avoid visual "big then compress" jump.
+    var modalEl = document.getElementById('scheduleModal');
+    if (modalEl) {
+        // Remove fade animation for this modal to reduce reflow jitter during zoom/resize.
+        modalEl.classList.remove('fade');
+        var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        modal.show();
+        requestAnimationFrame(function() {
+            modal.handleUpdate();
+        });
+    }
 }
 
 // Toggle PEAC/Both radio visibility based on selected department (for leaders)
@@ -4591,8 +4751,13 @@ function openRescheduleModal() {
         alert('Error: Modal not found. Please refresh the page.');
         return;
     }
-    var modal = new bootstrap.Modal(scheduleModalElement);
+    // Match Set Schedule open flow to avoid "big then compress" on first paint.
+    scheduleModalElement.classList.remove('fade');
+    var modal = bootstrap.Modal.getOrCreateInstance(scheduleModalElement);
     modal.show();
+    requestAnimationFrame(function() {
+        modal.handleUpdate();
+    });
 }
 
 function acceptRescheduleRequest() {
@@ -5222,6 +5387,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 </body>
 </html>
+
 
 
 

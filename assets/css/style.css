@@ -1321,7 +1321,7 @@ img {
     }
 
     .modal .modal-content {
-        max-height: calc(100vh - 1rem);
+        max-height: calc(100dvh - 1rem);
     }
 
     .modal .modal-body {

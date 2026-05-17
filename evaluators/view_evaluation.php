@@ -184,9 +184,16 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
         /* Show original form layout but prevent changes */
         .evaluation-table input[type="radio"],
         .evaluation-table input[type="text"],
-        textarea, input, select {
+        input, select {
             pointer-events: none;
         }
+        /* Keep read-only textareas scrollable */
+        textarea {
+            pointer-events: auto;
+            overflow-y: auto;
+            resize: vertical;
+        }
+
 
         /* Keep Back button clickable */
         .btn, a.btn {

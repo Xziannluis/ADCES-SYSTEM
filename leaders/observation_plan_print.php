@@ -142,20 +142,23 @@ foreach ($eval_teachers as $t) {
     $day_time = '';
     if (!empty($sched_dt)) {
         $ts = strtotime($sched_dt);
-        $day_str = date('D', $ts);
-        $start_time = date('g:ia', $ts);
+        $day_str = date('l', $ts);
+        $start_time = date('g:i A', $ts);
         if (!empty($sched_dt_end)) {
             $ts_end = strtotime($sched_dt_end);
-            $end_time = date('g:ia', $ts_end);
+            $end_time = date('g:i A', $ts_end);
             $day_time = $day_str . "\n" . $start_time . ' - ' . $end_time;
         } else {
             $day_time = $day_str . "\n" . $start_time;
         }
     } elseif (!empty($obs_date)) {
-        $day_time = date('D', strtotime($obs_date));
+        $day_time = date('l', strtotime($obs_date));
         $obs_time_fmt = trim((string)($t['observation_time'] ?? ''));
+        if (($obs_time_fmt === '' || $obs_time_fmt === '00:00:00' || $obs_time_fmt === '00:00') && !empty($sched_dt)) {
+            $obs_time_fmt = date('H:i:s', strtotime($sched_dt));
+        }
         if ($obs_time_fmt !== '' && $obs_time_fmt !== '00:00:00' && $obs_time_fmt !== '00:00') {
-            $day_time .= "\n" . date('g:ia', strtotime($obs_time_fmt));
+            $day_time .= "\n" . date('g:i A', strtotime($obs_time_fmt));
         }
     }
     $schedule_data[$tid] = [
@@ -197,12 +200,12 @@ foreach ($scheduled_teachers as $t) {
     $day_time = '';
     if (!empty($sched_dt)) {
         $ts = strtotime($sched_dt);
-        $day_str = date('D', $ts);
-        $start_time = date('g:ia', $ts);
+        $day_str = date('l', $ts);
+        $start_time = date('g:i A', $ts);
         $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
         if (!empty($sched_dt_end)) {
             $ts_end = strtotime($sched_dt_end);
-            $end_time = date('g:ia', $ts_end);
+            $end_time = date('g:i A', $ts_end);
             $day_time = $day_str . "\n" . $start_time . ' - ' . $end_time;
         } else {
             $day_time = $day_str . "\n" . $start_time;
@@ -484,3 +487,4 @@ try {
     </script>
 </body>
 </html>
+

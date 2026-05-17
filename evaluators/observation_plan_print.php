@@ -462,14 +462,14 @@ foreach ($eval_teachers as $t) {
     $sched_dt = $t['evaluation_schedule'] ?? '';
     $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
     if (!empty($obs_date)) {
-        $day_time = date('D', strtotime($obs_date));
+        $day_time = date('l', strtotime($obs_date));
         $obs_time_fmt = trim((string)($t['observation_time'] ?? ''));
         if (($obs_time_fmt === '' || $obs_time_fmt === '00:00:00' || $obs_time_fmt === '00:00') && !empty($sched_dt)) {
             // Permanent fallback: use teacher schedule start when eval row time is blank.
             $obs_time_fmt = date('H:i:s', strtotime($sched_dt));
         }
         if ($obs_time_fmt !== '' && $obs_time_fmt !== '00:00:00' && $obs_time_fmt !== '00:00') {
-            $start_fmt = date('g:ia', strtotime($obs_time_fmt));
+            $start_fmt = date('g:i A', strtotime($obs_time_fmt));
             $end_fmt = '';
             // Use teacher-level end time only when this eval row matches the
             // currently active teacher schedule; avoids applying latest end time
@@ -477,25 +477,25 @@ foreach ($eval_teachers as $t) {
             $obs_dt_key = date('Y-m-d H:i', strtotime($obs_date . ' ' . $obs_time_fmt));
             $sched_dt_key = !empty($sched_dt) ? date('Y-m-d H:i', strtotime($sched_dt)) : '';
             if (!empty($sched_dt_end) && $sched_dt_key !== '' && $sched_dt_key === $obs_dt_key) {
-                $end_fmt = date('g:ia', strtotime($sched_dt_end));
+                $end_fmt = date('g:i A', strtotime($sched_dt_end));
             } elseif (!empty($sched_dt_end) && !empty($sched_dt)) {
                 // Fallback: if the schedule date matches the observation date,
                 // use schedule end time so print can still display a time range.
                 $obs_date_key = date('Y-m-d', strtotime($obs_date));
                 $sched_date_key = date('Y-m-d', strtotime($sched_dt));
                 if ($obs_date_key === $sched_date_key) {
-                    $end_fmt = date('g:ia', strtotime($sched_dt_end));
+                    $end_fmt = date('g:i A', strtotime($sched_dt_end));
                 }
             }
             $day_time .= "\n" . $start_fmt . ($end_fmt !== '' ? (' - ' . $end_fmt) : '');
         }
     } elseif (!empty($sched_dt)) {
         $ts = strtotime($sched_dt);
-        $day_str = date('D', $ts);
-        $start_time = date('g:ia', $ts);
+        $day_str = date('l', $ts);
+        $start_time = date('g:i A', $ts);
         if (!empty($sched_dt_end)) {
             $ts_end = strtotime($sched_dt_end);
-            $end_time = date('g:ia', $ts_end);
+            $end_time = date('g:i A', $ts_end);
             $day_time = $day_str . "\n" . $start_time . ' - ' . $end_time;
         } else {
             $day_time = $day_str . "\n" . $start_time;
@@ -552,9 +552,9 @@ foreach ($eval_teachers as $t) {
 
     $ts = strtotime($sched_dt);
     $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
-    $sched_day_time = date('D', $ts) . "\n" . date('g:ia', $ts);
+    $sched_day_time = date('l', $ts) . "\n" . date('g:i A', $ts);
     if (!empty($sched_dt_end)) {
-        $sched_day_time .= ' - ' . date('g:ia', strtotime($sched_dt_end));
+        $sched_day_time .= ' - ' . date('g:i A', strtotime($sched_dt_end));
     }
     $schedule_data[$sched_key] = [
         'semester' => $t['evaluation_semester'] ?? '',
@@ -606,12 +606,12 @@ foreach ($scheduled_teachers as $t) {
     $day_time = '';
     if (!empty($sched_dt)) { 
         $ts = strtotime($sched_dt);
-        $day_str = date('D', $ts);
-        $start_time = date('g:ia', $ts);
+        $day_str = date('l', $ts);
+        $start_time = date('g:i A', $ts);
         $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
         if (!empty($sched_dt_end)) {
             $ts_end = strtotime($sched_dt_end);
-            $end_time = date('g:ia', $ts_end);
+            $end_time = date('g:i A', $ts_end);
             $day_time = $day_str . "\n" . $start_time . ' - ' . $end_time;
         } else {
             $day_time = $day_str . "\n" . $start_time;
@@ -1065,3 +1065,4 @@ try {
     </script>
 </body>
 </html>
+

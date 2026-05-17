@@ -18,61 +18,14 @@ $teacher = new Teacher($db);
 
 // Clear expired schedules (24-hour window)
 try {
-    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
+    $db->exec("UPDATE teachers SET evaluation_schedule = NULL, evaluation_schedule_end = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, evaluation_form_type = 'iso', scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE evaluation_schedule IS NOT NULL AND evaluation_schedule < NOW() - INTERVAL 24 HOUR");
 } catch (Exception $e) {
     error_log('Error clearing expired schedules: ' . $e->getMessage());
 }
 
-// Clear schedules for teachers where ALL assigned evaluators AND the dean/principal have completed
-try {
-    $month = (int)date('n');
-    $year = (int)date('Y');
-    $curAY = ($month >= 6) ? ($year . '-' . ($year + 1)) : (($year - 1) . '-' . $year);
-    $curSem = ($month >= 6 && $month <= 10) ? '1st' : '2nd';
-    $db->prepare("UPDATE teachers t
-        INNER JOIN evaluations e ON e.teacher_id = t.id AND e.status = 'completed'
-            AND e.academic_year = :ay AND e.semester = :sem
-        SET t.evaluation_schedule = NULL, t.evaluation_room = NULL, t.evaluation_focus = NULL,
-            t.evaluation_subject_area = NULL, t.evaluation_subject = NULL, t.evaluation_semester = NULL,
-            t.evaluation_form_type = 'iso', t.scheduled_by = NULL, t.scheduled_department = NULL, t.updated_at = NOW()
-        WHERE t.evaluation_schedule IS NOT NULL
-          AND (t.evaluation_form_type IS NULL OR t.evaluation_form_type != 'both'
-               OR (SELECT COUNT(*) FROM evaluations e2 WHERE e2.teacher_id = t.id AND e2.status = 'completed'
-                   AND e2.academic_year = :ay2 AND e2.semester = :sem2 AND e2.evaluation_form_type = 'peac') > 0)
-          AND NOT EXISTS (
-              SELECT 1 FROM teacher_assignments ta
-              WHERE ta.teacher_id = t.id
-              AND NOT EXISTS (
-                  SELECT 1 FROM evaluations e3
-                  WHERE e3.teacher_id = t.id
-                  AND e3.evaluator_id = ta.evaluator_id
-                  AND e3.status = 'completed'
-                  AND e3.academic_year = :ay3
-                  AND e3.semester = :sem3
-              )
-          )
-          AND (
-              NOT EXISTS (
-                  SELECT 1 FROM users u
-                  WHERE u.role IN ('dean', 'principal')
-                  AND u.status = 'active'
-                  AND u.department = t.department
-              )
-              OR EXISTS (
-                  SELECT 1 FROM evaluations e4
-                  JOIN users u2 ON e4.evaluator_id = u2.id
-                  WHERE e4.teacher_id = t.id
-                  AND e4.status = 'completed'
-                  AND e4.academic_year = :ay4
-                  AND e4.semester = :sem4
-                  AND u2.role IN ('dean', 'principal')
-              )
-          )")
-        ->execute([':ay' => $curAY, ':sem' => $curSem, ':ay2' => $curAY, ':sem2' => $curSem,
-                   ':ay3' => $curAY, ':sem3' => $curSem, ':ay4' => $curAY, ':sem4' => $curSem]);
-} catch (Exception $e) {
-    error_log('Error clearing completed-eval schedules: ' . $e->getMessage());
-}
+// NOTE:
+// Do not aggressively clear schedule fields on completed rows here because
+// Observation Plan uses schedule start/end as fallback to display Day & Time.
 
 // Handle teacher actions
 $action = $_GET['action'] ?? '';
@@ -160,7 +113,7 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule')
     $teacher_id = $_POST['teacher_id'] ?? '';
 
     if (!empty($teacher_id)) {
-        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
+        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_schedule_end = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':id', $teacher_id);
 
@@ -209,11 +162,12 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'mark_done') {
         try {
             $db->beginTransaction();
 
-            // 1) Clear schedule/room (so teacher dashboard's schedule banner is removed)
-            $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
-            $stmt = $db->prepare($query);
-            $stmt->bindParam(':id', $teacher_id);
-            $stmt->execute();
+            // 1) Capture current schedule timestamps before clearing.
+            $teacherSchedStmt = $db->prepare("SELECT evaluation_schedule, evaluation_schedule_end FROM teachers WHERE id = :id LIMIT 1");
+            $teacherSchedStmt->bindParam(':id', $teacher_id);
+            $teacherSchedStmt->execute();
+            $teacherSched = $teacherSchedStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $schedStart = trim((string)($teacherSched['evaluation_schedule'] ?? ''));
 
             // 2) Mark the latest evaluation record as completed (so teacher dashboard status isn't Pending)
             // Assumption: "done" means the most recently created evaluation for this teacher is now finalized.
@@ -225,6 +179,23 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'mark_done') {
             $latestEval = $latestEvalStmt->fetch(PDO::FETCH_ASSOC);
 
             if ($latestEval) {
+                // Permanently persist date/time from schedule when evaluation row is missing it.
+                if ($schedStart !== '') {
+                    $persistTimeStmt = $db->prepare(
+                        "UPDATE evaluations
+                         SET observation_date = COALESCE(observation_date, DATE(:sched_start)),
+                             observation_time = CASE
+                                 WHEN observation_time IS NULL OR observation_time = '' OR observation_time = '00:00' OR observation_time = '00:00:00'
+                                 THEN TIME(:sched_start)
+                                 ELSE observation_time
+                             END
+                         WHERE id = :id"
+                    );
+                    $persistTimeStmt->bindParam(':sched_start', $schedStart);
+                    $persistTimeStmt->bindParam(':id', $latestEval['id']);
+                    $persistTimeStmt->execute();
+                }
+
                 $updateEvalStmt = $db->prepare(
                     "UPDATE evaluations SET status = 'completed' WHERE id = :id AND (status IS NULL OR status <> 'completed')"
                 );
@@ -232,7 +203,13 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'mark_done') {
                 $updateEvalStmt->execute();
             }
 
-            // 3) Log for auditing/notifications
+            // 3) Clear schedule/room after persisting time data.
+            $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_schedule_end = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
+            $stmt = $db->prepare($query);
+            $stmt->bindParam(':id', $teacher_id);
+            $stmt->execute();
+
+            // 4) Log for auditing/notifications
             $tq = $db->prepare("SELECT user_id, name FROM teachers WHERE id = :id LIMIT 1");
             $tq->bindParam(':id', $teacher_id);
             $tq->execute();
@@ -492,15 +469,57 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
         .teacher-cards-container {
             display: grid !important;
             grid-template-columns: repeat(auto-fill, minmax(260px, 300px)) !important;
-            gap: 1.25rem;
+            gap: 1.45rem;
+        }
+        .teachers-table-wrap {
+            background: rgba(255,255,255,0.95);
+            border: 1px solid #e8edf3;
+            border-radius: 14px;
+            box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+            overflow: hidden;
+        }
+        .teachers-table {
+            margin-bottom: 0;
+        }
+        .teachers-table thead th {
+            background: linear-gradient(90deg, #173d66 0%, #215789 100%) !important;
+            color: #fff !important;
+            border: 0 !important;
+            font-weight: 700;
+            font-size: 0.9rem;
+            letter-spacing: 0.2px;
+            padding: 12px 14px;
+        }
+        .teachers-table tbody td {
+            padding: 13px 14px;
+            vertical-align: middle;
+            border-color: #eef2f7;
+        }
+        .teachers-table tbody tr:hover {
+            background: #f7fbff;
+        }
+        .teacher-name-cell {
+            font-weight: 600;
+            color: #213547;
         }
         .teacher-card {
             max-width: 300px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.18);
+            overflow: hidden;
+            box-shadow: 0 12px 26px rgba(15, 23, 42, 0.12);
+            backdrop-filter: blur(2px);
+            transition: transform .22s ease, box-shadow .22s ease;
+            background: rgba(255,255,255,0.94);
+        }
+        .teacher-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 38px rgba(15, 23, 42, 0.18);
         }
         .teacher-photo-section {
             position: relative;
             height: 180px;
-            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            background: linear-gradient(135deg, #143759 0%, #2b87c2 55%, #58afe4 100%);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -595,8 +614,8 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
             height: 100px;
             border-radius: 50%;
             object-fit: cover;
-            border: 4px solid white;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            border: 4px solid rgba(255,255,255,0.92);
+            box-shadow: 0 6px 18px rgba(0,0,0,0.22);
         }
         
         .default-photo {
@@ -616,15 +635,17 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
         }
         
         .teacher-info {
-            padding: 20px;
+            padding: 18px 18px 17px;
             text-align: center;
         }
         
         .teacher-name {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin-bottom: 5px;
-            color: #2c3e50;
+            font-size: 1.08rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            color: #24384d;
+            letter-spacing: 0.1px;
+            line-height: 1.25;
         }
         
         .teacher-status {
@@ -643,13 +664,24 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
 
         .teacher-actions {
             justify-content: center;
-            margin-top: 15px;
+            margin-top: 14px;
         }
 
         .teacher-actions .btn {
-            min-width: 80px;
-            font-size: 0.75rem;
-            padding: 5px 10px;
+            min-width: 138px;
+            font-size: 0.78rem;
+            padding: 7px 12px;
+            border-radius: 10px;
+            font-weight: 600;
+            border-color: #34495e;
+            color: #2f3f52;
+            background: #fff;
+            transition: all .18s ease;
+        }
+        .teacher-actions .btn:hover {
+            background: #f2f7fc;
+            color: #1f2d3a;
+            border-color: #24384d;
         }
 
         .modal-body .form-group {
@@ -657,10 +689,15 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
         }
 
         .status-badge {
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 0.85rem;
-            font-weight: 600;
+            padding: 7px 16px;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            letter-spacing: 0.15px;
+            box-shadow: inset 0 -1px 0 rgba(0,0,0,0.08);
+        }
+        .teacher-info .badge.bg-success {
+            background: linear-gradient(90deg, #11844e 0%, #18a766 100%) !important;
         }
 
         .modal-lg {
@@ -738,7 +775,8 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
         }
 
         .schedule-info {
-            background: #f8f9fa;
+            background: #f4f9ff;
+            border: 1px solid #e3eefc;
             padding: 10px;
             border-radius: 8px;
             font-size: 0.85rem;
@@ -837,7 +875,7 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                             }
                         ?>
                         <?php $currentSem = $teacher_row['teaching_semester'] ?? ''; ?>
-                        <div class="teacher-card">
+                        <div class="teacher-card" data-semester="<?php echo htmlspecialchars($currentSem); ?>">
                             <div class="teacher-photo-section">
                                 <button class="sem-gear-btn" onclick="toggleSemDropdown(event, this)" title="Set teaching semester">
                                     <i class="fas fa-ellipsis-vertical"></i>
@@ -882,41 +920,12 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
                                     <?php echo ucfirst($teacher_row['status']); ?>
                                 </div>
 
-                                <!-- Assignment badge removed per request -->
-
-                                <?php
-                                // Only show schedule if it belongs to this department:
-                                // - scheduled_department matches current department, OR
-                                // - scheduled_department is empty (legacy) AND teacher's primary dept matches, OR
-                                // - viewer is president/VP (sees all)
-                                $viewer_dept = $_SESSION['department'] ?? '';
-                                $sched_dept_val = $teacher_row['scheduled_department'] ?? '';
-                                if ($is_leader) {
-                                    $sched_dept_match = true;
-                                } elseif (!empty($sched_dept_val)) {
-                                    $sched_dept_match = ($sched_dept_val === $viewer_dept);
-                                } else {
-                                    $sched_dept_match = ($teacher_row['department'] === $viewer_dept);
-                                }
-                                ?>
-                                <?php if($sched_dept_match && (!empty($teacher_row['evaluation_schedule']) || !empty($teacher_row['evaluation_room']))): ?>
-                                <div class="schedule-info">
-                                    <?php if(!empty($teacher_row['evaluation_schedule'])): ?>
-                                        <?php $scheduleFormatted = date('F d, Y \a\t h:i A', strtotime($teacher_row['evaluation_schedule'])); ?>
-                                        <div><i class="fas fa-calendar me-2"></i><?php echo htmlspecialchars($scheduleFormatted); ?></div>
-                                    <?php endif; ?>
-                                    <?php if(!empty($teacher_row['evaluation_room'])): ?>
-                                        <div><i class="fas fa-door-open me-2"></i><?php echo htmlspecialchars($teacher_row['evaluation_room']); ?></div>
-                                    <?php endif; ?>
-                                </div>
-                                <?php endif; ?>
-
                                 <div class="teacher-actions">
-                                    <?php if (in_array($_SESSION['role'], ['dean', 'principal'])): ?>
-                                    <a href="?action=toggle_status&teacher_id=<?php echo $teacher_row['id']; ?>" class="btn btn-sm btn-outline-dark" onclick="return confirm('Are you sure you want to deactivate this teacher?');">
-                                        <i class="fas fa-ban"></i> Deactivate
-                                    </a>
-                                    <?php endif; ?>
+                                <?php if (in_array($_SESSION['role'], ['dean', 'principal'])): ?>
+                                <a href="?action=toggle_status&teacher_id=<?php echo $teacher_row['id']; ?>" class="btn btn-sm btn-outline-dark" onclick="return confirm('Are you sure you want to deactivate this teacher?');">
+                                    <i class="fas fa-ban"></i> Deactivate
+                                </a>
+                                <?php endif; ?>
                                 </div>
                             </div>
                         </div>
