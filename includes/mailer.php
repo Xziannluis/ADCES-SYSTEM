@@ -730,14 +730,94 @@ function sendPasswordResetCodeEmail($toEmail, $userName, $code, $expiresAt) {
     $autoloadPath = __DIR__ . '/../vendor/autoload.php';
     if (file_exists($autoloadPath)) require_once $autoloadPath;
     
-    $formattedExpiry = $expiresAt ? date('F d, Y \a\t h:i A', strtotime($expiresAt)) : '15 minutes';
+    $formattedExpiry = $expiresAt ? date('F d, Y \a\t h:i A', strtotime($expiresAt)) : 'soon';
+    $expiryMinutes = 10;
+    if (!empty($expiresAt)) {
+        $delta = strtotime((string)$expiresAt) - time();
+        if ($delta > 0) {
+            $expiryMinutes = max(1, (int)ceil($delta / 60));
+        }
+    }
 
     $subject = 'Your Password Reset Code';
-    $body = "<p>Hi {$userName},</p>";
-    $body .= "<p>You requested a password reset. Your 6-digit verification code is:</p>";
-    $body .= "<h2 style=\"letter-spacing:5px; color:#3498db; font-size:24px; font-weight:bold;\">{$code}</h2>";
-    $body .= "<p>This code expires on <strong>{$formattedExpiry}</strong>.</p>";
-    $body .= "<p>If you did not request a password reset, you can safely ignore this email.</p>";
+    $safeName = htmlspecialchars((string)$userName, ENT_QUOTES, 'UTF-8');
+    $safeCode = htmlspecialchars((string)$code, ENT_QUOTES, 'UTF-8');
+    $safeExpiry = htmlspecialchars((string)$formattedExpiry, ENT_QUOTES, 'UTF-8');
+    $body = '<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Password Reset</title>
+</head>
+<body style="margin:0;padding:0;background:#eef2f7;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eef2f7;padding:28px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border-radius:18px;overflow:hidden;">
+          <tr>
+            <td style="padding:0;background:#ffffff;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td style="width:10px;background:#0f766e;"></td>
+                  <td style="padding:24px 24px 16px;">
+                    <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:1px;color:#0f766e;">SAINT MICHAEL COLLEGE OF CARAGA</p>
+                    <h1 style="margin:8px 0 0;font-size:28px;line-height:1.2;color:#0f172a;">Reset Your Password</h1>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 24px 0;">
+              <p style="margin:0 0 10px;font-size:16px;">Hi ' . $safeName . ',</p>
+              <p style="margin:0;font-size:16px;line-height:1.65;color:#374151;">
+                Use the one-time code below to continue resetting your password in the AI Classroom Evaluation System.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 24px 8px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;border:1px solid #dbeafe;border-radius:14px;">
+                <tr>
+                  <td style="padding:12px 14px 6px;font-size:12px;font-weight:700;color:#475569;letter-spacing:0.8px;">PASSWORD RESET CODE</td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding:8px 14px 16px;">
+                    <div style="display:inline-block;background:#ffffff;border:2px dashed #0ea5e9;border-radius:10px;padding:14px 18px;">
+                      <span style="font-size:38px;font-weight:700;color:#0f172a;letter-spacing:10px;">' . $safeCode . '</span>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 24px 4px;">
+              <p style="margin:0;font-size:15px;line-height:1.6;color:#334155;">
+                Expires in <strong>' . (int)$expiryMinutes . ' minute' . ((int)$expiryMinutes === 1 ? '' : 's') . '</strong>
+                <span style="color:#64748b;">(until ' . $safeExpiry . ')</span>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:14px 24px 24px;">
+              <p style="margin:0;font-size:14px;line-height:1.6;color:#64748b;">
+                If you did not request this code, you can safely ignore this email.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>';
+    $altBody = "Hello {$userName},\n\n"
+        . "Please use this password reset code to continue: {$code}\n\n"
+        . "This code expires in {$expiryMinutes} minute" . ($expiryMinutes === 1 ? '' : 's') . ".\n"
+        . "Expiry time: {$formattedExpiry}\n\n"
+        . "If you did not request this code, you can safely ignore this email.";
 
     $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
     try {
@@ -755,6 +835,7 @@ function sendPasswordResetCodeEmail($toEmail, $userName, $code, $expiresAt) {
         $mail->isHTML(true);
         $mail->Subject = $subject;
         $mail->Body = $body;
+        $mail->AltBody = $altBody;
         return $mail->send();
     } catch (Exception $e) {
         return false;
