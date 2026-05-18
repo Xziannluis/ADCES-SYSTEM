@@ -25,10 +25,10 @@ if(in_array($_SESSION['role'], ['president', 'vice_president'])) {
     exit();
 }
 
-require_once '../config/databases.php';
-require_once '../model/Teacher.php';
-require_once '../model/Evaluation.php';
-require_once '../model/User.php';
+require_once '../config/database.php';
+require_once '../models/Teacher.php';
+require_once '../models/Evaluation.php';
+require_once '../models/User.php';
 
 $database = new Database();
 $db = $database->getConnection();
