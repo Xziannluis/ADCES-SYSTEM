@@ -63,8 +63,8 @@ if ($is_leader) {
 $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
 
 // Keep print output aligned with reports.php:
-// leaders + department heads see department scope; coordinators see own records only.
-$scoped_evaluator_id = ($is_leader || $is_department_head) ? null : (int)($_SESSION['user_id'] ?? 0);
+// leaders may view department scope; all other evaluator roles see only their own records.
+$scoped_evaluator_id = $is_leader ? null : (int)($_SESSION['user_id'] ?? 0);
 
 // Available teachers (for label lookup)
 $available_teachers = [];
@@ -118,7 +118,7 @@ foreach ($available_teachers as $teacher_option) {
 }
 
 // Get evaluations
-$report_department = $is_leader ? $raw_department : '';
+$report_department = $raw_department;
 $evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '');
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 

@@ -34,6 +34,33 @@ function normalizeSubjectDisplay($subject) {
 // This keeps behavior consistent across Dean/Coordinator/President/VP views.
 try {
     if ($db) {
+        // Dedicated schedule history table for advance scheduling.
+        $db->exec("
+            CREATE TABLE IF NOT EXISTS teacher_schedules (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                teacher_id INT NOT NULL,
+                evaluation_id INT NULL,
+                academic_year VARCHAR(20) NOT NULL,
+                semester VARCHAR(10) NOT NULL,
+                schedule_start DATETIME NOT NULL,
+                schedule_end DATETIME NULL,
+                room VARCHAR(255) NULL,
+                focus_json TEXT NULL,
+                subject_area VARCHAR(255) NULL,
+                subject VARCHAR(255) NULL,
+                form_type ENUM('iso','peac','both') NOT NULL DEFAULT 'iso',
+                scheduled_department VARCHAR(100) NULL,
+                scheduled_by INT NULL,
+                status ENUM('scheduled','rescheduled','cancelled','completed') NOT NULL DEFAULT 'scheduled',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_teacher_schedules_teacher (teacher_id),
+                INDEX idx_teacher_schedules_eval (evaluation_id),
+                INDEX idx_teacher_schedules_slot (teacher_id, schedule_start),
+                UNIQUE KEY uniq_teacher_schedule_slot (teacher_id, schedule_start)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+
         // Ensure per-schedule observer acceptance support exists.
         $taEvalCol = $db->query("SHOW COLUMNS FROM teacher_assignments LIKE 'eval_id'")->fetch(PDO::FETCH_ASSOC);
         if (!$taEvalCol) {
@@ -524,9 +551,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (!in_array($_SESSION['role'] ?? '', $allowed_accept_roles, true)) {
         $_SESSION['error'] = 'Only Dean/Principal/Coordinator can accept reschedule requests.';
     } else {
-        $eval_id_accept = (int)($_POST['eval_id'] ?? 0);
-        $notif_id_accept = (int)($_POST['notification_id'] ?? 0);
-        $teacher_id_accept = 0;
+    $eval_id_accept = (int)($_POST['eval_id'] ?? 0);
+    $notif_id_accept = (int)($_POST['notification_id'] ?? 0);
+    $teacher_id_accept = 0;
+    $request_schedule_key_accept = '';
 
         // Permanent fix:
         // Use notification row as source of truth when available, because
@@ -536,17 +564,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $notifSrc = $db->prepare("SELECT teacher_id, link, request_eval_id, request_schedule_key
                                           FROM notifications
                                           WHERE id = :nid
-                                            AND user_id = :uid
                                             AND type = 'reschedule_request'
                                           LIMIT 1");
                 $notifSrc->execute([
-                    ':nid' => $notif_id_accept,
-                    ':uid' => (int)($_SESSION['user_id'] ?? 0)
+                    ':nid' => $notif_id_accept
                 ]);
                 $notifRow = $notifSrc->fetch(PDO::FETCH_ASSOC);
                 if ($notifRow) {
                     $teacher_id_accept = (int)($notifRow['teacher_id'] ?? 0);
                     $dbEval = (int)($notifRow['request_eval_id'] ?? 0);
+                    $request_schedule_key_accept = strtolower(trim((string)($notifRow['request_schedule_key'] ?? '')));
                     if ($dbEval > 0) $eval_id_accept = $dbEval;
                     $lnk = trim((string)($notifRow['link'] ?? ''));
                     if ($eval_id_accept <= 0 && $lnk !== '') {
@@ -560,7 +587,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         }
                     }
                 }
-            } catch (Exception $e) {}
+            } catch (Exception $e) {
+                // Backward compatibility when request_* columns are not present yet.
+                try {
+                    $notifSrcLegacy = $db->prepare("SELECT teacher_id, link
+                                                    FROM notifications
+                                                    WHERE id = :nid
+                                                      AND type = 'reschedule_request'
+                                                    LIMIT 1");
+                    $notifSrcLegacy->execute([
+                        ':nid' => $notif_id_accept
+                    ]);
+                    $notifRowLegacy = $notifSrcLegacy->fetch(PDO::FETCH_ASSOC);
+                    if ($notifRowLegacy) {
+                        $teacher_id_accept = (int)($notifRowLegacy['teacher_id'] ?? 0);
+                        $lnk = trim((string)($notifRowLegacy['link'] ?? ''));
+                        if ($lnk !== '') {
+                            $parts = parse_url($lnk);
+                            if (!empty($parts['query'])) {
+                                parse_str($parts['query'], $qsNotif);
+                                $parsedEval = (int)($qsNotif['eval_id'] ?? 0);
+                                $parsedTeacher = (int)($qsNotif['teacher_id'] ?? 0);
+                                if ($parsedEval > 0) $eval_id_accept = $parsedEval;
+                                if ($parsedTeacher > 0) $teacher_id_accept = $parsedTeacher;
+                            }
+                        }
+                    }
+                } catch (Exception $e2) {}
+            }
         }
 
         if ($eval_id_accept <= 0 && $teacher_id_accept <= 0) {
@@ -576,30 +630,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     throw new Exception('Teacher for request not found.');
                 }
 
-                // Mark request notification(s) as read for current approver.
-                if ($notif_id_accept > 0) {
-                    $readStmt = $db->prepare("UPDATE notifications
-                                              SET is_read = 1
-                                              WHERE id = :nid
-                                                AND user_id = :uid
-                                                AND type = 'reschedule_request'");
-                    $readStmt->execute([
-                        ':nid' => $notif_id_accept,
-                        ':uid' => (int)($_SESSION['user_id'] ?? 0)
-                    ]);
-                } else {
-                    $pat1 = '%eval_id=' . $eval_id_accept . '%';
-                    $readAllStmt = $db->prepare("UPDATE notifications
-                                                 SET is_read = 1
-                                                 WHERE user_id = :uid
-                                                   AND teacher_id = :tid
-                                                   AND type = 'reschedule_request'
-                                                   AND link LIKE :pat1");
-                    $readAllStmt->execute([
-                        ':uid' => (int)($_SESSION['user_id'] ?? 0),
-                        ':tid' => $teacher_id_accept,
-                        ':pat1' => $pat1
-                    ]);
+                // Mark matching request notification(s) as read for ALL recipients
+                // so the pending badge is consistent across evaluator accounts.
+                if ($teacher_id_accept > 0) {
+                    if ($eval_id_accept > 0) {
+                        $readAllStmt = $db->prepare("UPDATE notifications
+                                                     SET is_read = 1
+                                                     WHERE teacher_id = :tid
+                                                       AND type = 'reschedule_request'
+                                                       AND (
+                                                           request_eval_id = :eid
+                                                           OR (request_eval_id IS NULL AND link LIKE :pat1)
+                                                       )");
+                        $readAllStmt->execute([
+                            ':tid' => $teacher_id_accept,
+                            ':eid' => $eval_id_accept,
+                            ':pat1' => ('%eval_id=' . $eval_id_accept . '%')
+                        ]);
+                    } elseif ($request_schedule_key_accept !== '') {
+                        $readAllBySlotStmt = $db->prepare("UPDATE notifications
+                                                           SET is_read = 1
+                                                           WHERE teacher_id = :tid
+                                                             AND type = 'reschedule_request'
+                                                             AND LOWER(TRIM(request_schedule_key)) = :slotkey");
+                        $readAllBySlotStmt->execute([
+                            ':tid' => $teacher_id_accept,
+                            ':slotkey' => $request_schedule_key_accept
+                        ]);
+                    } else {
+                        $readAllTeacherStmt = $db->prepare("UPDATE notifications
+                                                            SET is_read = 1
+                                                            WHERE teacher_id = :tid
+                                                              AND type = 'reschedule_request'");
+                        $readAllTeacherStmt->execute([':tid' => $teacher_id_accept]);
+                    }
                 }
 
                 // Notify teacher that request was accepted.
@@ -751,16 +815,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $reschedule_teacher_id_post !== '' &&
             ((string)$reschedule_teacher_id_post === (string)$teacher_id)
         );
-        // If a teacher already has an active schedule, require using
-        // explicit reschedule mode (instead of creating another schedule).
-        if (!$is_reschedule && $current_teacher_schedule !== '') {
-            $_SESSION['error'] = 'This teacher already has an active schedule. Use Reschedule to correct or update the existing schedule.';
-            $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
-            if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
-            if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
-            if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode($_GET['status']);
-            header("Location: $redirect");
-            exit();
+        // Advance scheduling is allowed; do not block just because
+        // teachers.evaluation_schedule currently has a value.
+        // Normal "Set Schedule" supports advance scheduling.
+        // Block only exact duplicate timeslot per teacher.
+        $existing_active_eval_id = 0;
+        if (!$is_reschedule) {
+            $dup_active_stmt = $db->prepare("
+                SELECT id
+                FROM evaluations
+                WHERE teacher_id = :tid
+                  AND observation_date = :obs_date
+                  AND COALESCE(observation_time, '00:00:00') = COALESCE(:obs_time, '00:00:00')
+                  AND COALESCE(academic_year, '') = COALESCE(:ay, '')
+                  AND COALESCE(semester, '') = COALESCE(:sem, '')
+                ORDER BY id DESC
+                LIMIT 1
+            ");
+            $dup_active_stmt->execute([
+                ':tid' => $teacher_id,
+                ':obs_date' => $observation_date,
+                ':obs_time' => $observation_time,
+                ':ay' => $academic_year_for_insert,
+                ':sem' => ($post_semester ?: $filter_semester),
+            ]);
+            $existing_active_eval_id = (int)($dup_active_stmt->fetchColumn() ?: 0);
+            if ($existing_active_eval_id > 0) {
+                $_SESSION['error'] = 'This exact schedule already exists for the selected teacher.';
+                $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
+                if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
+                if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
+                if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode($_GET['status']);
+                header("Location: $redirect");
+                exit();
+            }
         }
         // After saving a new schedule (including reschedule), the active row
         // should be in "Scheduled" state again in the remarks column.
@@ -797,9 +885,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 exit();
             }
         } else {
-            // For normal "Set Schedule": ALWAYS CREATE NEW evaluation record
-            // This allows teachers to have multiple scheduled observations
-            $eval_id = null;  // Force creation of new evaluation record
+            // For normal "Set Schedule": create a new evaluation row for each
+            // valid schedule slot (advance scheduling).
+            $eval_id = null;
         }
         
         // Determine current user's name
@@ -855,6 +943,88 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ':status' => $target_eval_status
             ]);
             $eval_id = $db->lastInsertId();
+        }
+
+        // Persist schedule history row (one row per scheduled slot).
+        // Reschedule updates existing linked row when available; otherwise inserts.
+        try {
+            $slot_status = $is_reschedule ? 'rescheduled' : 'scheduled';
+            if ($is_reschedule) {
+                $sched_upd = $db->prepare("UPDATE teacher_schedules
+                                           SET schedule_start = :schedule_start,
+                                               schedule_end = :schedule_end,
+                                               room = :room,
+                                               focus_json = :focus_json,
+                                               subject_area = :subject_area,
+                                               subject = :subject,
+                                               form_type = :form_type,
+                                               scheduled_department = :scheduled_department,
+                                               scheduled_by = :scheduled_by,
+                                               status = :status,
+                                               updated_at = NOW()
+                                           WHERE evaluation_id = :evaluation_id
+                                             AND teacher_id = :teacher_id
+                                           LIMIT 1");
+                $sched_upd->execute([
+                    ':schedule_start' => $schedule,
+                    ':schedule_end' => ($schedule_end !== '' ? $schedule_end : null),
+                    ':room' => $room,
+                    ':focus_json' => $focus_json,
+                    ':subject_area' => $subject_area,
+                    ':subject' => $subject,
+                    ':form_type' => $form_type,
+                    ':scheduled_department' => ($scheduled_department !== '' ? $scheduled_department : null),
+                    ':scheduled_by' => (int)($_SESSION['user_id'] ?? 0),
+                    ':status' => $slot_status,
+                    ':evaluation_id' => (int)$eval_id,
+                    ':teacher_id' => (int)$teacher_id
+                ]);
+                if ((int)$sched_upd->rowCount() === 0) {
+                    $sched_ins = $db->prepare("INSERT INTO teacher_schedules
+                        (teacher_id, evaluation_id, academic_year, semester, schedule_start, schedule_end, room, focus_json, subject_area, subject, form_type, scheduled_department, scheduled_by, status)
+                        VALUES
+                        (:teacher_id, :evaluation_id, :academic_year, :semester, :schedule_start, :schedule_end, :room, :focus_json, :subject_area, :subject, :form_type, :scheduled_department, :scheduled_by, :status)");
+                    $sched_ins->execute([
+                        ':teacher_id' => (int)$teacher_id,
+                        ':evaluation_id' => (int)$eval_id,
+                        ':academic_year' => (string)$academic_year_for_insert,
+                        ':semester' => (string)($post_semester ?: $filter_semester),
+                        ':schedule_start' => $schedule,
+                        ':schedule_end' => ($schedule_end !== '' ? $schedule_end : null),
+                        ':room' => $room,
+                        ':focus_json' => $focus_json,
+                        ':subject_area' => $subject_area,
+                        ':subject' => $subject,
+                        ':form_type' => $form_type,
+                        ':scheduled_department' => ($scheduled_department !== '' ? $scheduled_department : null),
+                        ':scheduled_by' => (int)($_SESSION['user_id'] ?? 0),
+                        ':status' => $slot_status
+                    ]);
+                }
+            } else {
+                $sched_ins = $db->prepare("INSERT INTO teacher_schedules
+                    (teacher_id, evaluation_id, academic_year, semester, schedule_start, schedule_end, room, focus_json, subject_area, subject, form_type, scheduled_department, scheduled_by, status)
+                    VALUES
+                    (:teacher_id, :evaluation_id, :academic_year, :semester, :schedule_start, :schedule_end, :room, :focus_json, :subject_area, :subject, :form_type, :scheduled_department, :scheduled_by, :status)");
+                $sched_ins->execute([
+                    ':teacher_id' => (int)$teacher_id,
+                    ':evaluation_id' => (int)$eval_id,
+                    ':academic_year' => (string)$academic_year_for_insert,
+                    ':semester' => (string)($post_semester ?: $filter_semester),
+                    ':schedule_start' => $schedule,
+                    ':schedule_end' => ($schedule_end !== '' ? $schedule_end : null),
+                    ':room' => $room,
+                    ':focus_json' => $focus_json,
+                    ':subject_area' => $subject_area,
+                    ':subject' => $subject,
+                    ':form_type' => $form_type,
+                    ':scheduled_department' => ($scheduled_department !== '' ? $scheduled_department : null),
+                    ':scheduled_by' => (int)($_SESSION['user_id'] ?? 0),
+                    ':status' => $slot_status
+                ]);
+            }
+        } catch (Exception $e) {
+            // Keep existing workflow alive; evaluations remain source-of-truth.
         }
         
         // Also update teachers table so row ownership (`scheduled_department`) always
@@ -950,7 +1120,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     FROM teacher_assignments ta
                     JOIN users u ON u.id = ta.evaluator_id
                     WHERE ta.teacher_id = :tid
-                      AND u.role IN ('president','vice_president')
+                      AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('president','vice_president')
                       AND u.status = 'active'
                       AND u.email IS NOT NULL
                       AND u.email != ''
@@ -968,7 +1138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 FROM teacher_assignments ta
                 JOIN users u ON u.id = ta.evaluator_id
                 WHERE ta.teacher_id = :tid
-                  AND u.role IN ('president','vice_president')
+                  AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('president','vice_president')
             ");
             $clr_pvp->execute([':tid' => $teacher_id]);
         } catch (Exception $e) {}
@@ -981,6 +1151,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if ($is_reschedule && isset($_SESSION['reschedule_once'])) {
             unset($_SESSION['reschedule_once']);
         }
+        // Clear stale pending reschedule-request notifications for this teacher
+        // once a new schedule/reschedule is successfully saved.
+        try {
+            $clear_req = $db->prepare("
+                UPDATE notifications
+                SET is_read = 1
+                WHERE teacher_id = :tid
+                  AND type = 'reschedule_request'
+                  AND is_read = 0
+            ");
+            $clear_req->execute([':tid' => (int)$teacher_id]);
+        } catch (Exception $e) {}
+
         if (!$teacher_update_ok) {
             $error_message = "Failed to set schedule.";
         }
@@ -1302,8 +1485,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $sig_data = null;
             }
             $signed_count = 0;
+            $updated_count = 0;
             $signed_eval_ids = [];
             $has_upcoming = false;
+            $seen_targets = [];
             foreach ($signed_items as $item) {
                 $target_eval_ids = [];
                 if ($item === 'upcoming') {
@@ -1341,6 +1526,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $target_eval_ids = [(int)$item];
                 }
                 foreach ($target_eval_ids as $eval_id) {
+                $targetKey = ($eval_id === null) ? 'upcoming' : ('eval_' . (int)$eval_id);
+                if (isset($seen_targets[$targetKey])) {
+                    continue;
+                }
+                $seen_targets[$targetKey] = true;
                 // Check if already signed
                 // Determine department for this signature
                 $sign_dept = null;
@@ -1365,7 +1555,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $check = $db->prepare("SELECT id FROM observation_plan_acknowledgments WHERE teacher_id = :tid AND academic_year = :ay AND semester = :sem AND evaluation_id = :eid LIMIT 1");
                     $check->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':eid' => $eval_id]);
                 }
-                if ($check->rowCount() === 0) {
+                $existingAckId = (int)($check->fetchColumn() ?: 0);
+                if ($existingAckId <= 0) {
                     $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, department, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :dept, :eid, NOW(), :sig)");
                     $ins->execute([':tid' => $my_teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':dept' => $sign_dept, ':eid' => $eval_id, ':sig' => $sig_data]);
                     $signed_count++;
@@ -1374,11 +1565,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     } else {
                         $has_upcoming = true;
                     }
+                } else {
+                    // Permanent fix for multi-select signing:
+                    // keep existing row but refresh signature + timestamp so print/reports
+                    // always have a per-row signature for the selected schedule.
+                    $upd = $db->prepare("UPDATE observation_plan_acknowledgments
+                                         SET signature = :sig,
+                                             department = COALESCE(:dept, department),
+                                             acknowledged_at = NOW()
+                                         WHERE id = :id");
+                    $upd->execute([
+                        ':sig' => $sig_data,
+                        ':dept' => $sign_dept,
+                        ':id' => $existingAckId
+                    ]);
+                    $updated_count++;
+                    if ($eval_id !== null) {
+                        $signed_eval_ids[] = $eval_id;
+                    } else {
+                        $has_upcoming = true;
+                    }
                 }
                 }
             }
-            if ($signed_count > 0) {
-                $success_message = "Successfully signed {$signed_count} observation schedule(s).";
+            if (($signed_count + $updated_count) > 0) {
+                $total_processed = $signed_count + $updated_count;
+                $success_message = "Successfully signed {$total_processed} observation schedule(s).";
                 // Determine departments of signed schedules
                 $signed_depts = [];
                 if (!empty($signed_eval_ids)) {
@@ -1536,7 +1748,7 @@ if ($view_mode === 'my_observation' && $has_teacher_record) {
                       WHERE ta.teacher_id = :tid
                         AND (
                             u.department = :dept
-                            OR u.role IN ('president','vice_president')
+                            OR LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('president','vice_president')
                         )
                         AND u.status = 'active'
                       ORDER BY u.name";
@@ -1699,7 +1911,7 @@ if ($is_leader) {
                     )
               )
               AND (t.user_id IS NULL OR t.user_id != :current_user_id)
-              AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
+              AND (tu.id IS NULL OR LOWER(REPLACE(TRIM(tu.role), ' ', '_')) NOT IN ('dean','principal','president','vice_president'))
               AND e.academic_year = :academic_year
               AND e.semester = :semester
               ORDER BY t.name ASC";
@@ -1847,7 +2059,7 @@ if ($is_leader) {
                       )
                       AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                       AND (t.user_id IS NULL OR t.user_id != :current_user_id)
-                      AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
+                      AND (tu.id IS NULL OR LOWER(REPLACE(TRIM(tu.role), ' ', '_')) NOT IN ('dean','principal','president','vice_president'))
                       AND NOT EXISTS (
                           SELECT 1 FROM evaluations e2
                           WHERE e2.teacher_id = t.id
@@ -2062,7 +2274,8 @@ $get_required_observers = function(int $teacher_id, int $eval_id, string $dept, 
         } catch (Exception $e) {}
     }
 
-    // Include President/VP only when they explicitly accepted as observer.
+    // Include President/VP when they explicitly accepted as observer for this teacher.
+    // Do not restrict by eval_id to avoid missing accepted observers across merged slot rows.
     if ($teacher_id > 0) {
         try {
             $pvp_stmt = $db->prepare(
@@ -2070,17 +2283,12 @@ $get_required_observers = function(int $teacher_id, int $eval_id, string $dept, 
                  FROM teacher_assignments ta
                  JOIN users u ON u.id = ta.evaluator_id
                  WHERE ta.teacher_id = :teacher_id
-                   AND (
-                        (:eval_id > 0 AND (ta.eval_id = :eval_id OR ta.eval_id IS NULL))
-                        OR (:eval_id = 0 AND ta.eval_id IS NULL)
-                   )
                    AND u.status = 'active'
-                   AND u.role IN ('president','vice_president')
+                   AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('president','vice_president')
                  ORDER BY u.name"
             );
             $pvp_stmt->execute([
-                ':teacher_id' => $teacher_id,
-                ':eval_id' => $eval_id
+                ':teacher_id' => $teacher_id
             ]);
             while ($pn = $pvp_stmt->fetchColumn()) {
                 $pn = trim((string)$pn);
@@ -2114,6 +2322,8 @@ if (in_array($_SESSION['role'], ['dean', 'principal'])) {
 $seen_ids = [];
 $teachers_list = [];
 $exclude_current_user_from_observers = false;
+$slot_end_by_eval_id = [];
+$slot_end_by_teacher_start = [];
 
 // Build teacher role map: teacher_id → user role (for filtering observers)
 $teacher_role_map = [];
@@ -2141,6 +2351,36 @@ $focus_labels = [
     'teacher_actions' => 'Teacher Actions',
     'student_learning_actions' => 'Student Learning Actions'
 ];
+
+// Row-specific schedule end lookup (prevents losing end time when teacher-level
+// latest schedule fields point to a different row).
+try {
+    $slotStmt = $db->prepare(
+        "SELECT evaluation_id, teacher_id, schedule_start, schedule_end
+         FROM teacher_schedules
+         WHERE academic_year = :ay
+           AND semester = :sem"
+    );
+    $slotStmt->execute([
+        ':ay' => (string)$academic_year,
+        ':sem' => (string)$semester
+    ]);
+    while ($sr = $slotStmt->fetch(PDO::FETCH_ASSOC)) {
+        $eid = (int)($sr['evaluation_id'] ?? 0);
+        $tid = (int)($sr['teacher_id'] ?? 0);
+        $sstart = trim((string)($sr['schedule_start'] ?? ''));
+        $send = trim((string)($sr['schedule_end'] ?? ''));
+        if ($eid > 0 && $send !== '' && !isset($slot_end_by_eval_id[$eid])) {
+            $slot_end_by_eval_id[$eid] = $send;
+        }
+        if ($tid > 0 && $sstart !== '' && $send !== '') {
+            $key = $tid . '|' . date('Y-m-d H:i', strtotime($sstart));
+            if (!isset($slot_end_by_teacher_start[$key])) {
+                $slot_end_by_teacher_start[$key] = $send;
+            }
+        }
+    }
+} catch (Exception $e) {}
 
 // Process teachers with evaluations
 foreach ($eval_teachers as $t) {
@@ -2215,6 +2455,14 @@ foreach ($eval_teachers as $t) {
     // - schedule-only rows: use current teacher schedule fields
     $sched_dt = $t['evaluation_schedule'] ?? '';
     $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
+    if ($eval_id > 0 && !empty($slot_end_by_eval_id[$eval_id])) {
+        $sched_dt_end = $slot_end_by_eval_id[$eval_id];
+    } elseif (!empty($sched_dt)) {
+        $slot_key_lookup = ((int)$tid) . '|' . date('Y-m-d H:i', strtotime((string)$sched_dt));
+        if (!empty($slot_end_by_teacher_start[$slot_key_lookup])) {
+            $sched_dt_end = $slot_end_by_teacher_start[$slot_key_lookup];
+        }
+    }
     if ($is_eval_row && !empty($obs_date)) {
         $schedule_data[$row_key]['day_time'] = date('l', strtotime($obs_date));
         $obs_time_fmt = trim((string)($t['observation_time'] ?? ''));
@@ -2547,21 +2795,22 @@ if (!empty($filter_status)) {
 }
 $dean_role_display = ucfirst(str_replace('_', ' ', $_SESSION['role']));
 
-// Pending reschedule requests for current evaluator (used in Observation Plan UI)
+// Pending reschedule requests (shared across recipients) for Observation Plan UI.
 $pending_reschedule_requests = [];
 $pending_reschedule_by_teacher = [];
+$pending_reschedule_by_slot = [];
 try {
-    $pendingStmt = $db->prepare("SELECT id, teacher_id, link, created_at, request_eval_id
+    $pendingStmt = $db->prepare("SELECT id, teacher_id, link, created_at, request_eval_id, request_schedule_key
                                  FROM notifications
-                                 WHERE user_id = :uid
-                                   AND type = 'reschedule_request'
+                                 WHERE type = 'reschedule_request'
                                    AND is_read = 0
                                  ORDER BY id DESC");
-    $pendingStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+    $pendingStmt->execute();
     while ($pr = $pendingStmt->fetch(PDO::FETCH_ASSOC)) {
         $ptid = (int)($pr['teacher_id'] ?? 0);
         if ($ptid <= 0) continue;
         $peval = (int)($pr['request_eval_id'] ?? 0);
+        $pslot = strtolower(trim((string)($pr['request_schedule_key'] ?? '')));
         $plink = trim((string)($pr['link'] ?? ''));
         if ($peval <= 0 && $plink !== '') {
             $parts = parse_url($plink);
@@ -2574,8 +2823,18 @@ try {
         if (!isset($pending_reschedule_requests[$pkey])) {
             $pending_reschedule_requests[$pkey] = [
                 'notification_id' => (int)($pr['id'] ?? 0),
-                'created_at' => $pr['created_at'] ?? null
+                'created_at' => $pr['created_at'] ?? null,
+                'request_schedule_key' => $pslot
             ];
+        }
+        if ($pslot !== '') {
+            $slotKey = $ptid . '|' . $pslot;
+            if (!isset($pending_reschedule_by_slot[$slotKey])) {
+                $pending_reschedule_by_slot[$slotKey] = [
+                    'notification_id' => (int)($pr['id'] ?? 0),
+                    'created_at' => $pr['created_at'] ?? null
+                ];
+            }
         }
         if (!isset($pending_reschedule_by_teacher[$ptid])) {
             $pending_reschedule_by_teacher[$ptid] = [
@@ -2585,7 +2844,38 @@ try {
             ];
         }
     }
-} catch (Exception $e) {}
+} catch (Exception $e) {
+    // Backward compatibility when request_eval_id column does not exist yet.
+    try {
+        $pendingStmtLegacy = $db->prepare("SELECT id, teacher_id, link, created_at
+                                           FROM notifications
+                                           WHERE type = 'reschedule_request'
+                                             AND is_read = 0
+                                           ORDER BY id DESC");
+        $pendingStmtLegacy->execute();
+        while ($pr = $pendingStmtLegacy->fetch(PDO::FETCH_ASSOC)) {
+            $ptid = (int)($pr['teacher_id'] ?? 0);
+            if ($ptid <= 0) continue;
+            $peval = 0;
+            $plink = trim((string)($pr['link'] ?? ''));
+            if ($plink !== '') {
+                $parts = parse_url($plink);
+                if (!empty($parts['query'])) {
+                    parse_str($parts['query'], $qs);
+                    $peval = (int)($qs['eval_id'] ?? 0);
+                }
+            }
+            if ($peval <= 0) continue;
+            $pkey = $ptid . '|' . $peval;
+            if (!isset($pending_reschedule_requests[$pkey])) {
+                $pending_reschedule_requests[$pkey] = [
+                    'notification_id' => (int)($pr['id'] ?? 0),
+                    'created_at' => $pr['created_at'] ?? null
+                ];
+            }
+        }
+    } catch (Exception $e2) {}
+}
 
 // Get dean's signature from most recent evaluation
 $dean_signature = '';
@@ -2624,7 +2914,7 @@ if ($is_leader) {
                  LEFT JOIN users tu ON tu.id = t.user_id
                  WHERE t.status = 'active'
                    AND (t.user_id IS NULL OR t.user_id != :current_user_id)
-                   AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
+                   AND (tu.id IS NULL OR LOWER(REPLACE(TRIM(tu.role), ' ', '_')) NOT IN ('dean','principal','president','vice_president'))
                  ORDER BY t.name ASC";
     $st_stmt = $db->prepare($st_query);
     $st_stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
@@ -2862,10 +3152,11 @@ try {
         #scheduleModal .modal-dialog {
             width: min(680px, calc(100vw - 1.25rem));
             max-width: min(680px, calc(100vw - 1.25rem));
-            margin: 0.8rem auto;
+            margin: 0.6rem auto;
         }
         #scheduleModal .modal-content {
             max-height: min(88dvh, 820px);
+            max-height: min(88vh, 820px);
             height: auto;
         }
         /* Keep footer visible: only body scrolls inside dialog */
@@ -2876,10 +3167,40 @@ try {
             overflow-y: auto;
         }
         #scheduleModal .modal-body {
+            position: relative;
             overflow-y: auto;
             overscroll-behavior: contain;
             -webkit-overflow-scrolling: touch;
             padding: 0.85rem 1rem 1rem;
+        }
+        #scheduleModal .modal-scroll-controls {
+            position: sticky;
+            bottom: 0.5rem;
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.4rem;
+            pointer-events: none;
+            z-index: 4;
+            margin-top: 0.35rem;
+        }
+        #scheduleModal .modal-scroll-btn {
+            pointer-events: auto;
+            width: 34px;
+            height: 34px;
+            border: 0;
+            border-radius: 999px;
+            background: rgba(13, 110, 253, 0.95);
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #scheduleModal .modal-scroll-btn[hidden] {
+            display: none !important;
+        }
+        #scheduleModal .modal-scroll-btn:hover {
+            background: #0b5ed7;
         }
         #scheduleModal .modal-header {
             padding: 0.75rem 1rem;
@@ -3040,6 +3361,15 @@ try {
             }
             #scheduleModal .form-check-label {
                 font-size: 0.95rem;
+            }
+        }
+        @media (max-height: 820px) {
+            #scheduleModal .modal-dialog {
+                margin: 0.35rem auto;
+            }
+            #scheduleModal .modal-content {
+                max-height: calc(100vh - 0.7rem);
+                max-height: calc(100dvh - 0.7rem);
             }
         }
         @media (max-width: 992px) {
@@ -3533,7 +3863,7 @@ try {
                                                                           AND u.status = 'active'
                                                                           AND (
                                                                               u.department = :dept
-                                                                              OR u.role IN ('dean','principal','president','vice_president')
+                                                                              OR LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal','president','vice_president')
                                                                           )
                                                                         ORDER BY u.name");
                                         $ev_assign_stmt->execute([':tid' => $my_teacher_id, ':dept' => $ev_dept]);
@@ -3836,27 +4166,42 @@ try {
                                     $can_reschedule = $has_schedule;
                                     $row_eval_id_for_req = (int)($eval_data[$row_key]['eval_id'] ?? 0);
                                     $pending_req_key = $tid . '|' . $row_eval_id_for_req;
-                                    // Prefer exact match first, but allow teacher-level fallback when
-                                    // representative eval_id differs from the requested row id.
+                                    // Strict row-level request matching:
+                                    // only the exact requested schedule row should carry the pending state.
+                                    // (No teacher-level fallback, which caused all rows to be flagged.)
                                     if ($row_eval_id_for_req > 0) {
-                                        $pending_req_info = $pending_reschedule_requests[$pending_req_key]
-                                            ?? $pending_reschedule_requests[$tid . '|0']
-                                            ?? ($pending_reschedule_by_teacher[$tid] ?? null);
+                                        $pending_req_info = $pending_reschedule_requests[$pending_req_key] ?? null;
                                     } else {
-                                        $pending_req_info = $pending_reschedule_requests[$pending_req_key]
-                                            ?? $pending_reschedule_requests[$tid . '|0']
-                                            ?? ($pending_reschedule_by_teacher[$tid] ?? null)
-                                            ?? null;
+                                        // Upcoming rows are keyed as eval_id=0.
+                                        $pending_req_info = $pending_reschedule_requests[$tid . '|0'] ?? null;
+                                    }
+                                    // Fallback: match by schedule slot key when request_eval_id is 0
+                                    // but request_schedule_key is available.
+                                    if (empty($pending_req_info)) {
+                                        $row_date_for_req = trim((string)($eval_data[$row_key]['date'] ?? ''));
+                                        $row_time_for_req = trim((string)($t['observation_time'] ?? ''));
+                                        if (($row_time_for_req === '' || $row_time_for_req === '00:00:00' || $row_time_for_req === '00:00') && !empty($t['evaluation_schedule'])) {
+                                            $row_time_for_req = date('H:i', strtotime((string)$t['evaluation_schedule']));
+                                        }
+                                        $row_sched_key = '';
+                                        if ($row_date_for_req !== '') {
+                                            $dtRaw = $row_date_for_req . ($row_time_for_req !== '' ? (' ' . $row_time_for_req) : ' 00:00');
+                                            $row_sched_key = implode('|', [
+                                                date('Y-m-d H:i', strtotime($dtRaw)),
+                                                strtolower(trim((string)($sd['semester'] ?? $semester))),
+                                                strtolower(trim((string)$academic_year)),
+                                                strtolower(trim((string)($sd['room'] ?? ''))),
+                                                strtolower(trim((string)($sd['subject_area'] ?? ''))),
+                                                strtolower(trim((string)normalizeSubjectDisplay((string)($sd['subject'] ?? '')))),
+                                            ]);
+                                        }
+                                        if ($row_sched_key !== '') {
+                                            $pending_req_info = $pending_reschedule_by_slot[$tid . '|' . $row_sched_key] ?? null;
+                                        }
                                     }
                                     $has_pending_req = !empty($pending_req_info);
                                     $pending_req_id = (int)($pending_req_info['notification_id'] ?? 0);
-                                    // Strict row-level request gating: only the exact requested eval row
-                                    // should enable Accept/Reschedule actions in UI.
-                                    $has_pending_req_strict = false;
-                                    if ($row_eval_id_for_req > 0) {
-                                        $strict_key = $tid . '|' . $row_eval_id_for_req;
-                                        $has_pending_req_strict = !empty($pending_reschedule_requests[$strict_key]);
-                                    }
+                                    $has_pending_req_strict = $has_pending_req;
                                 ?>
                                 <tr>
                                     <td>
@@ -3876,7 +4221,7 @@ try {
                                             <?php endif; ?>
                                         <?php endif; ?>
                                         <?php echo $counter++ . '. ' . htmlspecialchars($t['name']); ?>
-                                        <?php if ($has_pending_req): ?>
+                                        <?php if ($has_pending_req && !$is_done): ?>
                                             <span class="badge bg-warning text-dark ms-1">Reschedule Request</span>
                                         <?php endif; ?>
                                     </td>
@@ -4212,6 +4557,15 @@ try {
                         <div class="mb-3">
                             <label class="form-label fw-bold">Classroom/Room <span class="text-danger">*</span></label>
                             <input type="text" class="form-control" id="modal_evaluation_room" name="evaluation_room" required placeholder="e.g., Room 101, Laboratory B">
+                        </div>
+
+                        <div class="modal-scroll-controls" id="scheduleModalScrollControls" aria-label="Modal scroll controls">
+                            <button type="button" class="modal-scroll-btn" id="scheduleModalScrollUp" title="Scroll up" aria-label="Scroll up" hidden>
+                                <i class="fas fa-chevron-up"></i>
+                            </button>
+                            <button type="button" class="modal-scroll-btn" id="scheduleModalScrollDown" title="Scroll down" aria-label="Scroll down" hidden>
+                                <i class="fas fa-chevron-down"></i>
+                            </button>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -5383,6 +5737,39 @@ document.addEventListener('DOMContentLoaded', function() {
         updateSubjectLabels();
         new bootstrap.Modal(modalEl).show();
     }
+});
+
+document.addEventListener('DOMContentLoaded', function() {
+    var modalEl = document.getElementById('scheduleModal');
+    if (!modalEl) return;
+
+    var bodyEl = modalEl.querySelector('.modal-body');
+    var upBtn = document.getElementById('scheduleModalScrollUp');
+    var downBtn = document.getElementById('scheduleModalScrollDown');
+    if (!bodyEl || !upBtn || !downBtn) return;
+
+    function refreshScrollButtons() {
+        var canScroll = bodyEl.scrollHeight > bodyEl.clientHeight + 2;
+        var atTop = bodyEl.scrollTop <= 4;
+        var atBottom = (bodyEl.scrollTop + bodyEl.clientHeight) >= (bodyEl.scrollHeight - 4);
+
+        upBtn.hidden = !canScroll || atTop;
+        downBtn.hidden = !canScroll || atBottom;
+    }
+
+    upBtn.addEventListener('click', function() {
+        bodyEl.scrollBy({ top: -260, behavior: 'smooth' });
+    });
+    downBtn.addEventListener('click', function() {
+        bodyEl.scrollBy({ top: 260, behavior: 'smooth' });
+    });
+
+    bodyEl.addEventListener('scroll', refreshScrollButtons);
+    modalEl.addEventListener('shown.bs.modal', function() {
+        setTimeout(refreshScrollButtons, 0);
+    });
+    window.addEventListener('resize', refreshScrollButtons);
+    refreshScrollButtons();
 });
 </script>
 </body>

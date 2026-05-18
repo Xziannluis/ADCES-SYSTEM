@@ -59,10 +59,9 @@ if ($is_leader) {
 }
 $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
 
-// Account-scoped visibility:
-// - Leaders (president/vice_president) may view department scope.
-// - All other evaluator roles (including dean/principal/coordinators) see only their own evaluations.
-$scoped_evaluator_id = $is_leader ? null : (int)($_SESSION['user_id'] ?? 0);
+// Leaders and department heads can view completed evaluations in their scope.
+// Coordinators are scoped to only their own completed evaluations.
+$scoped_evaluator_id = ($is_leader || $is_department_head) ? null : (int)($_SESSION['user_id'] ?? 0);
 
 // Build Academic Year list based on actual evaluations (so dropdown only shows years with data)
 $available_years = [];
@@ -95,7 +94,19 @@ try {
     } else {
     $yearsQuery = "SELECT DISTINCT e.academic_year
         FROM evaluations e
+        INNER JOIN teachers t ON e.teacher_id = t.id
         WHERE e.department = :department
+          AND (
+            (t.department = :department AND (t.evaluation_schedule IS NOT NULL AND t.evaluation_schedule != ''))
+            OR 
+            (t.department != :department AND EXISTS (
+              SELECT 1 FROM teacher_assignments ta 
+              WHERE ta.teacher_id = t.id 
+              AND ta.evaluator_id IN (
+                SELECT ea.evaluator_id FROM evaluator_assignments ea WHERE ea.program = :department
+              )
+            ))
+          )
           AND e.academic_year IS NOT NULL
           AND e.academic_year <> ''
           AND e.status = 'completed'
@@ -117,10 +128,21 @@ try {
     $teachersQuery = "SELECT DISTINCT t.id, t.name
         FROM evaluations e
         INNER JOIN teachers t ON e.teacher_id = t.id
-        WHERE e.department = :department
+        WHERE (
+          (t.department = :department AND (t.evaluation_schedule IS NOT NULL AND t.evaluation_schedule != ''))
+          OR 
+          (t.department != :department AND EXISTS (
+            SELECT 1 FROM teacher_assignments ta 
+            WHERE ta.teacher_id = t.id 
+            AND ta.evaluator_id IN (
+              SELECT ea.evaluator_id FROM evaluator_assignments ea WHERE ea.program = :department
+            )
+          ))
+        )
           AND e.status = 'completed'
           AND e.overall_avg IS NOT NULL
-          AND e.overall_avg > 0";
+          AND e.overall_avg > 0
+          AND e.department = :department";
     if ($scoped_evaluator_id !== null) {
         $teachersQuery .= " AND e.evaluator_id = :evaluator_id";
     }
@@ -165,10 +187,8 @@ foreach ($available_teachers as $teacher_option) {
 }
 
 // Get evaluations for reporting
-// Department filter MUST be applied to all users to prevent cross-department visibility
-// Leaders see all evaluations in the selected department
-// Non-leaders see only their own evaluations in their department
-$report_department = $raw_department;
+// Leaders can view all; non-leaders are scoped to their own completed evaluations.
+$report_department = $is_leader ? $raw_department : '';
 // Exclude the current user from appearing as an observed teacher (dean/principal see department reports)
 $exclude_self = ($scoped_evaluator_id === null) ? $_SESSION['user_id'] : null;
 $evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', $form_type_filter, $exclude_self);

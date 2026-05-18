@@ -59,10 +59,9 @@ if ($is_leader) {
 }
 $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
 
-// Account-scoped visibility:
-// - Leaders (president/vice_president) may view department scope.
-// - All other evaluator roles (including dean/principal/coordinators) see only their own evaluations.
-$scoped_evaluator_id = $is_leader ? null : (int)($_SESSION['user_id'] ?? 0);
+// Leaders and department heads can view completed evaluations in their scope.
+// Coordinators are scoped to only their own completed evaluations.
+$scoped_evaluator_id = ($is_leader || $is_department_head) ? null : (int)($_SESSION['user_id'] ?? 0);
 
 // Build Academic Year list based on actual evaluations (so dropdown only shows years with data)
 $available_years = [];

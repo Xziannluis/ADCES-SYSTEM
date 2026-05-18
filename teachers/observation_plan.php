@@ -232,7 +232,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $error_message = 'Please select a schedule to request reschedule.';
     } else {
         try {
-            $tReqStmt = $db->prepare("SELECT id, name, department, scheduled_department, evaluation_schedule, evaluation_room, evaluation_subject FROM teachers WHERE id = :tid LIMIT 1");
+            $tReqStmt = $db->prepare("SELECT id, name, department, scheduled_department, evaluation_schedule, evaluation_room, evaluation_subject, evaluation_subject_area FROM teachers WHERE id = :tid LIMIT 1");
             $tReqStmt->execute([':tid' => $teacher_id]);
             $tReq = $tReqStmt->fetch(PDO::FETCH_ASSOC);
 
@@ -243,12 +243,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $req_sched = trim((string)($tReq['evaluation_schedule'] ?? ''));
             $req_room = trim((string)($tReq['evaluation_room'] ?? ''));
             $req_subject = trim((string)($tReq['evaluation_subject'] ?? ''));
+            $req_subject_area = trim((string)($tReq['evaluation_subject_area'] ?? ''));
             $req_eval_id = null;
 
             if ($req_item !== 'upcoming') {
                 $req_eval_id = (int)$req_item;
                 if ($req_eval_id > 0) {
-                    $eReqStmt = $db->prepare("SELECT e.observation_date, e.observation_time, e.observation_room, e.subject_observed, u.department AS evaluator_department
+                    $eReqStmt = $db->prepare("SELECT e.observation_date, e.observation_time, e.observation_room, e.subject_observed, e.subject_area, u.department AS evaluator_department
                                               FROM evaluations e
                                               LEFT JOIN users u ON u.id = e.evaluator_id
                                               WHERE e.id = :eid AND e.teacher_id = :tid AND e.academic_year = :ay AND e.semester IN (:sem1, :sem2)
@@ -269,6 +270,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         }
                         $req_room = trim((string)($eReq['observation_room'] ?? $req_room));
                         $req_subject = trim((string)($eReq['subject_observed'] ?? $req_subject));
+                        $req_subject_area = trim((string)($eReq['subject_area'] ?? $req_subject_area));
                         $evDept = trim((string)($eReq['evaluator_department'] ?? ''));
                         if ($evDept !== '') $teacher_dept_req = $evDept;
                     }
@@ -333,7 +335,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $pvStmt = $db->prepare("SELECT DISTINCT u.id, u.name, u.email, u.role
                                     FROM users u
                                     WHERE u.status = 'active'
-                                      AND u.role IN ('president','vice_president')");
+                                      AND u.role IN ('president','vice_president','vice president')");
             $pvStmt->execute();
             $observerRows = array_merge($observerRows, $pvStmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
 
@@ -371,6 +373,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $msg = "Teacher {$teacher_name_req} requested reschedule for {$formatted_sched}. Reason: {$reason_text}.";
             if ($req_room !== '') $msg .= " Room: {$req_room}.";
             if ($req_subject !== '') $msg .= " Subject: {$req_subject}.";
+            if ($req_subject_area !== '') $msg .= " Subject Area: {$req_subject_area}.";
 
             $notifLink = 'observation_plan.php?' . http_build_query([
                 'open_reschedule' => 1,
@@ -379,6 +382,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 'semester' => $req_semester,
                 'academic_year' => $req_academic_year
             ]);
+            $req_schedule_key = '';
+            if ($req_sched) {
+                $req_schedule_key = implode('|', [
+                    date('Y-m-d H:i', strtotime((string)$req_sched)),
+                    strtolower(trim((string)$req_semester)),
+                    strtolower(trim((string)$req_academic_year)),
+                    strtolower(trim((string)$req_room)),
+                    strtolower(trim((string)$req_subject_area)),
+                    strtolower(trim((string)$req_subject))
+                ]);
+            }
 
             foreach ($recipients as $rcp) {
                 if (!empty($rcp['email'])) {
@@ -390,15 +404,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     );
                 }
                 try {
-                    $notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link) VALUES (:uid, :tid, 'reschedule_request', :title, :msg, :link)");
+                    $notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, request_eval_id, request_schedule_key, is_read)
+                                           VALUES (:uid, :tid, 'reschedule_request', :title, :msg, :link, :request_eval_id, :request_schedule_key, 0)");
                     $notif->execute([
                         ':uid' => (int)$rcp['id'],
                         ':tid' => (int)$teacher_id,
                         ':title' => $subject_line,
                         ':msg' => $msg,
-                        ':link' => $notifLink
+                        ':link' => $notifLink,
+                        ':request_eval_id' => (int)($req_eval_id ?? 0),
+                        ':request_schedule_key' => $req_schedule_key
                     ]);
-                } catch (Exception $e) {}
+                } catch (Exception $e) {
+                    // Backward compatibility fallback
+                    try {
+                        $notifLegacy = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, is_read)
+                                                     VALUES (:uid, :tid, 'reschedule_request', :title, :msg, :link, 0)");
+                        $notifLegacy->execute([
+                            ':uid' => (int)$rcp['id'],
+                            ':tid' => (int)$teacher_id,
+                            ':title' => $subject_line,
+                            ':msg' => $msg,
+                            ':link' => $notifLink
+                        ]);
+                    } catch (Exception $e2) {}
+                }
             }
 
             $success_message = 'Reschedule request sent successfully.';
@@ -658,12 +688,26 @@ if ($has_matching_schedule && $schedule_date_key !== null && isset($eval_groups[
     }
     $current_completed_evaluators = [];
     foreach ($current_group as $cev) {
-        if (($cev['status'] ?? '') === 'completed') {
+        $cev_status = strtolower(trim((string)($cev['status'] ?? '')));
+        if ($cev_status === 'completed') {
             $current_completed_evaluators[] = $cev['evaluator_name'] ?? '';
         }
     }
     $current_completed_evaluators = array_values(array_unique(array_filter($current_completed_evaluators)));
-    $current_all_done = count($current_completed_evaluators) >= count($all_observer_names) && count($all_observer_names) > 0;
+    $normalize_name_key = function($name) {
+        $name = strtolower(trim((string)$name));
+        $name = preg_replace('/\s+/', ' ', $name);
+        return $name;
+    };
+    $current_completed_keys = array_values(array_unique(array_filter(array_map($normalize_name_key, $current_completed_evaluators))));
+    $current_required_keys = array_values(array_unique(array_filter(array_map($normalize_name_key, $all_observer_names))));
+    $current_all_done = !empty($current_required_keys);
+    foreach ($current_required_keys as $req_key) {
+        if (!in_array($req_key, $current_completed_keys, true)) {
+            $current_all_done = false;
+            break;
+        }
+    }
     $has_unsigned_current_group = !$current_all_done && !$current_group_signed;
 }
 if ($show_upcoming && !isset($signed_map['upcoming'])) {
@@ -1038,17 +1082,58 @@ try {
                                     $completed_evaluators = [];
                                     $group_all_rows_completed = true;
                                     foreach ($group as $g_ev) {
-                                        if (($g_ev['status'] ?? '') === 'completed') {
+                                        $g_ev_status = strtolower(trim((string)($g_ev['status'] ?? '')));
+                                        if ($g_ev_status === 'completed') {
                                             $completed_evaluators[] = $g_ev['evaluator_name'] ?? '';
                                         } else {
                                             $group_all_rows_completed = false;
                                         }
                                     }
                                     $completed_evaluators = array_values(array_unique(array_filter($completed_evaluators)));
+                                    $normalize_name_key = function($name) {
+                                        $name = strtolower(trim((string)$name));
+                                        // Collapse repeated inner spaces so minor formatting does not break matching.
+                                        $name = preg_replace('/\s+/', ' ', $name);
+                                        return $name;
+                                    };
+                                    $completed_evaluator_keys = array_values(array_unique(array_filter(array_map($normalize_name_key, $completed_evaluators))));
+                                    $required_observer_keys = array_values(array_unique(array_filter(array_map($normalize_name_key, $row_observers))));
+                                    $all_required_observers_completed = !empty($required_observer_keys);
+                                    foreach ($required_observer_keys as $req_key) {
+                                        if (!in_array($req_key, $completed_evaluator_keys, true)) {
+                                            $all_required_observers_completed = false;
+                                            break;
+                                        }
+                                    }
                                     $row_can_sign = false;
+                                    $row_is_signed = false;
+                                    $row_is_done = false;
+
+                                    // Mark completed only after the schedule slot has passed.
+                                    $row_end_ts = null;
+                                    if ($is_current && $has_matching_schedule) {
+                                        $row_start_raw = trim((string)($teacher_data['evaluation_schedule'] ?? ''));
+                                        if ($row_start_raw !== '' && strtotime($row_start_raw) !== false) {
+                                            $row_end_ts = strtotime($row_start_raw);
+                                        }
+                                        $row_end_raw = trim((string)($teacher_data['evaluation_schedule_end'] ?? ''));
+                                        if ($row_end_raw !== '' && strtotime($row_end_raw) !== false) {
+                                            $row_end_ts = strtotime($row_end_raw);
+                                        }
+                                    } else {
+                                        $row_date_raw = trim((string)($first_ev['observation_date'] ?? ''));
+                                        $row_time_raw = trim((string)($first_ev['observation_time'] ?? ''));
+                                        if ($row_date_raw !== '') {
+                                            $row_dt_raw = $row_date_raw . ' ' . (($row_time_raw !== '' && $row_time_raw !== '00:00:00' && $row_time_raw !== '00:00') ? $row_time_raw : '00:00:00');
+                                            if (strtotime($row_dt_raw) !== false) {
+                                                $row_end_ts = strtotime($row_dt_raw);
+                                            }
+                                        }
+                                    }
+                                    $row_time_passed = ($row_end_ts !== null && time() >= $row_end_ts);
 
                                     if ($is_current) {
-                                        $all_done = count($completed_evaluators) >= count($all_observer_names) && count($all_observer_names) > 0;
+                                        $all_done = $all_required_observers_completed;
                                         // Treat legacy/upcoming signature as signed for current group.
                                         $current_group_signed = isset($signed_map['upcoming']);
                                         foreach ($group as $g_sig_ev) {
@@ -1058,34 +1143,49 @@ try {
                                                 break;
                                             }
                                         }
-                                        if ($all_done) {
+                                        if ($all_done && $row_time_passed) {
                                             $status_badge = '<span class="badge bg-success">Completed</span>';
-                                        } elseif (count($completed_evaluators) > 0) {
+                                            $row_is_done = true;
+                                        } elseif ($all_done || count($completed_evaluators) > 0) {
                                             $status_badge = '<span class="badge bg-info">In Progress</span>';
                                         } else {
                                             $status_badge = '<span class="badge bg-info">Upcoming</span>';
                                         }
+                                        $row_is_signed = $current_group_signed;
                                         $row_can_sign = !$all_done && !$current_group_signed;
                                     } else {
-                                        if ($group_all_rows_completed) {
+                                        $group_signed = false;
+                                        foreach ($group as $g_sig_ev) {
+                                            $g_sig_id = (int)($g_sig_ev['id'] ?? 0);
+                                            if ($g_sig_id > 0 && isset($signed_map[$g_sig_id])) {
+                                                $group_signed = true;
+                                                break;
+                                            }
+                                        }
+                                        if ($all_required_observers_completed && $row_time_passed) {
                                             $status_badge = '<span class="badge bg-success">Completed</span>';
+                                            $row_is_done = true;
                                         } else {
                                             $status_badge = '<span class="badge bg-info">In Progress</span>';
                                         }
+                                        $row_is_signed = $group_signed;
                                     }
                             ?>
                             <tr>
                                 <td class="text-center">
                                     <?php if ($is_current): ?>
-                                        <input type="checkbox" class="form-check-input schedule-item-check <?php echo $row_can_sign ? 'sign-item-check' : ''; ?>" value="upcoming" data-schedule-label="<?php echo htmlspecialchars('Current: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
+                                        <?php if ($row_is_done || $row_is_signed): ?>
+                                            <input type="checkbox" class="form-check-input" checked disabled style="width:20px;height:20px;" title="<?php echo $row_is_done ? 'Completed schedule' : 'Signed schedule'; ?>">
+                                        <?php else: ?>
+                                            <input type="checkbox" class="form-check-input schedule-item-check <?php echo $row_can_sign ? 'sign-item-check' : ''; ?>" value="upcoming" data-schedule-label="<?php echo htmlspecialchars('Current: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
+                                        <?php endif; ?>
                                     <?php else: ?>
                                         <?php
                                             $group_rep_id = (int)($first_ev['id'] ?? 0);
-                                            $group_signed = ($group_rep_id > 0 && isset($signed_map[$group_rep_id]));
                                             $group_can_select = (!$group_all_rows_completed && !$group_signed && $group_rep_id > 0);
                                         ?>
-                                        <?php if ($group_all_rows_completed): ?>
-                                            <i class="fas fa-check-circle text-success" title="Evaluation completed"></i>
+                                        <?php if ($row_is_done || $row_is_signed): ?>
+                                            <input type="checkbox" class="form-check-input" checked disabled style="width:20px;height:20px;" title="<?php echo $row_is_done ? 'Completed schedule' : 'Signed schedule'; ?>">
                                         <?php else: ?>
                                             <input type="checkbox" class="form-check-input schedule-item-check <?php echo $group_can_select ? 'sign-item-check' : ''; ?>" value="<?php echo $group_rep_id; ?>" data-schedule-label="<?php echo htmlspecialchars('Schedule: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
                                         <?php endif; ?>
@@ -1104,7 +1204,12 @@ try {
                                         <?php if ($i < count($row_observers) - 1): ?><br><?php endif; ?>
                                     <?php endforeach; ?>
                                 </td>
-                                <td class="text-center"><?php echo $status_badge; ?></td>
+                                <td class="text-center">
+                                    <?php echo $status_badge; ?>
+                                    <?php if ($row_is_signed): ?>
+                                        <br><span class="badge bg-success mt-1">Signed</span>
+                                    <?php endif; ?>
+                                </td>
                             </tr>
                             <?php endforeach; ?>
 
@@ -1124,7 +1229,11 @@ try {
                             ?>
                             <tr>
                                 <td class="text-center">
-                                    <input type="checkbox" class="form-check-input schedule-item-check <?php echo !$upcoming_signed ? 'sign-item-check' : ''; ?>" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars($row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
+                                    <?php if ($upcoming_signed): ?>
+                                        <input type="checkbox" class="form-check-input" checked disabled style="width:20px;height:20px;" title="Signed schedule">
+                                    <?php else: ?>
+                                        <input type="checkbox" class="form-check-input schedule-item-check sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars($row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
+                                    <?php endif; ?>
                                 </td>
                                 <td class="text-center"><?php echo htmlspecialchars($row_semester_display); ?></td>
                                 <td style="font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>

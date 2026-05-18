@@ -123,29 +123,22 @@ if ($is_leader) {
 
 // For "both" form type: check which teachers already have a completed ISO evaluation by this evaluator
 $completedIsoTeachers = [];
-// Slot-based completion map:
-// key = teacher_id|Y-m-d|H:i|form_type  (time normalized to minute)
-$completedEvalSlots = [];
+// General check: which teachers have already been fully evaluated by this evaluator (any form type)
+$completedEvalTeachers = [];
 try {
-    $isoCheckStmt = $db->prepare("SELECT teacher_id, evaluation_form_type, observation_date, observation_time
-                                  FROM evaluations
-                                  WHERE evaluator_id = :evaluator_id
-                                    AND status = 'completed'
-                                    AND observation_date IS NOT NULL");
+    $isoCheckStmt = $db->prepare("SELECT DISTINCT teacher_id, evaluation_form_type FROM evaluations WHERE evaluator_id = :evaluator_id AND status = 'completed'");
     $isoCheckStmt->bindParam(':evaluator_id', $_SESSION['user_id']);
     $isoCheckStmt->execute();
     while ($row = $isoCheckStmt->fetch(PDO::FETCH_ASSOC)) {
         $tid = (int)$row['teacher_id'];
         $ft = $row['evaluation_form_type'] ?? 'iso';
-        if (!in_array($ft, ['iso', 'peac', 'both'], true)) $ft = 'iso';
-        $od = trim((string)($row['observation_date'] ?? ''));
-        if ($od === '') continue;
-        $ot = trim((string)($row['observation_time'] ?? ''));
-        if ($ot === '' || $ot === '00:00') $ot = '00:00:00';
-        $slotDate = date('Y-m-d', strtotime($od));
-        $slotTime = date('H:i', strtotime($ot));
-        $slotKey = $tid . '|' . $slotDate . '|' . $slotTime . '|' . $ft;
-        $completedEvalSlots[$slotKey] = true;
+        if ($ft === 'iso') {
+            $completedIsoTeachers[$tid] = true;
+        }
+        if (!isset($completedEvalTeachers[$tid])) {
+            $completedEvalTeachers[$tid] = [];
+        }
+        $completedEvalTeachers[$tid][$ft] = true;
     }
 } catch (PDOException $e) {}
 
@@ -200,52 +193,6 @@ try {
         }
     }
 } catch (PDOException $e) {}
-
-// Pending schedule rows per teacher/evaluator (supports advance scheduling).
-// We use this to determine which schedule is due "now" instead of relying only
-// on teachers.evaluation_schedule (latest snapshot).
-$pendingScheduleStmt = null;
-// Fallback for dean/principal: closest pending slot for the teacher in the
-// same department even when evaluator-specific row is missing.
-$pendingScheduleAnyStmt = null;
-try {
-    $pendingScheduleStmt = $db->prepare(
-        "SELECT id, observation_date, observation_time, observation_room, subject_area, subject_observed,
-                evaluation_focus, semester, evaluation_form_type, status
-         FROM evaluations
-         WHERE teacher_id = :tid
-           AND evaluator_id = :eid
-           AND observation_date IS NOT NULL
-           AND (
-                status IN ('draft','pending')
-                OR status IS NULL
-                OR status = ''
-           )
-         ORDER BY observation_date ASC, COALESCE(observation_time, '00:00:00') ASC, id ASC"
-    );
-    $pendingScheduleAnyStmt = $db->prepare(
-        "SELECT e.id, e.observation_date, e.observation_time, e.observation_room, e.subject_area, e.subject_observed,
-                e.evaluation_focus, e.semester, e.evaluation_form_type, e.status
-         FROM evaluations e
-         INNER JOIN teachers t ON t.id = e.teacher_id
-         WHERE e.teacher_id = :tid
-           AND e.observation_date IS NOT NULL
-           AND (
-                e.status IN ('draft','pending')
-                OR e.status IS NULL
-                OR e.status = ''
-           )
-           AND (
-                t.department = :dept
-                OR t.scheduled_department = :dept2
-                OR e.department = :dept3
-           )
-         ORDER BY e.observation_date ASC, COALESCE(e.observation_time, '00:00:00') ASC, e.id ASC"
-    );
-} catch (Exception $e) {
-    $pendingScheduleStmt = null;
-    $pendingScheduleAnyStmt = null;
-}
 
 // Handle form submission
 if($_POST && isset($_POST['submit_evaluation'])) {
@@ -350,124 +297,12 @@ if($_POST && isset($_POST['submit_evaluation'])) {
 
                             $scheduleRaw = $sched_for_this_dept ? ($teacher_row['evaluation_schedule'] ?? '') : '';
                             $scheduleRoom = $sched_for_this_dept ? ($teacher_row['evaluation_room'] ?? '') : '';
-                            $viewer_id_eval = (int)($_SESSION['user_id'] ?? 0);
-                            $scheduled_by_viewer = ((int)($teacher_row['scheduled_by'] ?? 0) === $viewer_id_eval);
-
-                            // Resolve effective schedule for this evaluator by closest date/time to now
-                            // (absolute distance), so the nearest slot is always used.
-                            $effective_schedule_row = null;
-                            if ($sched_for_this_dept && $pendingScheduleStmt) {
-                                try {
-                                    $pendingScheduleStmt->execute([
-                                        ':tid' => (int)$teacher_row['id'],
-                                        ':eid' => (int)$_SESSION['user_id']
-                                    ]);
-                                    $pendingRows = $pendingScheduleStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                                    if (!empty($pendingRows)) {
-                                        $tz_eval = new DateTimeZone('Asia/Manila');
-                                        $now_eval = new DateTime('now', $tz_eval);
-                                        $bestRow = null;
-                                        $bestDiff = null;
-                                        foreach ($pendingRows as $pr) {
-                                            $od = trim((string)($pr['observation_date'] ?? ''));
-                                            if ($od === '') continue;
-                                            $ot = trim((string)($pr['observation_time'] ?? ''));
-                                            if ($ot === '' || $ot === '00:00:00') $ot = '00:00:00';
-                                            $dtRaw = $od . ' ' . $ot;
-                                            $dtObj = new DateTime($dtRaw, $tz_eval);
-                                            $diff = abs($dtObj->getTimestamp() - $now_eval->getTimestamp());
-                                            if ($bestDiff === null || $diff < $bestDiff) {
-                                                $bestDiff = $diff;
-                                                $bestRow = $pr;
-                                            }
-                                        }
-                                        if ($bestRow) {
-                                            $effective_schedule_row = $bestRow;
-                                        }
-                                    }
-                                } catch (Exception $e) {
-                                    $effective_schedule_row = null;
-                                }
-                            }
-
-                            // Dean/Principal fallback: if own evaluator-slot is missing,
-                            // use closest pending slot for this teacher in their department.
-                            if (!$effective_schedule_row && $is_dean_or_principal && $sched_for_this_dept && $pendingScheduleAnyStmt) {
-                                try {
-                                    $pendingScheduleAnyStmt->execute([
-                                        ':tid' => (int)$teacher_row['id'],
-                                        ':dept' => (string)$viewer_dept_eval,
-                                        ':dept2' => (string)$viewer_dept_eval,
-                                        ':dept3' => (string)$viewer_dept_eval
-                                    ]);
-                                    $anyRows = $pendingScheduleAnyStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                                    if (!empty($anyRows)) {
-                                        $tz_eval = new DateTimeZone('Asia/Manila');
-                                        $now_eval = new DateTime('now', $tz_eval);
-                                        $bestRow = null;
-                                        $bestDiff = null;
-                                        foreach ($anyRows as $pr) {
-                                            $od = trim((string)($pr['observation_date'] ?? ''));
-                                            if ($od === '') continue;
-                                            $ot = trim((string)($pr['observation_time'] ?? ''));
-                                            if ($ot === '' || $ot === '00:00:00') $ot = '00:00:00';
-                                            $dtObj = new DateTime($od . ' ' . $ot, $tz_eval);
-                                            $diff = abs($dtObj->getTimestamp() - $now_eval->getTimestamp());
-                                            if ($bestDiff === null || $diff < $bestDiff) {
-                                                $bestDiff = $diff;
-                                                $bestRow = $pr;
-                                            }
-                                        }
-                                        if ($bestRow) {
-                                            $effective_schedule_row = $bestRow;
-                                        }
-                                    }
-                                } catch (Exception $e) {
-                                    // keep null, guarded below
-                                }
-                            }
-
-                            if ($effective_schedule_row) {
-                                $obsDateEff = trim((string)($effective_schedule_row['observation_date'] ?? ''));
-                                $obsTimeEff = trim((string)($effective_schedule_row['observation_time'] ?? ''));
-                                if ($obsDateEff !== '') {
-                                    $scheduleRaw = $obsDateEff . ($obsTimeEff !== '' ? (' ' . $obsTimeEff) : '');
-                                }
-                                $scheduleRoom = trim((string)($effective_schedule_row['observation_room'] ?? $scheduleRoom));
-                                $teacher_row['evaluation_room'] = $scheduleRoom;
-                                if (trim((string)($effective_schedule_row['evaluation_focus'] ?? '')) !== '') {
-                                    $teacher_row['evaluation_focus'] = $effective_schedule_row['evaluation_focus'];
-                                }
-                                if (trim((string)($effective_schedule_row['semester'] ?? '')) !== '') {
-                                    $teacher_row['evaluation_semester'] = $effective_schedule_row['semester'];
-                                }
-                                if (trim((string)($effective_schedule_row['subject_area'] ?? '')) !== '') {
-                                    $teacher_row['evaluation_subject_area'] = $effective_schedule_row['subject_area'];
-                                }
-                                if (trim((string)($effective_schedule_row['subject_observed'] ?? '')) !== '') {
-                                    $teacher_row['evaluation_subject'] = $effective_schedule_row['subject_observed'];
-                                }
-                                if (trim((string)($effective_schedule_row['evaluation_form_type'] ?? '')) !== '') {
-                                    $teacher_row['evaluation_form_type'] = $effective_schedule_row['evaluation_form_type'];
-                                }
-                            }
-
-                            // Permanent guard:
-                            // Do not show another evaluator's latest teacher snapshot schedule.
-                            // If there is no pending row for this evaluator, allow legacy fallback
-                            // only when the schedule was created by the current evaluator.
-                            if (!$effective_schedule_row && !$scheduled_by_viewer) {
-                                $scheduleRaw = '';
-                                $scheduleRoom = '';
-                            }
-
                             $has_schedule = !empty($scheduleRaw) || !empty($scheduleRoom);
                             $can_evaluate_now = false;
                             $schedule_message = 'No schedule set';
                             $schedule_badge_class = 'bg-secondary';
                             $schedule_badge_text = 'Schedule required';
                             $schedule_display = trim((string)$scheduleRaw);
-                            $scheduleEndRawEffective = (string)($teacher_row['evaluation_schedule_end'] ?? '');
                             $schedule_block_message = 'No schedule is set. Please ask the dean/principal to set one first.';
 
                             if (!empty($scheduleRaw)) {
@@ -481,7 +316,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     
                                     // Check if schedule_end has passed
                                     $scheduleEndRaw = $teacher_row['evaluation_schedule_end'] ?? '';
-                                    $scheduleEndRawEffective = (string)$scheduleEndRaw;
                                     $schedule_ended = false;
                                     
                                     if (!empty($scheduleEndRaw)) {
@@ -496,7 +330,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         // Schedule end time has passed - evaluation window closed
                                         $can_evaluate_now = false;
                                         $schedule_badge_class = 'bg-danger';
-                                        $schedule_badge_text = 'Closed';
+                                        $schedule_badge_text = 'Schedule Ended';
                                         $schedule_block_message = 'The evaluation deadline has passed. No further changes are allowed.';
                                     } elseif ($now >= $scheduledAt) {
                                         // Between schedule start and end - evaluation allowed
@@ -538,32 +372,18 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                         ?>
                         <?php
                             $teacher_form_type = $teacher_row['evaluation_form_type'] ?? 'iso';
-                            if (!in_array($teacher_form_type, ['iso', 'peac', 'both'], true)) $teacher_form_type = 'iso';
-
-                            // Slot-based completion state (not teacher-lifetime based).
-                            $slot_date = '';
-                            $slot_time = '00:00';
-                            if (!empty($scheduleRaw)) {
-                                $slot_ts = strtotime((string)$scheduleRaw);
-                                if ($slot_ts !== false) {
-                                    $slot_date = date('Y-m-d', $slot_ts);
-                                    $slot_time = date('H:i', $slot_ts);
-                                }
-                            }
+                            $iso_done = isset($completedIsoTeachers[(int)$teacher_row['id']]);
+                            // Check if this evaluator has already completed all required evaluations for this teacher
                             $tid_check = (int)$teacher_row['id'];
-                            $iso_done = false;
-                            $peac_done = false;
+                            $teacher_completed_forms = $completedEvalTeachers[$tid_check] ?? [];
                             $all_done = false;
-                            if ($slot_date !== '') {
-                                $iso_done = !empty($completedEvalSlots[$tid_check . '|' . $slot_date . '|' . $slot_time . '|iso']);
-                                $peac_done = !empty($completedEvalSlots[$tid_check . '|' . $slot_date . '|' . $slot_time . '|peac']);
-                                if ($teacher_form_type === 'both') {
-                                    $all_done = $iso_done && $peac_done;
-                                } elseif ($teacher_form_type === 'peac') {
-                                    $all_done = $peac_done;
-                                } else {
-                                    $all_done = $iso_done;
-                                }
+                            if ($teacher_form_type === 'both') {
+                                $all_done = !empty($teacher_completed_forms['iso']) && !empty($teacher_completed_forms['peac']);
+                            } elseif ($teacher_form_type === 'peac') {
+                                $all_done = !empty($teacher_completed_forms['peac']);
+                            } else {
+                                // iso or default
+                                $all_done = !empty($teacher_completed_forms['iso']);
                             }
 
                             // After completing evaluation, reset to "Schedule required"
@@ -589,7 +409,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 }
                             }
                         ?>
-                        <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'Schedule required for next evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars((string)$scheduleRaw, ENT_QUOTES); ?>" data-schedule-end-raw="<?php echo htmlspecialchars((string)$scheduleEndRawEffective, ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
+                        <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'Schedule required for next evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars($teacher_row['evaluation_schedule'] ?? '', ENT_QUOTES); ?>" data-schedule-end-raw="<?php echo htmlspecialchars($teacher_row['evaluation_schedule_end'] ?? '', ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_row['name']); ?></h6>

@@ -43,13 +43,15 @@ class Evaluation {
         }
 
         // Cross-department support: show department teachers + any teacher this user evaluated
+        // SCHEDULE REQUIREMENT: Teacher must have schedule set in department to appear in reports
         if (!empty($cross_dept_user_id) && !empty($user_department)) {
-            $where[] = '(e.department = :department OR e.evaluator_id = :cross_dept_user_id)';
+            $where[] = '(t.department = :department OR e.evaluator_id = :cross_dept_user_id)';
             $params[':department'] = $user_department;
             $params[':cross_dept_user_id'] = $cross_dept_user_id;
         } elseif (!empty($department)) {
-            // Filter by evaluation's department field (not teacher's primary department)
+            // Department filter: must be in evaluation AND teacher must have schedule in that department
             $where[] = 'e.department = :department';
+            $where[] = '(t.department = :department AND (t.evaluation_schedule IS NOT NULL AND t.evaluation_schedule != \'\'))';
             $params[':department'] = $department;
         }
 
@@ -106,12 +108,15 @@ class Evaluation {
                   FROM " . $this->table_name . " e
                   JOIN teachers t ON e.teacher_id = t.id
                   LEFT JOIN ai_recommendations ai ON e.id = ai.evaluation_id
-                  WHERE e.department = :department
+                  WHERE (t.department = :department" . (!empty($cross_dept_user_id) ? " OR e.evaluator_id = :cross_dept_user_id" : "") . ")
                     AND e.status = 'completed'
                     AND e.overall_avg IS NOT NULL
                     AND e.overall_avg > 0";
         
         $params = [':department' => $department];
+        if (!empty($cross_dept_user_id)) {
+            $params[':cross_dept_user_id'] = $cross_dept_user_id;
+        }
         
         if (!empty($academic_year)) {
             $query .= " AND e.academic_year = :academic_year";

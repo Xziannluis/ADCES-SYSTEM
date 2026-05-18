@@ -142,6 +142,108 @@ class EvaluationController {
         ];
     }
 
+    private function resolveEffectiveScheduleForEvaluator(int $teacherId, int $evaluatorId, string $evaluatorRole = '', string $evaluatorDept = ''): array {
+        $fallback = [
+            'schedule' => null,
+            'room' => null,
+            'semester' => null,
+            'academic_year' => null,
+        ];
+
+        try {
+            $stmt = $this->db->prepare(
+                "SELECT observation_date, observation_time, observation_room, semester, academic_year, subject_observed, subject_area, evaluation_focus
+                 FROM evaluations
+                 WHERE teacher_id = :tid
+                   AND evaluator_id = :eid
+                   AND observation_date IS NOT NULL
+                   AND (
+                        status IN ('draft','pending')
+                        OR status IS NULL
+                        OR status = ''
+                   )
+                 ORDER BY observation_date ASC, COALESCE(observation_time, '00:00:00') ASC, id ASC"
+            );
+            $stmt->execute([':tid' => $teacherId, ':eid' => $evaluatorId]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $tz = new DateTimeZone(self::EVALUATION_TIMEZONE);
+            $now = new DateTime('now', $tz);
+            $row = null;
+            $dt = null;
+            $bestDiff = null;
+            foreach ($rows as $r) {
+                $d = trim((string)($r['observation_date'] ?? ''));
+                if ($d === '') continue;
+                $t = trim((string)($r['observation_time'] ?? ''));
+                if ($t === '' || $t === '00:00') $t = '00:00:00';
+                $dtCandidate = new DateTime($d . ' ' . $t, $tz);
+                $diff = abs($dtCandidate->getTimestamp() - $now->getTimestamp());
+                if ($bestDiff === null || $diff < $bestDiff) {
+                    $bestDiff = $diff;
+                    $row = $r;
+                    $dt = $dtCandidate;
+                }
+            }
+
+            // Dean/Principal fallback:
+            // if no evaluator-specific pending slot, use closest pending slot in their department.
+            if ($row === null && in_array($evaluatorRole, ['dean', 'principal'], true) && trim($evaluatorDept) !== '') {
+                $stmtAny = $this->db->prepare(
+                    "SELECT e.observation_date, e.observation_time, e.observation_room, e.semester, e.academic_year, e.subject_observed, e.subject_area, e.evaluation_focus
+                     FROM evaluations e
+                     INNER JOIN teachers t ON t.id = e.teacher_id
+                     WHERE e.teacher_id = :tid
+                       AND e.observation_date IS NOT NULL
+                       AND (
+                            e.status IN ('draft','pending')
+                            OR e.status IS NULL
+                            OR e.status = ''
+                       )
+                       AND (
+                            t.department = :dept
+                            OR t.scheduled_department = :dept2
+                            OR e.department = :dept3
+                       )
+                     ORDER BY e.observation_date ASC, COALESCE(e.observation_time, '00:00:00') ASC, e.id ASC"
+                );
+                $stmtAny->execute([
+                    ':tid' => $teacherId,
+                    ':dept' => $evaluatorDept,
+                    ':dept2' => $evaluatorDept,
+                    ':dept3' => $evaluatorDept
+                ]);
+                $rowsAny = $stmtAny->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                $bestAnyDiff = null;
+                foreach ($rowsAny as $rAny) {
+                    $dAny = trim((string)($rAny['observation_date'] ?? ''));
+                    if ($dAny === '') continue;
+                    $tAny = trim((string)($rAny['observation_time'] ?? ''));
+                    if ($tAny === '' || $tAny === '00:00') $tAny = '00:00:00';
+                    $dtAny = new DateTime($dAny . ' ' . $tAny, $tz);
+                    $diffAny = abs($dtAny->getTimestamp() - $now->getTimestamp());
+                    if ($bestAnyDiff === null || $diffAny < $bestAnyDiff) {
+                        $bestAnyDiff = $diffAny;
+                        $row = $rAny;
+                        $dt = $dtAny;
+                    }
+                }
+            }
+
+            if ($row === null || $dt === null) return $fallback;
+            return [
+                'schedule' => $dt->format('Y-m-d H:i:s'),
+                'room' => trim((string)($row['observation_room'] ?? '')),
+                'semester' => trim((string)($row['semester'] ?? '')),
+                'academic_year' => trim((string)($row['academic_year'] ?? '')),
+                'subject_observed' => trim((string)($row['subject_observed'] ?? '')),
+                'subject_area' => trim((string)($row['subject_area'] ?? '')),
+                'evaluation_focus' => trim((string)($row['evaluation_focus'] ?? '')),
+            ];
+        } catch (Exception $e) {
+            return $fallback;
+        }
+    }
+
     public function submitEvaluation($postData, $evaluatorId) {
         try {
             $this->reusedEvaluationId = 0;
@@ -187,17 +289,28 @@ class EvaluationController {
                 }
             }
 
-            // Accept schedule from either: evaluation_schedule (legacy DATETIME column)
-            // or evaluation_room/evaluation_schedule text fields (newer UI patterns may store schedule info differently).
-            // If your DB only has evaluation_schedule, the COALESCE simply returns that.
-            $scheduleStmt = $this->db->prepare(
-                "SELECT evaluation_schedule, evaluation_room FROM teachers WHERE id = :id LIMIT 1"
+            // Resolve schedule gate using evaluator-specific pending schedule slots first.
+            // This supports advance scheduling (multiple rows) and avoids blocking on a
+            // later "latest teacher snapshot" schedule.
+            $effectiveSchedule = $this->resolveEffectiveScheduleForEvaluator(
+                (int)$teacherId,
+                (int)$evaluatorId,
+                (string)$evaluatorRole,
+                (string)($evaluatorDept ?? '')
             );
-            $scheduleStmt->bindValue(':id', $teacherId);
-            $scheduleStmt->execute();
-            $t = $scheduleStmt->fetch(PDO::FETCH_ASSOC);
-            $scheduleVal = $t['evaluation_schedule'] ?? null;
-            $roomVal = $t['evaluation_room'] ?? null;
+            $scheduleVal = $effectiveSchedule['schedule'] ?? null;
+            $roomVal = $effectiveSchedule['room'] ?? null;
+            if (empty($scheduleVal) && empty($roomVal)) {
+                // Fallback to legacy teacher snapshot when no pending evaluator slot exists.
+                $scheduleStmt = $this->db->prepare(
+                    "SELECT evaluation_schedule, evaluation_room FROM teachers WHERE id = :id LIMIT 1"
+                );
+                $scheduleStmt->bindValue(':id', $teacherId);
+                $scheduleStmt->execute();
+                $t = $scheduleStmt->fetch(PDO::FETCH_ASSOC);
+                $scheduleVal = $t['evaluation_schedule'] ?? null;
+                $roomVal = $t['evaluation_room'] ?? null;
+            }
 
             $scheduleGate = $this->buildScheduleGate(
                 isset($scheduleVal) ? (string)$scheduleVal : null,
@@ -207,17 +320,54 @@ class EvaluationController {
                 throw new Exception($scheduleGate['message']);
             }
 
+            // Force-bind submission to the resolved effective schedule slot so
+            // saved evaluations always map to the correct row (not a later snapshot).
+            if (!empty($effectiveSchedule['schedule'])) {
+                try {
+                    $tzBind = new DateTimeZone(self::EVALUATION_TIMEZONE);
+                    $dtBind = new DateTime((string)$effectiveSchedule['schedule'], $tzBind);
+                    $postData['observation_date'] = $dtBind->format('Y-m-d');
+                    $postData['observation_time'] = $dtBind->format('H:i:s');
+                } catch (Exception $e) {
+                    // keep user-provided values if schedule parse unexpectedly fails
+                }
+            }
+            if (empty($postData['observation_room']) && !empty($effectiveSchedule['room'])) {
+                $postData['observation_room'] = (string)$effectiveSchedule['room'];
+            }
+            if (!empty($effectiveSchedule['subject_observed'])) {
+                $postData['subject_observed'] = (string)$effectiveSchedule['subject_observed'];
+            }
+            if (empty($postData['subject_area']) && !empty($effectiveSchedule['subject_area'])) {
+                $postData['subject_area'] = (string)$effectiveSchedule['subject_area'];
+            }
+            if (empty($postData['evaluation_focus']) && !empty($effectiveSchedule['evaluation_focus'])) {
+                $postData['evaluation_focus'] = (string)$effectiveSchedule['evaluation_focus'];
+            }
+            if ((empty($postData['semester']) || !in_array((string)$postData['semester'], ['1st', '2nd'], true)) && !empty($effectiveSchedule['semester'])) {
+                $postData['semester'] = (string)$effectiveSchedule['semester'];
+            }
+            if (empty($postData['academic_year']) && !empty($effectiveSchedule['academic_year'])) {
+                $postData['academic_year'] = (string)$effectiveSchedule['academic_year'];
+            }
+
             // Enforce teacher acknowledgment for the active schedule cycle.
             // A teacher can only be evaluated after signing the observation plan
             // for the same academic year + semester as the scheduled evaluation.
             $scheduleSemester = (string)($postData['semester'] ?? '');
             if (!in_array($scheduleSemester, ['1st', '2nd'], true)) {
-                $teacherSemStmt = $this->db->prepare("SELECT evaluation_semester FROM teachers WHERE id = :id LIMIT 1");
-                $teacherSemStmt->bindValue(':id', $teacherId);
-                $teacherSemStmt->execute();
-                $scheduleSemester = (string)$teacherSemStmt->fetchColumn();
+                $scheduleSemester = (string)($effectiveSchedule['semester'] ?? '');
+                if (!in_array($scheduleSemester, ['1st', '2nd'], true)) {
+                    $teacherSemStmt = $this->db->prepare("SELECT evaluation_semester FROM teachers WHERE id = :id LIMIT 1");
+                    $teacherSemStmt->bindValue(':id', $teacherId);
+                    $teacherSemStmt->execute();
+                    $scheduleSemester = (string)$teacherSemStmt->fetchColumn();
+                }
             }
             $scheduleAcademicYear = (string)($postData['academic_year'] ?? '');
+            if ($scheduleAcademicYear === '') {
+                $scheduleAcademicYear = (string)($effectiveSchedule['academic_year'] ?? '');
+            }
 
             if ($scheduleAcademicYear !== '' && in_array($scheduleSemester, ['1st', '2nd'], true)) {
                 $ackStmt = $this->db->prepare(
@@ -418,7 +568,7 @@ class EvaluationController {
                    AND academic_year = :ay
                    AND semester = :sem
                    AND observation_date = :obs_date
-                   AND status IN ('draft','rescheduled','pending')
+                   AND (status IN ('draft','pending') OR status IS NULL OR status = '')
                  ORDER BY id DESC
                  LIMIT 1"
             );

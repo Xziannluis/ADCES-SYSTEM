@@ -726,6 +726,7 @@ if (!empty($filter_status)) {
 // Primary match is evaluation_id; fallback is teacher+date slot.
 $ack_eval_map = [];
 $ack_teacher_date_map = [];
+$ack_teacher_latest_map = [];
 try {
     $eval_ids_for_ack = [];
     foreach ($teachers_list as $tt) {
@@ -766,12 +767,16 @@ try {
     while ($ack = $ack_slot_stmt->fetch(PDO::FETCH_ASSOC)) {
         $teacher_id = (int)($ack['teacher_id'] ?? 0);
         $slot_date = trim((string)($ack['slot_date'] ?? ''));
+        $sig_val = trim((string)($ack['signature'] ?? ''));
         if ($teacher_id <= 0 || $slot_date === '') {
             continue;
         }
         $slot_key = $teacher_id . '|' . $slot_date;
         if (!isset($ack_teacher_date_map[$slot_key])) {
-            $ack_teacher_date_map[$slot_key] = trim((string)($ack['signature'] ?? ''));
+            $ack_teacher_date_map[$slot_key] = $sig_val;
+        }
+        if ($sig_val !== '' && !isset($ack_teacher_latest_map[$teacher_id])) {
+            $ack_teacher_latest_map[$teacher_id] = $sig_val;
         }
     }
 } catch (Exception $e) {}
@@ -1017,6 +1022,17 @@ try {
                                 $row_date = !empty($row_date_raw) ? date('Y-m-d', strtotime($row_date_raw)) : '';
                                 $slot_key = ((int)$tid) . '|' . $row_date;
                                 $ack_sig = trim((string)($ack_teacher_date_map[$slot_key] ?? ''));
+                            }
+                            // Keep print consistent with report rows:
+                            // if acknowledgment signature is missing, fallback to
+                            // evaluation-row faculty signature for this slot.
+                            if ($ack_sig === '') {
+                                $ack_sig = trim((string)($eval_data[$rk]['faculty_signature'] ?? ''));
+                            }
+                            // Final fallback: latest teacher acknowledgment signature
+                            // (covers legacy rows where evaluation_id/date linkage differs).
+                            if ($ack_sig === '') {
+                                $ack_sig = trim((string)($ack_teacher_latest_map[(int)$tid] ?? ''));
                             }
                             if ($ack_sig !== ''): ?>
                                 <img src="<?php echo htmlspecialchars($ack_sig); ?>" alt="Teacher Signature" style="max-height: 35px; max-width: 80px;">

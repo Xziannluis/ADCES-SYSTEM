@@ -107,6 +107,7 @@ class Evaluation {
                   JOIN teachers t ON e.teacher_id = t.id
                   LEFT JOIN ai_recommendations ai ON e.id = ai.evaluation_id
                   WHERE e.department = :department
+                    AND (t.department = :department AND (t.evaluation_schedule IS NOT NULL AND t.evaluation_schedule != ''))
                     AND e.status = 'completed'
                     AND e.overall_avg IS NOT NULL
                     AND e.overall_avg > 0";
