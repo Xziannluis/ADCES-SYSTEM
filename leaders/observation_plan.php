@@ -113,16 +113,22 @@ $stmt->execute();
 $eval_teachers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // 2) Teachers with a schedule set but no evaluation yet (upcoming observations)
-// Only show scheduled teachers whose primary department matches
-// Cross-department teachers appear only after being evaluated (via query 1)
+// Show only schedules owned by this department.
+// Fallback to primary/secondary department only for legacy rows with NULL scheduled_department.
 $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                        t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
                        t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
                        t.scheduled_by, t.scheduled_department
                 FROM teachers t" .
                 ($hasTeacherDepartments ? " LEFT JOIN teacher_departments td ON td.teacher_id = t.id" : "") .
-                " WHERE (t.department = :department" .
-                ($hasTeacherDepartments ? " OR td.department = :td_department" : "") . ")
+                " WHERE (
+                        t.scheduled_department = :department
+                        OR (
+                            t.scheduled_department IS NULL
+                            AND (t.department = :department" .
+                            ($hasTeacherDepartments ? " OR td.department = :td_department" : "") . ")
+                        )
+                    )
                   AND t.status = 'active'
                   AND t.evaluation_schedule IS NOT NULL
                   AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')

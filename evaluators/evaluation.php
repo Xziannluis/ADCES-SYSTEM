@@ -29,6 +29,58 @@ $_fs = [
     'approved_by'    => htmlspecialchars($_formSettings['approved_by'] ?? 'President'),
 ];
 
+// Dynamic ISO criteria (EDP-configurable)
+$defaultIsoCriteria = [
+    'communications' => [
+        'Uses an audible voice that can be heard at the back of the room.',
+        'Speaks fluently in the language of instruction.',
+        'Facilitates a dynamic discussion.',
+        'Uses engaging non-verbal cues (facial expression, gestures).',
+        "Uses words & expressions suited to the level of the students."
+    ],
+    'management' => [
+        'The TILO (Topic Intended Learning Outcomes) are clearly presented.',
+        'Recall and connects previous lessons to the new lessons.',
+        'Uses varied and suitable teaching methods.',
+        'Presents lesson in an organized and logical sequence.',
+        'Uses examples and illustrations to clarify lessons.',
+        'Uses instructional materials/technology effectively.',
+        'Asks thought-provoking questions.',
+        'Encourages students to participate in the discussion.',
+        'Provides opportunities for collaborative/cooperative learning.',
+        'Maintains discipline and a learning-conducive environment.',
+        'Manages class time effectively.',
+        'Summarizes key points before ending the class.'
+    ],
+    'assessment' => [
+        'Construct test questions and activities that align to intended outcomes.',
+        'Uses assessment tool that relates specific course competencies stated in the syllabus.',
+        'Design test/quarter/assignments and other assessment tasks that are corrector-based.',
+        'Provides timely feedback to students on their performance.',
+        "Conducts normative assessment before evaluating and grading the learner's performance outcome.",
+        'Monitors the formative assessment results and find ways to ensure learning for the learners.'
+    ]
+];
+$isoCriteria = $defaultIsoCriteria;
+try {
+    $criteriaStmt = $db->prepare("SELECT category, criterion_text
+                                  FROM evaluation_criteria
+                                  WHERE category IN ('communications','management','assessment')
+                                  ORDER BY category, criterion_index ASC");
+    $criteriaStmt->execute();
+    $tmpCriteria = ['communications' => [], 'management' => [], 'assessment' => []];
+    while ($row = $criteriaStmt->fetch(PDO::FETCH_ASSOC)) {
+        $cat = trim((string)($row['category'] ?? ''));
+        $txt = trim((string)($row['criterion_text'] ?? ''));
+        if (isset($tmpCriteria[$cat]) && $txt !== '') $tmpCriteria[$cat][] = $txt;
+    }
+    foreach ($tmpCriteria as $cat => $items) {
+        if (!empty($items)) $isoCriteria[$cat] = $items;
+    }
+} catch (PDOException $e) {
+    // keep defaults
+}
+
 // Note: expired schedules are NOT auto-cleared here.
 // Once the scheduled time passes, the evaluator can proceed to evaluate.
 // Schedules are cleared only after an evaluation is submitted.
@@ -505,18 +557,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         $schedule_badge_text = 'Evaluate this teacher';
                                         $schedule_block_message = '';
 
-                                        // Block if teacher hasn't signed the observation plan
-                                        $teacher_semester = (string)($teacher_row['evaluation_semester'] ?? '');
-                                        $teacher_has_signed = false;
-                                        if ($currentAcademicYear !== '' && in_array($teacher_semester, ['1st', '2nd'], true)) {
-                                            $teacher_has_signed = isset($teacher_signed_map[(int)$teacher_row['id'] . '|' . $currentAcademicYear . '|' . $teacher_semester]);
-                                        }
-                                        if (!$teacher_has_signed) {
-                                            $can_evaluate_now = false;
-                                            $schedule_badge_class = 'bg-warning text-dark';
-                                            $schedule_badge_text = 'Awaiting signature';
-                                            $schedule_block_message = 'This teacher has not yet signed the observation plan. Evaluation is blocked until they sign.';
-                                        }
+                                        // Signature requirement removed - evaluations complete when form is submitted
+                                        // (no longer blocking based on teacher's observation plan signature)
                                     } else {
                                         // Before schedule start time
                                         $schedule_badge_class = 'bg-warning text-dark';
@@ -1288,6 +1330,36 @@ if($_POST && isset($_POST['submit_evaluation'])) {
     <?php include '../includes/footer.php'; ?>
     
     <script>
+        const ISO_CRITERIA = <?php echo json_encode($isoCriteria, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+        const ISO_CATEGORY_COUNTS = {
+            communications: (ISO_CRITERIA.communications || []).length,
+            management: (ISO_CRITERIA.management || []).length,
+            assessment: (ISO_CRITERIA.assessment || []).length
+        };
+
+        function renderDynamicIsoIndicators() {
+            const sections = [
+                { key: 'communications', tbodyId: 'communicationsCompetence' },
+                { key: 'management', tbodyId: 'managementPresentation' },
+                { key: 'assessment', tbodyId: 'assessmentLearning' }
+            ];
+            sections.forEach(({ key, tbodyId }) => {
+                const tbody = document.getElementById(tbodyId);
+                if (!tbody) return;
+                const items = Array.isArray(ISO_CRITERIA[key]) ? ISO_CRITERIA[key] : [];
+                tbody.innerHTML = items.map((text, i) => `
+                    <tr>
+                        <td>${escapeHtml(text)}</td>
+                        <td><input type="radio" name="${key}${i}" value="5" required></td>
+                        <td><input type="radio" name="${key}${i}" value="4"></td>
+                        <td><input type="radio" name="${key}${i}" value="3"></td>
+                        <td><input type="radio" name="${key}${i}" value="2"></td>
+                        <td><input type="radio" name="${key}${i}" value="1"></td>
+                        <td><input type="text" class="form-control form-control-sm" name="${key}_comment${i}" placeholder="Comments"></td>
+                    </tr>
+                `).join('');
+            });
+        }
         // Light UI tweak for disabled teachers
         (function ensureDisabledTeacherStyles() {
             const style = document.createElement('style');
@@ -1487,6 +1559,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
 
         // Set current date for forms
         document.addEventListener('DOMContentLoaded', function() {
+            renderDynamicIsoIndicators();
             const today = toLocalDateInputValue(new Date());
             const observationDate = document.getElementById('observationDate');
             const raterDate = document.getElementById('raterDate');
@@ -1848,7 +1921,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             const commBlocked = hasFocus && !focusArr.includes('communications');
             
             if (!commBlocked) {
-                for (let i = 0; i < 5; i++) {
+                for (let i = 0; i < ISO_CATEGORY_COUNTS.communications; i++) {
                     const selected = document.querySelector(`input[name="communications${i}"]:checked`);
                     if (selected) {
                         commTotal += parseInt(selected.value);
@@ -1866,7 +1939,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             const mgmtBlocked = hasFocus && !focusArr.includes('management');
             
             if (!mgmtBlocked) {
-                for (let i = 0; i < 12; i++) {
+                for (let i = 0; i < ISO_CATEGORY_COUNTS.management; i++) {
                     const selected = document.querySelector(`input[name="management${i}"]:checked`);
                     if (selected) {
                         mgmtTotal += parseInt(selected.value);
@@ -1884,7 +1957,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             const assessBlocked = hasFocus && !focusArr.includes('assessment');
             
             if (!assessBlocked) {
-                for (let i = 0; i < 6; i++) {
+                for (let i = 0; i < ISO_CATEGORY_COUNTS.assessment; i++) {
                     const selected = document.querySelector(`input[name="assessment${i}"]:checked`);
                     if (selected) {
                         assessTotal += parseInt(selected.value);
@@ -2324,15 +2397,15 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             let totalRequired = 0;
             let selectors = [];
             if (!hasFocus || focusArr.includes('communications')) {
-                totalRequired += 5;
+                totalRequired += (ISO_CATEGORY_COUNTS.communications || 0);
                 selectors.push('input[name^="communications"]:checked');
             }
             if (!hasFocus || focusArr.includes('management')) {
-                totalRequired += 12;
+                totalRequired += (ISO_CATEGORY_COUNTS.management || 0);
                 selectors.push('input[name^="management"]:checked');
             }
             if (!hasFocus || focusArr.includes('assessment')) {
-                totalRequired += 6;
+                totalRequired += (ISO_CATEGORY_COUNTS.assessment || 0);
                 selectors.push('input[name^="assessment"]:checked');
             }
 
@@ -2368,9 +2441,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 const hasFocusAI = Array.isArray(focusArrAI) && focusArrAI.length > 0;
                 let totalReq = 0;
                 let sels = [];
-                if (!hasFocusAI || focusArrAI.includes('communications')) { totalReq += 5; sels.push('input[name^="communications"]:checked'); }
-                if (!hasFocusAI || focusArrAI.includes('management')) { totalReq += 12; sels.push('input[name^="management"]:checked'); }
-                if (!hasFocusAI || focusArrAI.includes('assessment')) { totalReq += 6; sels.push('input[name^="assessment"]:checked'); }
+                if (!hasFocusAI || focusArrAI.includes('communications')) { totalReq += (ISO_CATEGORY_COUNTS.communications || 0); sels.push('input[name^="communications"]:checked'); }
+                if (!hasFocusAI || focusArrAI.includes('management')) { totalReq += (ISO_CATEGORY_COUNTS.management || 0); sels.push('input[name^="management"]:checked'); }
+                if (!hasFocusAI || focusArrAI.includes('assessment')) { totalReq += (ISO_CATEGORY_COUNTS.assessment || 0); sels.push('input[name^="assessment"]:checked'); }
                 const checked = sels.length > 0 ? document.querySelectorAll(sels.join(', ')).length : 0;
                 const msg = `Please complete all ${totalReq} rating indicators before generating AI recommendations (${checked}/${totalReq} completed).`;
                 setAIDebugStatus(msg, true);
@@ -2526,7 +2599,11 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             // Check ratings completeness (for submission)
             if (!isDraft) {
                 const categories = ['communications', 'management', 'assessment'];
-                const expectedCounts = { communications: 5, management: 12, assessment: 6 };
+                const expectedCounts = {
+                    communications: ISO_CATEGORY_COUNTS.communications,
+                    management: ISO_CATEGORY_COUNTS.management,
+                    assessment: ISO_CATEGORY_COUNTS.assessment
+                };
                 
                 for (const category of categories) {
                     const ratings = document.querySelectorAll(`input[name^="${category}"]:checked`);
@@ -2604,7 +2681,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     return;
                 }
                 formData.ratings[category] = {};
-                const count = category === 'communications' ? 5 : category === 'management' ? 12 : 6;
+                const count = ISO_CATEGORY_COUNTS[category] || 0;
                 const tbody = document.getElementById(tbodyIds[category]);
                 const rows = tbody ? tbody.querySelectorAll('tr') : [];
                 

@@ -66,6 +66,11 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule')
     if (!in_array($form_type, ['iso', 'peac', 'both'])) $form_type = 'iso';
     // PEAC is exclusive to JHS department
     $sched_dept = trim($_POST['scheduled_department'] ?? ($_SESSION['department'] ?? ''));
+    $is_top_leader = in_array($_SESSION['role'] ?? '', ['president', 'vice_president'], true);
+    if (!$is_top_leader) {
+        // Department ownership should follow the scheduler's own department.
+        $sched_dept = trim((string)($_SESSION['department'] ?? ''));
+    }
     if (($form_type === 'peac' || $form_type === 'both') && $sched_dept !== 'JHS') {
         $form_type = 'iso';
     }
@@ -76,14 +81,6 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule')
     $focus_json = !empty($focus) ? json_encode($focus) : null;
     
     if (!empty($teacher_id)) {
-        // Use the teacher's department so the correct dean can see the schedule
-        $teacher_dept_stmt = $db->prepare("SELECT department FROM teachers WHERE id = :id LIMIT 1");
-        $teacher_dept_stmt->bindParam(':id', $teacher_id);
-        $teacher_dept_stmt->execute();
-        $teacher_dept_val = $teacher_dept_stmt->fetchColumn();
-        if ($teacher_dept_val !== false && trim($teacher_dept_val) !== '') {
-            $sched_dept = trim($teacher_dept_val);
-        }
         $query = "UPDATE teachers SET evaluation_schedule = :schedule, evaluation_room = :room, evaluation_focus = :focus, evaluation_subject_area = :subject_area, evaluation_subject = :subject, evaluation_semester = :semester, evaluation_form_type = :form_type, scheduled_by = :scheduled_by, scheduled_department = :scheduled_department, updated_at = NOW() WHERE id = :id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':schedule', $schedule);
@@ -113,12 +110,33 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule')
     $teacher_id = $_POST['teacher_id'] ?? '';
 
     if (!empty($teacher_id)) {
-        $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_schedule_end = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
+        $is_top_leader = in_array($_SESSION['role'] ?? '', ['president', 'vice_president'], true);
+        if ($is_top_leader) {
+            $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_schedule_end = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";
+        } else {
+            // Only the owning department can cancel its schedule.
+            $query = "UPDATE teachers
+                      SET evaluation_schedule = NULL, evaluation_schedule_end = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW()
+                      WHERE id = :id
+                        AND (
+                            scheduled_department = :dept
+                            OR (scheduled_department IS NULL AND department = :dept_fallback)
+                        )";
+        }
         $stmt = $db->prepare($query);
         $stmt->bindParam(':id', $teacher_id);
+        if (!$is_top_leader) {
+            $sessionDept = trim((string)($_SESSION['department'] ?? ''));
+            $stmt->bindParam(':dept', $sessionDept);
+            $stmt->bindParam(':dept_fallback', $sessionDept);
+        }
 
         if ($stmt->execute()) {
-            $success_message = "Evaluation schedule cancelled.";
+            if ($stmt->rowCount() > 0) {
+                $success_message = "Evaluation schedule cancelled.";
+            } else {
+                $error_message = "You can only cancel schedules owned by your department.";
+            }
 
             // Log for auditing/notifications
             try {

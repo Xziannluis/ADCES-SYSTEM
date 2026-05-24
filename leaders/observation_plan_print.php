@@ -72,11 +72,17 @@ $stmt->execute();
 $eval_teachers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // 2) Scheduled-only teachers
+// Show only schedules owned by this department.
+// Fallback to primary department for legacy rows with NULL scheduled_department.
 $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                        t.evaluation_schedule, t.evaluation_room, t.evaluation_focus,
-                       t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester
+                       t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
+                       t.scheduled_department
                 FROM teachers t
-                WHERE t.department = :department
+                WHERE (
+                        t.scheduled_department = :department
+                        OR (t.scheduled_department IS NULL AND t.department = :department_fallback)
+                      )
                   AND t.status = 'active'
                   AND t.evaluation_schedule IS NOT NULL
                   AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
@@ -88,6 +94,7 @@ $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department
                 ORDER BY t.name ASC";
 $sched_stmt = $db->prepare($sched_query);
 $sched_stmt->bindParam(':department', $raw_department);
+$sched_stmt->bindParam(':department_fallback', $raw_department);
 $sched_stmt->bindParam(':filter_semester', $semester);
 $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
 $sched_stmt->bindParam(':academic_year', $academic_year);

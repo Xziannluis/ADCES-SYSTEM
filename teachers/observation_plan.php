@@ -764,10 +764,12 @@ try {
             width: 100%;
             border-collapse: collapse;
             margin-top: 15px;
+            table-layout: fixed;
+            border: 1px solid #2b2b2b;
         }
         .plan-table th, .plan-table td {
-            border: 1px solid #dee2e6;
-            padding: 10px 12px;
+            border: 1px solid #2b2b2b;
+            padding: 12px 10px;
             vertical-align: middle;
         }
         .plan-table th {
@@ -776,12 +778,38 @@ try {
             font-weight: 600;
             text-align: center;
             font-size: 0.85rem;
+            letter-spacing: 0.2px;
         }
         .plan-table td {
             font-size: 0.9rem;
+            line-height: 1.45;
         }
         .plan-table tr:nth-child(even) {
             background: #f8f9fa;
+        }
+        .cell-semester { text-align: center; white-space: normal; word-break: keep-all; }
+        .cell-date { text-align: center; white-space: nowrap; font-weight: 600; color: #2c3e50; }
+        .cell-day-time { text-align: center; }
+        .cell-day-time .day { display: block; font-weight: 700; color: #2c3e50; }
+        .cell-day-time .time { display: block; color: #495057; margin-top: 2px; }
+        .cell-subject-area { text-align: center; word-break: normal; overflow-wrap: normal; }
+        .cell-subject { font-weight: 600; color: #2c3e50; word-break: normal; overflow-wrap: normal; }
+        .cell-room { text-align: center; white-space: normal; word-break: normal; overflow-wrap: normal; }
+        .cell-focus, .cell-observers { font-size: 0.86rem; color: #374151; }
+        .cell-focus .focus-item { display: block; margin-bottom: 2px; }
+        .cell-observers .observer-item {
+            display: block;
+            margin-bottom: 1px;
+            line-height: 1.35;
+            white-space: nowrap;
+            word-break: normal;
+            overflow-wrap: normal;
+        }
+        .cell-status { text-align: center; white-space: nowrap; }
+        .cell-status .badge { min-width: 88px; }
+        @media (max-width: 1200px) {
+            .plan-table th, .plan-table td { padding: 10px 8px; }
+            .cell-focus, .cell-observers { font-size: 0.82rem; }
         }
         .ack-section {
             background: #e8f5e9;
@@ -1001,15 +1029,16 @@ try {
                         <thead>
                             <tr>
                                 <th style="width:50px;"><i class="fas fa-check-square"></i></th>
-                                <th>Semester</th>
+                                <th style="min-width:180px;">Teacher</th>
+                                <th style="min-width:92px;">Semester</th>
                                 <th>Focus of Observation</th>
-                                <th>Date</th>
-                                <th>Day &amp; Time</th>
-                                <th>Subject Area</th>
-                                <th>Subject</th>
-                                <th>Room</th>
-                                <th>Observers</th>
-                                <th>Status</th>
+                                <th style="min-width:84px;">Date</th>
+                                <th style="min-width:108px;">Day &amp; Time</th>
+                                <th style="min-width:136px;">Subject Area</th>
+                                <th style="min-width:96px;">Subject</th>
+                                <th style="min-width:72px;">Room</th>
+                                <th style="min-width:180px;">Name of Observers</th>
+                                <th style="min-width:96px;">Remarks</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1191,23 +1220,51 @@ try {
                                         <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_semester_display); ?></td>
-                                <td style="font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_date); ?></td>
-                                <td class="text-center"><?php echo $row_day_time; ?></td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_subject_area); ?></td>
-                                <td><?php echo htmlspecialchars($row_subject); ?></td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_room); ?></td>
-                                <td style="font-size:0.85rem;">
+                                <td><?php echo htmlspecialchars($teacher_data['name'] ?? ($_SESSION['name'] ?? 'Teacher')); ?></td>
+                                <td class="cell-semester"><?php echo htmlspecialchars($row_semester_display); ?></td>
+                                <td class="cell-focus">
+                                    <?php if (!empty($focus_display)): ?>
+                                        <?php foreach ($focus_display as $focus_item): ?>
+                                            <span class="focus-item"><?php echo htmlspecialchars($focus_item); ?></span>
+                                        <?php endforeach; ?>
+                                    <?php else: ?>
+                                        <span class="text-muted">No focus set</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="cell-date"><?php echo !empty($first_ev['observation_date']) ? date('m-d-y', strtotime($first_ev['observation_date'])) : htmlspecialchars($row_date); ?></td>
+                                <td class="cell-day-time">
+                                    <?php
+                                        $day_part = '';
+                                        $time_part = '';
+                                        $parts = explode('<br>', (string)$row_day_time, 2);
+                                        if (count($parts) === 2) {
+                                            $day_part = trim(strip_tags($parts[0]));
+                                            $time_part = trim(strip_tags($parts[1]));
+                                        } else {
+                                            $day_part = trim(strip_tags((string)$row_day_time));
+                                        }
+                                        if (!empty($first_ev['observation_date'])) {
+                                            $day_part = date('l', strtotime($first_ev['observation_date']));
+                                        }
+                                    ?>
+                                    <span class="day"><?php echo htmlspecialchars($day_part); ?></span>
+                                    <?php if ($time_part !== ''): ?><span class="time"><?php echo htmlspecialchars($time_part); ?></span><?php endif; ?>
+                                </td>
+                                <td class="cell-subject-area"><?php echo htmlspecialchars($row_subject_area); ?></td>
+                                <td class="cell-subject"><?php echo htmlspecialchars($row_subject); ?></td>
+                                <td class="cell-room"><?php echo htmlspecialchars($row_room); ?></td>
+                                <td class="cell-observers">
                                     <?php foreach ($row_observers as $i => $obs_name): ?>
-                                        <?php echo htmlspecialchars($obs_name); ?>
-                                        <?php if ($i < count($row_observers) - 1): ?><br><?php endif; ?>
+                                        <span class="observer-item"><?php echo htmlspecialchars($obs_name); ?></span>
                                     <?php endforeach; ?>
                                 </td>
-                                <td class="text-center">
-                                    <?php echo $status_badge; ?>
-                                    <?php if ($row_is_signed): ?>
-                                        <br><span class="badge bg-success mt-1">Signed</span>
+                                <td class="cell-status">
+                                    <?php if ($row_is_done): ?>
+                                        <span class="badge bg-success">Conducted</span>
+                                    <?php elseif ($row_is_signed): ?>
+                                        <span class="badge bg-success">Signed</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-info">In Progress</span>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -1235,24 +1292,47 @@ try {
                                         <input type="checkbox" class="form-check-input schedule-item-check sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars($row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
                                     <?php endif; ?>
                                 </td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_semester_display); ?></td>
-                                <td style="font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_date); ?></td>
-                                <td class="text-center"><?php echo $row_day_time; ?></td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_subject_area); ?></td>
-                                <td><?php echo htmlspecialchars($row_subject); ?></td>
-                                <td class="text-center"><?php echo htmlspecialchars($row_room); ?></td>
-                                <td style="font-size:0.85rem;">
+                                <td><?php echo htmlspecialchars($teacher_data['name'] ?? ($_SESSION['name'] ?? 'Teacher')); ?></td>
+                                <td class="cell-semester"><?php echo htmlspecialchars($row_semester_display); ?></td>
+                                <td class="cell-focus">
+                                    <?php if (!empty($focus_display)): ?>
+                                        <?php foreach ($focus_display as $focus_item): ?>
+                                            <span class="focus-item"><?php echo htmlspecialchars($focus_item); ?></span>
+                                        <?php endforeach; ?>
+                                    <?php else: ?>
+                                        <span class="text-muted">No focus set</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="cell-date"><?php echo date('m-d-y', strtotime($teacher_data['evaluation_schedule'])); ?></td>
+                                <td class="cell-day-time">
+                                    <?php
+                                        $day_part = '';
+                                        $time_part = '';
+                                        $parts = explode('<br>', (string)$row_day_time, 2);
+                                        if (count($parts) === 2) {
+                                            $day_part = trim(strip_tags($parts[0]));
+                                            $time_part = trim(strip_tags($parts[1]));
+                                        } else {
+                                            $day_part = trim(strip_tags((string)$row_day_time));
+                                        }
+                                        $day_part = date('l', strtotime($teacher_data['evaluation_schedule']));
+                                    ?>
+                                    <span class="day"><?php echo htmlspecialchars($day_part); ?></span>
+                                    <?php if ($time_part !== ''): ?><span class="time"><?php echo htmlspecialchars($time_part); ?></span><?php endif; ?>
+                                </td>
+                                <td class="cell-subject-area"><?php echo htmlspecialchars($row_subject_area); ?></td>
+                                <td class="cell-subject"><?php echo htmlspecialchars($row_subject); ?></td>
+                                <td class="cell-room"><?php echo htmlspecialchars($row_room); ?></td>
+                                <td class="cell-observers">
                                     <?php foreach ($all_observer_names as $i => $obs_name): ?>
-                                        <?php echo htmlspecialchars($obs_name); ?>
-                                        <?php if ($i < count($all_observer_names) - 1): ?><br><?php endif; ?>
+                                        <span class="observer-item"><?php echo htmlspecialchars($obs_name); ?></span>
                                     <?php endforeach; ?>
                                 </td>
-                                <td class="text-center">
+                                <td class="cell-status">
                                     <?php if ($upcoming_signed): ?>
-                                        <span class="badge bg-success">Signed</span>
+                                        <span class="badge bg-success">Conducted</span>
                                     <?php else: ?>
-                                        <span class="badge bg-info">Upcoming</span>
+                                        <span class="badge bg-info">In Progress</span>
                                     <?php endif; ?>
                                 </td>
                             </tr>

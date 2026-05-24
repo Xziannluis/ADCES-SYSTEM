@@ -128,14 +128,22 @@ $format_day_time = static function(array $eval): string {
     $day = date('D', strtotime($obsDate));
     $subjectObserved = trim((string)($eval['subject_observed'] ?? ''));
     $obsTime = trim((string)($eval['observation_time'] ?? ''));
+    $obsEndTime = trim((string)($eval['observation_end_time'] ?? ''));
+    $teacherSchedStart = trim((string)($eval['teacher_schedule_start'] ?? ''));
+    $teacherSchedEnd = trim((string)($eval['teacher_schedule_end'] ?? ''));
     $start = '';
     $end = '';
     if ($obsTime !== '' && $obsTime !== '00:00' && $obsTime !== '00:00:00') {
         $start = date('g:i A', strtotime($obsTime));
     }
-    if (preg_match('/(\d{1,2}:\d{2}\s*(?:AM|PM))(?:\s*-\s*(\d{1,2}:\d{2}\s*(?:AM|PM)))?/i', $subjectObserved, $m)) {
-        if ($start === '' && !empty($m[1])) $start = strtoupper(trim($m[1]));
-        if (!empty($m[2])) $end = strtoupper(trim($m[2]));
+    if ($start === '' && $teacherSchedStart !== '' && strtotime($teacherSchedStart) !== false) {
+        $start = date('g:i A', strtotime($teacherSchedStart));
+    }
+    if ($obsEndTime !== '' && $obsEndTime !== '00:00' && $obsEndTime !== '00:00:00') {
+        $end = date('g:i A', strtotime($obsEndTime));
+    }
+    if ($end === '' && $teacherSchedEnd !== '' && strtotime($teacherSchedEnd) !== false) {
+        $end = date('g:i A', strtotime($teacherSchedEnd));
     }
     if ($start !== '' && $end !== '') return $day . '<br>' . $start . ' - ' . $end;
     if ($start !== '') return $day . '<br>' . $start;
@@ -199,7 +207,7 @@ foreach ($evaluations as $evaluationRow) {
     <title>Classroom Observation Report - <?php echo htmlspecialchars($_SESSION['department']); ?></title>
     <style>
         @page {
-            size: A4 landscape;
+            size: 297mm 210mm; /* explicit A4 landscape to avoid viewer auto-rotation quirks */
             margin: 5mm;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -209,17 +217,26 @@ foreach ($evaluations as $evaluationRow) {
             background: #f0f0f0;
             margin: 0;
             padding: 20px;
+            text-rendering: optimizeLegibility;
+            font-synthesis: none;
+            font-kerning: normal;
+            font-variant-ligatures: none;
         }
         .print-page {
-            width: 287mm;
-            max-width: 287mm;
+            width: 100%;
+            max-width: 1400px;
             margin: 0 auto;
             background: #fff;
             padding: 5mm;
             box-shadow: 0 0 10px rgba(0,0,0,0.15);
         }
         @media print {
-            body { background: #fff; padding: 0; }
+            html, body, .print-page {
+                transform: none !important;
+                writing-mode: horizontal-tb !important;
+                direction: ltr !important;
+            }
+            body { background: #fff; padding: 0; margin: 0; }
             .print-page { width: 100%; max-width: 100%; box-shadow: none; padding: 0; margin: 0; }
         }
         .print-header {
@@ -281,32 +298,35 @@ foreach ($evaluations as $evaluationRow) {
             background: #fff;
             color: #000;
             font-weight: 700;
-            font-size: 9px;
-            line-height: 1.25;
-            padding: 3px 4px;
+            font-size: 10.5px;
+            line-height: 1.35;
+            padding: 4px 5px;
             border: 1px solid #000;
             text-align: left;
         }
         .report-table td {
-            font-size: 8.5px;
-            font-weight: normal;
-            line-height: 1.25;
+            font-size: 10px;
+            font-weight: 400 !important;
+            line-height: 1.4;
             word-break: break-word;
             overflow-wrap: anywhere;
-            padding: 2px 3px;
+            padding: 3px 4px;
             hyphens: auto;
             vertical-align: top;
             border: 1px solid #000;
+            letter-spacing: 0;
         }
         .report-table th:first-child,
         .report-table td:first-child {
-            font-size: 8px;
+            font-size: 9.5px;
             word-break: normal;
             overflow-wrap: normal;
         }
         .observation-notes {
-            font-size: 8.5px;
-            line-height: 1.25;
+            font-size: 10px;
+            line-height: 1.4;
+            font-weight: 400 !important;
+            text-rendering: optimizeLegibility;
         }
         .observation-notes ul {
             margin: 0;
@@ -314,10 +334,15 @@ foreach ($evaluations as $evaluationRow) {
         }
         .observation-notes li {
             margin-bottom: 0;
+            font-weight: 400 !important;
+        }
+        .observation-notes strong,
+        .observation-notes b {
+            font-weight: 400 !important;
         }
         .report-table td small {
-            font-size: 8px;
-            line-height: 1.2;
+            font-size: 9.5px;
+            line-height: 1.3;
         }
         .ratings-cell {
             display: flex;
@@ -330,11 +355,11 @@ foreach ($evaluations as $evaluationRow) {
         }
         .ratings-cell .rating-score {
             font-weight: 700;
-            font-size: 10px;
+            font-size: 11px;
         }
         .ratings-cell .rating-label {
             font-weight: 600;
-            font-size: 8px;
+            font-size: 9px;
             line-height: 1.2;
         }
         .print-signature-block {
@@ -462,7 +487,6 @@ foreach ($evaluations as $evaluationRow) {
                 <th>Recommendation/s</th>
                 <th>Agreement</th>
                 <th>Ratings</th>
-                <th>Teacher Signature</th>
             </tr>
         </thead>
         <tbody>
@@ -568,23 +592,11 @@ foreach ($evaluations as $evaluationRow) {
                             <span class="rating-label"><?php echo $rating_text; ?></span>
                         </div>
                     </td>
-                    <td class="text-center">
-                        <?php
-                            $eid = (int)($eval['id'] ?? 0);
-                            $tsig = trim((string)($report_ack_sig_map[$eid] ?? ''));
-                            if ($tsig === '') $tsig = trim((string)($eval['faculty_signature'] ?? ''));
-                        ?>
-                        <?php if ($tsig !== '' && strpos($tsig, 'data:image/') === 0): ?>
-                            <img src="<?php echo htmlspecialchars($tsig); ?>" alt="Teacher signature" style="max-height:24px; max-width:72px;">
-                        <?php else: ?>
-                            <span>-</span>
-                        <?php endif; ?>
-                    </td>
                 </tr>
                 <?php endforeach; ?>
             <?php else: ?>
                 <tr>
-                    <td colspan="9" class="no-data">No evaluations found for the selected filters.</td>
+                    <td colspan="8" class="no-data">No evaluations found for the selected filters.</td>
                 </tr>
             <?php endif; ?>
         </tbody>

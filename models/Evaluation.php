@@ -19,7 +19,10 @@ class Evaluation {
     // Get evaluations for reporting
     public function getEvaluationsForReport($evaluator_id = null, $academic_year = '', $semester = '', $teacher_id = '', $department = '', $cross_dept_user_id = null, $user_department = '', $form_type = '', $exclude_teacher_user_id = null) {
         // Build base query
-    $query = "SELECT e.*, t.name as teacher_name, u.name as evaluator_name, u.role as evaluator_role,
+    $query = "SELECT e.*, t.name as teacher_name,
+                         t.evaluation_schedule as teacher_schedule_start,
+                         t.evaluation_schedule_end as teacher_schedule_end,
+                         u.name as evaluator_name, u.role as evaluator_role,
                          COUNT(ai.id) as ai_count
                   FROM " . $this->table_name . " e
                   JOIN teachers t ON e.teacher_id = t.id

@@ -81,6 +81,7 @@ class EvaluationController {
     private const EVALUATION_TIMEZONE = 'Asia/Manila';
     private const SIGNATURE_DATAURL_PATTERN = '/^data:image\/png;base64,[A-Za-z0-9+\/=]+$/';
     private $reusedEvaluationId = 0;
+    private $criterionCountCache = null;
 
     public function __construct($database) {
         $this->db = $database;
@@ -747,11 +748,8 @@ class EvaluationController {
         // 1) flat fields: communications0=5, communications_comment0=...
         // 2) nested fields: ratings[communications][0][rating]=5, ratings[communications][0][comment]=...
         // Normalize nested => flat so the loops below always work.
-        // ISO categories + PEAC categories
-        $allCategories = [
-            'communications' => 5, 'management' => 12, 'assessment' => 6,
-            'teacher_actions' => 6, 'student_learning_actions' => 9
-        ];
+        // Dynamic category sizes from evaluation_criteria table (with safe defaults).
+        $allCategories = $this->getCriterionCountsByCategory();
         if (isset($data['ratings']) && is_array($data['ratings'])) {
             foreach ($allCategories as $cat => $count) {
                 if (!isset($data['ratings'][$cat]) || !is_array($data['ratings'][$cat])) continue;
@@ -768,49 +766,48 @@ class EvaluationController {
 
         $savedCount = 0;
 
-        // Save ISO criteria
-        // Save communications criteria
-        for ($i = 0; $i < 5; $i++) {
-            if (isset($data["communications{$i}"])) {
-                $this->saveCriterion($evaluationId, 'communications', $i, $data["communications{$i}"], $data["communications_comment{$i}"] ?? '');
-                $savedCount++;
-            }
-        }
-
-        // Save management criteria
-        for ($i = 0; $i < 12; $i++) {
-            if (isset($data["management{$i}"])) {
-                $this->saveCriterion($evaluationId, 'management', $i, $data["management{$i}"], $data["management_comment{$i}"] ?? '');
-                $savedCount++;
-            }
-        }
-
-        // Save assessment criteria
-        for ($i = 0; $i < 6; $i++) {
-            if (isset($data["assessment{$i}"])) {
-                $this->saveCriterion($evaluationId, 'assessment', $i, $data["assessment{$i}"], $data["assessment_comment{$i}"] ?? '');
-                $savedCount++;
-            }
-        }
-
-        // Save PEAC criteria
-        // Save teacher_actions criteria (6 items)
-        for ($i = 0; $i < 6; $i++) {
-            if (isset($data["teacher_actions{$i}"])) {
-                $this->saveCriterion($evaluationId, 'teacher_actions', $i, $data["teacher_actions{$i}"], $data["teacher_actions_comment{$i}"] ?? '');
-                $savedCount++;
-            }
-        }
-
-        // Save student_learning_actions criteria (9 items)
-        for ($i = 0; $i < 9; $i++) {
-            if (isset($data["student_learning_actions{$i}"])) {
-                $this->saveCriterion($evaluationId, 'student_learning_actions', $i, $data["student_learning_actions{$i}"], $data["student_learning_actions_comment{$i}"] ?? '');
-                $savedCount++;
+        // Persist every category dynamically.
+        foreach ($allCategories as $category => $count) {
+            for ($i = 0; $i < $count; $i++) {
+                if (isset($data["{$category}{$i}"])) {
+                    $this->saveCriterion($evaluationId, $category, $i, $data["{$category}{$i}"], $data["{$category}_comment{$i}"] ?? '');
+                    $savedCount++;
+                }
             }
         }
 
         error_log("Saved evaluation_details rows={$savedCount} for evaluation_id={$evaluationId}");
+    }
+
+    private function getCriterionCountsByCategory(): array {
+        if (is_array($this->criterionCountCache)) {
+            return $this->criterionCountCache;
+        }
+
+        $defaults = [
+            'communications' => 5,
+            'management' => 12,
+            'assessment' => 6,
+            'teacher_actions' => 6,
+            'student_learning_actions' => 9
+        ];
+
+        $counts = $defaults;
+        try {
+            $stmt = $this->db->query("SELECT category, COUNT(*) AS cnt FROM evaluation_criteria GROUP BY category");
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $cat = trim((string)($row['category'] ?? ''));
+                $cnt = (int)($row['cnt'] ?? 0);
+                if ($cat !== '' && $cnt > 0) {
+                    $counts[$cat] = $cnt;
+                }
+            }
+        } catch (Exception $e) {
+            // Keep defaults if table/query is unavailable.
+        }
+
+        $this->criterionCountCache = $counts;
+        return $counts;
     }
 
     private function saveCriterion($evaluationId, $category, $index, $rating, $comment) {
