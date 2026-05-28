@@ -517,53 +517,68 @@ if (($teacher_data['department'] ?? '') === 'JHS') {
     $focus_labels['student_learning_actions'] = 'Student Learning Actions';
 }
 
-// Build observer list based on the schedule's owning department.
-// Rule: use scheduled_department (fallback: teacher primary department),
-// then include observers assigned from that department + accepted President/VP.
-$owning_dept = trim((string)($teacher_data['scheduled_department'] ?? ''));
-if ($owning_dept === '') {
-    $owning_dept = trim((string)($teacher_data['department'] ?? ''));
-}
-
-$all_observer_names = [];
-if ($owning_dept !== '') {
-    $obs_query = "SELECT DISTINCT u.name
-                  FROM teacher_assignments ta
-                  JOIN users u ON ta.evaluator_id = u.id
-                  WHERE ta.teacher_id = :tid
-                    AND u.status = 'active'
-                  ORDER BY u.name";
-    $obs_stmt = $db->prepare($obs_query);
-    $obs_stmt->execute([':tid' => $teacher_id]);
-    $all_observer_names = $obs_stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
-
-    // Always include active dean/principal of the schedule-owning department
-    // even if they were not explicitly inserted in teacher_assignments.
-    try {
-        $dean_stmt = $db->prepare(
-            "SELECT DISTINCT name
-             FROM users
-             WHERE department = :dept
-               AND role IN ('dean','principal')
-               AND status = 'active'
-             ORDER BY name"
-        );
-        $dean_stmt->execute([':dept' => $owning_dept]);
-        while ($dn = $dean_stmt->fetchColumn()) {
-            if (!in_array($dn, $all_observer_names, true)) {
-                $all_observer_names[] = $dn;
-            }
-        }
-    } catch (Exception $e) {
-        // Keep page usable if user query fails unexpectedly.
-    }
-}
-
 // Never show the teacher's own name as observer
 $self_name = $_SESSION['name'] ?? '';
-$all_observer_names = array_values(array_filter(array_unique($all_observer_names), function($n) use ($self_name) {
-    return trim((string)$n) !== trim((string)$self_name);
-}));
+
+$get_observer_names_for_row = static function(PDO $db, int $teacher_id, int $eval_id, string $owning_dept, string $self_name): array {
+    $owning_dept = trim($owning_dept);
+    $observer_names = [];
+
+    if ($owning_dept !== '') {
+        $obs_query = "SELECT DISTINCT u.name
+                      FROM teacher_assignments ta
+                      JOIN users u ON ta.evaluator_id = u.id
+                      WHERE ta.teacher_id = :tid
+                        AND u.status = 'active'";
+        $params = [
+            ':tid' => $teacher_id,
+        ];
+        if ($eval_id > 0) {
+            $obs_query .= " AND (
+                                u.department = :dept_match
+                                OR (ta.eval_id = :eval_id_leader AND u.role IN ('president','vice_president'))
+                            )
+                            AND (
+                                ta.eval_id = :eval_id
+                                OR (ta.eval_id IS NULL AND u.role NOT IN ('president','vice_president'))
+                            )";
+            $params[':dept_match'] = $owning_dept;
+            $params[':eval_id_leader'] = $eval_id;
+            $params[':eval_id'] = $eval_id;
+        } else {
+            $obs_query .= " AND u.department = :dept AND ta.eval_id IS NULL";
+            $params[':dept'] = $owning_dept;
+        }
+        $obs_query .= " ORDER BY u.name";
+        $obs_stmt = $db->prepare($obs_query);
+        $obs_stmt->execute($params);
+        $observer_names = $obs_stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+
+        try {
+            $dean_stmt = $db->prepare(
+                "SELECT DISTINCT name
+                 FROM users
+                 WHERE department = :dept
+                   AND role IN ('dean','principal')
+                   AND status = 'active'
+                 ORDER BY name"
+            );
+            $dean_stmt->execute([':dept' => $owning_dept]);
+            while ($dean_name = $dean_stmt->fetchColumn()) {
+                if (!in_array($dean_name, $observer_names, true)) {
+                    $observer_names[] = $dean_name;
+                }
+            }
+        } catch (Exception $e) {
+            // Keep page usable if user query fails unexpectedly.
+        }
+    }
+
+    return array_values(array_filter(array_unique($observer_names), function($name) use ($self_name) {
+        $name = trim((string)$name);
+        return $name !== '' && $name !== trim((string)$self_name);
+    }));
+};
 
 // Build observation plan data
 $has_schedule = !empty($teacher_data['evaluation_schedule']);
@@ -576,7 +591,7 @@ if ($schedule_owning_dept === '') {
 }
 
 // Get completed evaluations for this semester
-$eval_query = "SELECT e.id, e.observation_date, e.observation_time, e.status, e.subject_area, e.subject_observed, e.observation_room, e.semester, e.evaluation_focus, u.name as evaluator_name, u.department as evaluator_department
+$eval_query = "SELECT e.id, e.department, e.observation_date, e.observation_time, e.status, e.subject_area, e.subject_observed, e.observation_room, e.semester, e.evaluation_focus, u.name as evaluator_name, u.department as evaluator_department
                FROM evaluations e
                JOIN users u ON e.evaluator_id = u.id
                WHERE e.teacher_id = :tid AND e.academic_year = :ay AND e.semester IN (:sem1, :sem2)
@@ -616,15 +631,17 @@ foreach ($ack_rows as $ack) {
 $eval_groups = [];
 foreach ($evaluations as $ev) {
     $date_key = !empty($ev['observation_date']) ? date('Y-m-d', strtotime($ev['observation_date'])) : 'unknown';
-    if (!isset($eval_groups[$date_key])) {
-        $eval_groups[$date_key] = [];
+    $dept_key = trim((string)($ev['department'] ?? ($ev['evaluator_department'] ?? '')));
+    $group_key = $date_key . '|' . $dept_key;
+    if (!isset($eval_groups[$group_key])) {
+        $eval_groups[$group_key] = [];
     }
-    $eval_groups[$date_key][] = $ev;
+    $eval_groups[$group_key][] = $ev;
 }
 
 // Determine if the current schedule is a genuinely new/upcoming observation
 // (its date does NOT overlap with any completed evaluation date)
-$schedule_date_key = $has_matching_schedule ? date('Y-m-d', strtotime($teacher_data['evaluation_schedule'])) : null;
+$schedule_date_key = $has_matching_schedule ? (date('Y-m-d', strtotime($teacher_data['evaluation_schedule'])) . '|' . $schedule_owning_dept) : null;
 $show_upcoming = $has_matching_schedule && ($schedule_date_key === null || !isset($eval_groups[$schedule_date_key]));
 
 // Apply department filter (if selected)
@@ -632,7 +649,7 @@ if ($filter_department !== '') {
     $show_upcoming = $show_upcoming && ($schedule_owning_dept === $filter_department);
     $eval_groups = array_filter($eval_groups, function($group) use ($filter_department) {
         foreach ($group as $ev) {
-            if (($ev['evaluator_department'] ?? '') === $filter_department) {
+            if (($ev['department'] ?? ($ev['evaluator_department'] ?? '')) === $filter_department) {
                 return true;
             }
         }
@@ -666,6 +683,14 @@ if (!empty($filter_status)) {
     } elseif ($filter_status === 'signed') {
         $eval_groups = []; // hide completed evals
         if (!isset($signed_map['upcoming'])) $show_upcoming = false; // only show if signed
+    } elseif ($filter_status === 'observer_unbalanced') {
+        $eval_groups = array_filter($eval_groups, function($group) {
+            foreach ($group as $row) {
+                if (strtolower(trim((string)($row['status'] ?? ''))) === 'observer_unbalanced') return true;
+            }
+            return false;
+        });
+        $show_upcoming = false;
     }
 }
 
@@ -693,6 +718,12 @@ if ($has_matching_schedule && $schedule_date_key !== null && isset($eval_groups[
             $current_completed_evaluators[] = $cev['evaluator_name'] ?? '';
         }
     }
+    $current_eval_id = (int)($current_group[0]['id'] ?? 0);
+    $current_owning_dept = trim((string)($current_group[0]['department'] ?? ''));
+    if ($current_owning_dept === '') {
+        $current_owning_dept = $schedule_owning_dept;
+    }
+    $current_required_observers = $get_observer_names_for_row($db, (int)$teacher_id, $current_eval_id, $current_owning_dept, $self_name);
     $current_completed_evaluators = array_values(array_unique(array_filter($current_completed_evaluators)));
     $normalize_name_key = function($name) {
         $name = strtolower(trim((string)$name));
@@ -700,7 +731,7 @@ if ($has_matching_schedule && $schedule_date_key !== null && isset($eval_groups[
         return $name;
     };
     $current_completed_keys = array_values(array_unique(array_filter(array_map($normalize_name_key, $current_completed_evaluators))));
-    $current_required_keys = array_values(array_unique(array_filter(array_map($normalize_name_key, $all_observer_names))));
+    $current_required_keys = array_values(array_unique(array_filter(array_map($normalize_name_key, $current_required_observers))));
     $current_all_done = !empty($current_required_keys);
     foreach ($current_required_keys as $req_key) {
         if (!in_array($req_key, $current_completed_keys, true)) {
@@ -995,6 +1026,7 @@ try {
                                 <option value="upcoming" <?php echo $filter_status === 'upcoming' ? 'selected' : ''; ?>>Upcoming</option>
                                 <option value="completed" <?php echo $filter_status === 'completed' ? 'selected' : ''; ?>>Completed</option>
                                 <option value="signed" <?php echo $filter_status === 'signed' ? 'selected' : ''; ?>>Signed</option>
+                                <option value="observer_unbalanced" <?php echo $filter_status === 'observer_unbalanced' ? 'selected' : ''; ?>>Observer Imbalance</option>
                             </select>
                         </div>
                         <div class="w-100"></div>
@@ -1028,8 +1060,7 @@ try {
                     <table class="plan-table">
                         <thead>
                             <tr>
-                                <th style="width:50px;"><i class="fas fa-check-square"></i></th>
-                                <th style="min-width:180px;">Teacher</th>
+                                <th style="min-width:210px;">Teacher</th>
                                 <th style="min-width:92px;">Semester</th>
                                 <th>Focus of Observation</th>
                                 <th style="min-width:84px;">Date</th>
@@ -1052,6 +1083,11 @@ try {
 
                                     // Use schedule data if this is the current schedule, else evaluation data
                                     if ($is_current && $has_matching_schedule) {
+                                        $row_eval_id = (int)($first_ev['id'] ?? 0);
+                                        $row_owning_dept = trim((string)($first_ev['department'] ?? ''));
+                                        if ($row_owning_dept === '') {
+                                            $row_owning_dept = $schedule_owning_dept;
+                                        }
                                         $focus_raw = $teacher_data['evaluation_focus'] ?? '';
                                         $ts = strtotime($teacher_data['evaluation_schedule']);
                                         $row_date = date('M d, Y', $ts);
@@ -1064,7 +1100,7 @@ try {
                                         $row_subject = $teacher_data['evaluation_subject'] ?? '';
                                         $row_room = $teacher_data['evaluation_room'] ?? '';
                                         $row_semester_display = ($teacher_data['evaluation_semester'] ?? '') . ' Semester';
-                                        $row_observers = $all_observer_names;
+                                        $row_observers = $get_observer_names_for_row($db, (int)$teacher_id, $row_eval_id, $row_owning_dept, $self_name);
                                         $group_evaluators = array_values(array_unique(array_filter(array_map(function($g) {
                                             return trim((string)($g['evaluator_name'] ?? ''));
                                         }, $group))));
@@ -1074,6 +1110,14 @@ try {
                                             }
                                         }
                                     } else {
+                                        $row_eval_id = (int)($first_ev['id'] ?? 0);
+                                        $row_owning_dept = trim((string)($first_ev['department'] ?? ''));
+                                        if ($row_owning_dept === '') {
+                                            $row_owning_dept = trim((string)($first_ev['evaluator_department'] ?? ''));
+                                        }
+                                        if ($row_owning_dept === '') {
+                                            $row_owning_dept = $schedule_owning_dept;
+                                        }
                                         $focus_raw = $first_ev['evaluation_focus'] ?? '';
                                         $row_date = !empty($first_ev['observation_date']) ? date('M d, Y', strtotime($first_ev['observation_date'])) : '';
                                         $row_day_time = !empty($first_ev['observation_date']) ? date('D', strtotime($first_ev['observation_date'])) : '';
@@ -1089,7 +1133,7 @@ try {
                                         $row_subject = $first_ev['subject_observed'] ?? '';
                                         $row_room = $first_ev['observation_room'] ?? '';
                                         $row_semester_display = ($first_ev['semester'] ?? '') . ' Semester';
-                                        $row_observers = $all_observer_names;
+                                        $row_observers = $get_observer_names_for_row($db, (int)$teacher_id, $row_eval_id, $row_owning_dept, $self_name);
                                         $group_observers = array_values(array_unique(array_filter(array_column($group, 'evaluator_name'))));
                                         foreach ($group_observers as $gobs) {
                                             $gobs = trim((string)$gobs);
@@ -1110,8 +1154,12 @@ try {
                                     // Status and first-column control for this group
                                     $completed_evaluators = [];
                                     $group_all_rows_completed = true;
+                                    $group_observer_unbalanced = false;
                                     foreach ($group as $g_ev) {
                                         $g_ev_status = strtolower(trim((string)($g_ev['status'] ?? '')));
+                                        if ($g_ev_status === 'observer_unbalanced') {
+                                            $group_observer_unbalanced = true;
+                                        }
                                         if ($g_ev_status === 'completed') {
                                             $completed_evaluators[] = $g_ev['evaluator_name'] ?? '';
                                         } else {
@@ -1172,7 +1220,9 @@ try {
                                                 break;
                                             }
                                         }
-                                        if ($all_done && $row_time_passed) {
+                                        if ($group_observer_unbalanced) {
+                                            $status_badge = '<span class="badge bg-danger">Observer Imbalance</span>';
+                                        } elseif ($all_done && $row_time_passed) {
                                             $status_badge = '<span class="badge bg-success">Completed</span>';
                                             $row_is_done = true;
                                         } elseif ($all_done || count($completed_evaluators) > 0) {
@@ -1191,7 +1241,9 @@ try {
                                                 break;
                                             }
                                         }
-                                        if ($all_required_observers_completed && $row_time_passed) {
+                                        if ($group_observer_unbalanced) {
+                                            $status_badge = '<span class="badge bg-danger">Observer Imbalance</span>';
+                                        } elseif ($all_required_observers_completed && $row_time_passed) {
                                             $status_badge = '<span class="badge bg-success">Completed</span>';
                                             $row_is_done = true;
                                         } else {
@@ -1201,12 +1253,12 @@ try {
                                     }
                             ?>
                             <tr>
-                                <td class="text-center">
+                                <td>
                                     <?php if ($is_current): ?>
                                         <?php if ($row_is_done || $row_is_signed): ?>
-                                            <input type="checkbox" class="form-check-input" checked disabled style="width:20px;height:20px;" title="<?php echo $row_is_done ? 'Completed schedule' : 'Signed schedule'; ?>">
+                                            <input type="checkbox" class="form-check-input me-2" checked disabled style="width:16px;height:16px;vertical-align:middle;" title="<?php echo $row_is_done ? 'Completed schedule' : 'Signed schedule'; ?>">
                                         <?php else: ?>
-                                            <input type="checkbox" class="form-check-input schedule-item-check <?php echo $row_can_sign ? 'sign-item-check' : ''; ?>" value="upcoming" data-schedule-label="<?php echo htmlspecialchars('Current: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
+                                            <input type="checkbox" class="form-check-input me-2 schedule-item-check <?php echo $row_can_sign ? 'sign-item-check' : ''; ?>" value="upcoming" data-schedule-label="<?php echo htmlspecialchars('Current: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:16px;height:16px;vertical-align:middle;">
                                         <?php endif; ?>
                                     <?php else: ?>
                                         <?php
@@ -1214,13 +1266,13 @@ try {
                                             $group_can_select = (!$group_all_rows_completed && !$group_signed && $group_rep_id > 0);
                                         ?>
                                         <?php if ($row_is_done || $row_is_signed): ?>
-                                            <input type="checkbox" class="form-check-input" checked disabled style="width:20px;height:20px;" title="<?php echo $row_is_done ? 'Completed schedule' : 'Signed schedule'; ?>">
+                                            <input type="checkbox" class="form-check-input me-2" checked disabled style="width:16px;height:16px;vertical-align:middle;" title="<?php echo $row_is_done ? 'Completed schedule' : 'Signed schedule'; ?>">
                                         <?php else: ?>
-                                            <input type="checkbox" class="form-check-input schedule-item-check <?php echo $group_can_select ? 'sign-item-check' : ''; ?>" value="<?php echo $group_rep_id; ?>" data-schedule-label="<?php echo htmlspecialchars('Schedule: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
+                                            <input type="checkbox" class="form-check-input me-2 schedule-item-check <?php echo $group_can_select ? 'sign-item-check' : ''; ?>" value="<?php echo $group_rep_id; ?>" data-schedule-label="<?php echo htmlspecialchars('Schedule: ' . $row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:16px;height:16px;vertical-align:middle;">
                                         <?php endif; ?>
                                     <?php endif; ?>
+                                    <?php echo htmlspecialchars($teacher_data['name'] ?? ($_SESSION['name'] ?? 'Teacher')); ?>
                                 </td>
-                                <td><?php echo htmlspecialchars($teacher_data['name'] ?? ($_SESSION['name'] ?? 'Teacher')); ?></td>
                                 <td class="cell-semester"><?php echo htmlspecialchars($row_semester_display); ?></td>
                                 <td class="cell-focus">
                                     <?php if (!empty($focus_display)): ?>
@@ -1259,10 +1311,12 @@ try {
                                     <?php endforeach; ?>
                                 </td>
                                 <td class="cell-status">
-                                    <?php if ($row_is_done): ?>
-                                        <span class="badge bg-success">Conducted</span>
+                                    <?php if ($group_observer_unbalanced): ?>
+                                        <span class="badge bg-danger">Observer Imbalance</span>
                                     <?php elseif ($row_is_signed): ?>
                                         <span class="badge bg-success">Signed</span>
+                                    <?php elseif ($row_is_done): ?>
+                                        <span class="badge bg-success">Conducted</span>
                                     <?php else: ?>
                                         <span class="badge bg-info">In Progress</span>
                                     <?php endif; ?>
@@ -1283,16 +1337,17 @@ try {
                                 $row_subject = $teacher_data['evaluation_subject'] ?? '';
                                 $row_room = $teacher_data['evaluation_room'] ?? '';
                                 $row_semester_display = ($teacher_data['evaluation_semester'] ?? '') . ' Semester';
+                                $upcoming_observers = $get_observer_names_for_row($db, (int)$teacher_id, 0, $schedule_owning_dept, $self_name);
                             ?>
                             <tr>
-                                <td class="text-center">
+                                <td>
                                     <?php if ($upcoming_signed): ?>
-                                        <input type="checkbox" class="form-check-input" checked disabled style="width:20px;height:20px;" title="Signed schedule">
+                                        <input type="checkbox" class="form-check-input me-2" checked disabled style="width:16px;height:16px;vertical-align:middle;" title="Signed schedule">
                                     <?php else: ?>
-                                        <input type="checkbox" class="form-check-input schedule-item-check sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars($row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:20px;height:20px;">
+                                        <input type="checkbox" class="form-check-input me-2 schedule-item-check sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars($row_date . ' ' . strip_tags($row_day_time)); ?>" style="width:16px;height:16px;vertical-align:middle;">
                                     <?php endif; ?>
+                                    <?php echo htmlspecialchars($teacher_data['name'] ?? ($_SESSION['name'] ?? 'Teacher')); ?>
                                 </td>
-                                <td><?php echo htmlspecialchars($teacher_data['name'] ?? ($_SESSION['name'] ?? 'Teacher')); ?></td>
                                 <td class="cell-semester"><?php echo htmlspecialchars($row_semester_display); ?></td>
                                 <td class="cell-focus">
                                     <?php if (!empty($focus_display)): ?>
@@ -1324,13 +1379,13 @@ try {
                                 <td class="cell-subject"><?php echo htmlspecialchars($row_subject); ?></td>
                                 <td class="cell-room"><?php echo htmlspecialchars($row_room); ?></td>
                                 <td class="cell-observers">
-                                    <?php foreach ($all_observer_names as $i => $obs_name): ?>
+                                    <?php foreach ($upcoming_observers as $i => $obs_name): ?>
                                         <span class="observer-item"><?php echo htmlspecialchars($obs_name); ?></span>
                                     <?php endforeach; ?>
                                 </td>
                                 <td class="cell-status">
                                     <?php if ($upcoming_signed): ?>
-                                        <span class="badge bg-success">Conducted</span>
+                                        <span class="badge bg-success">Signed</span>
                                     <?php else: ?>
                                         <span class="badge bg-info">In Progress</span>
                                     <?php endif; ?>

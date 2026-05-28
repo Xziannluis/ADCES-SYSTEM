@@ -12,6 +12,7 @@ if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'sub
 
 $teacherId = (int)($_GET['teacher_id'] ?? 0);
 $obsDateRaw = trim((string)($_GET['observation_date'] ?? ''));
+$obsTimeRaw = trim((string)($_GET['observation_time'] ?? ''));
 
 if ($teacherId <= 0 || $obsDateRaw === '') {
     http_response_code(422);
@@ -21,14 +22,55 @@ if ($teacherId <= 0 || $obsDateRaw === '') {
 
 $db = (new Database())->getConnection();
 $dateYmd = date('Y-m-d', strtotime($obsDateRaw));
+$timeHm = '';
+if ($obsTimeRaw !== '' && $obsTimeRaw !== '00:00' && $obsTimeRaw !== '00:00:00' && strtotime($obsTimeRaw) !== false) {
+    $timeHm = date('H:i', strtotime($obsTimeRaw));
+}
+
+if (in_array($_SESSION['role'] ?? '', ['chairperson', 'subject_coordinator', 'grade_level_coordinator'], true)) {
+    $accessSql = "SELECT 1
+                  FROM evaluations e
+                  WHERE e.teacher_id = :tid
+                    AND DATE(e.observation_date) = :od";
+    $accessParams = [
+        ':tid' => $teacherId,
+        ':od' => $dateYmd,
+        ':uid' => (int)($_SESSION['user_id'] ?? 0),
+        ':uid_assign' => (int)($_SESSION['user_id'] ?? 0),
+    ];
+    if ($timeHm !== '') {
+        $accessSql .= " AND COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :ot";
+        $accessParams[':ot'] = $timeHm;
+    }
+    $accessSql .= " AND (
+                        e.evaluator_id = :uid
+                        OR EXISTS (
+                            SELECT 1
+                            FROM teacher_assignments ta
+                            WHERE ta.teacher_id = e.teacher_id
+                              AND ta.evaluator_id = :uid_assign
+                              AND ta.eval_id = e.id
+                        )
+                    )
+                    LIMIT 1";
+    $accessStmt = $db->prepare($accessSql);
+    $accessStmt->execute($accessParams);
+    if (!$accessStmt->fetchColumn()) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'message' => 'Unauthorized']);
+        exit();
+    }
+}
 
 $stmt = $db->prepare("SELECT e.id, e.strengths, e.improvement_areas, e.recommendations, e.agreement, e.overall_avg,
                              u.name AS observer_name
                       FROM evaluations e
                       LEFT JOIN users u ON e.evaluator_id = u.id
                       WHERE e.teacher_id = :tid AND DATE(e.observation_date) = :od
+                        AND (:ot_filter = '' OR COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :ot_match)
+                        AND e.status = 'completed'
                       ORDER BY e.created_at ASC, e.id ASC");
-$stmt->execute([':tid' => $teacherId, ':od' => $dateYmd]);
+$stmt->execute([':tid' => $teacherId, ':od' => $dateYmd, ':ot_filter' => $timeHm, ':ot_match' => $timeHm]);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
 $items = [];

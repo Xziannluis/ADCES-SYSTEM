@@ -17,7 +17,7 @@ class Evaluation {
     }
 
     // Get evaluations for reporting
-    public function getEvaluationsForReport($evaluator_id = null, $academic_year = '', $semester = '', $teacher_id = '', $department = '', $cross_dept_user_id = null, $user_department = '', $form_type = '', $exclude_teacher_user_id = null) {
+    public function getEvaluationsForReport($evaluator_id = null, $academic_year = '', $semester = '', $teacher_id = '', $department = '', $cross_dept_user_id = null, $user_department = '', $form_type = '', $exclude_teacher_user_id = null, $scope_observer_user_id = null) {
         // Build base query
     $query = "SELECT e.*, t.name as teacher_name,
                          t.evaluation_schedule as teacher_schedule_start,
@@ -79,6 +79,43 @@ class Evaluation {
         if (!empty($exclude_teacher_user_id)) {
             $where[] = 't.user_id != :exclude_teacher_user_id';
             $params[':exclude_teacher_user_id'] = $exclude_teacher_user_id;
+        }
+
+        if (!empty($scope_observer_user_id)) {
+            $where[] = "(
+                e.evaluator_id = :scope_observer_user_id
+                OR EXISTS (
+                    SELECT 1
+                    FROM evaluations se
+                    WHERE se.teacher_id = e.teacher_id
+                      AND se.academic_year = e.academic_year
+                      AND se.semester = e.semester
+                      AND DATE(se.observation_date) = DATE(e.observation_date)
+                      AND COALESCE(se.observation_time, '') = COALESCE(e.observation_time, '')
+                      AND se.evaluator_id = :scope_observer_user_id_eval
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM teacher_assignments ta
+                    WHERE ta.teacher_id = e.teacher_id
+                      AND ta.evaluator_id = :scope_observer_user_id_assign
+                      AND (
+                          ta.eval_id = e.id
+                          OR ta.eval_id IN (
+                              SELECT se2.id
+                              FROM evaluations se2
+                              WHERE se2.teacher_id = e.teacher_id
+                                AND se2.academic_year = e.academic_year
+                                AND se2.semester = e.semester
+                                AND DATE(se2.observation_date) = DATE(e.observation_date)
+                                AND COALESCE(se2.observation_time, '') = COALESCE(e.observation_time, '')
+                          )
+                      )
+                )
+            )";
+            $params[':scope_observer_user_id'] = (int)$scope_observer_user_id;
+            $params[':scope_observer_user_id_eval'] = (int)$scope_observer_user_id;
+            $params[':scope_observer_user_id_assign'] = (int)$scope_observer_user_id;
         }
 
         if (count($where) > 0) {

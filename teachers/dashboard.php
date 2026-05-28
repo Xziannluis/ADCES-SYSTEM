@@ -204,11 +204,16 @@ try {
         
         // Check if any evaluation for this date is completed
         $has_completed = false;
+        $has_observer_unbalanced = false;
         $completed_evals = [];
         $pending_count = 0;
         
         foreach ($evals_for_date as $eval) {
-            if (strtolower(trim((string)($eval['status'] ?? ''))) === 'completed') {
+            $eval_status = strtolower(trim((string)($eval['status'] ?? '')));
+            if ($eval_status === 'observer_unbalanced') {
+                $has_observer_unbalanced = true;
+            }
+            if ($eval_status === 'completed') {
                 $has_completed = true;
                 $completed_evals[] = $eval;
             } else {
@@ -219,7 +224,7 @@ try {
         // Create merged card that shows date and observer count
         $merged_eval = $base;
         $merged_eval['observation_date'] = $dateKey;
-        $merged_eval['status'] = $has_completed ? 'completed' : 'pending';
+        $merged_eval['status'] = $has_observer_unbalanced ? 'observer_unbalanced' : ($has_completed ? 'completed' : 'pending');
         $merged_eval['evaluator_names'] = [];
         $merged_eval['evaluator_count'] = count($evals_for_date);
         $merged_eval['completed_count'] = count($completed_evals);
@@ -536,6 +541,10 @@ if (empty($display_evaluations)) {
                                             <span class="badge-status badge-completed">
                                                 <i class="fas fa-check-circle me-1"></i>Completed
                                             </span>
+                                        <?php elseif($eval['status'] === 'observer_unbalanced'): ?>
+                                            <span class="badge bg-danger">
+                                                <i class="fas fa-exclamation-triangle me-1"></i>Observer Imbalance
+                                            </span>
                                         <?php else: ?>
                                             <span class="badge-status badge-pending">
                                                 <i class="fas fa-clock me-1"></i>Pending
@@ -546,10 +555,12 @@ if (empty($display_evaluations)) {
                                 <p class="text-muted mb-2">
                                     <i class="fas fa-users me-2"></i>
                                     <?php 
-                                        if ($eval['completed_count'] > 0) {
-                                            echo $eval['completed_count'] . ' of ' . $eval['evaluator_count'] . ' observers completed';
+                                        if ($eval['status'] === 'observer_unbalanced') {
+                                            echo 'Evaluation cannot proceed until another observer is assigned.';
+                                        } elseif ($eval['completed_count'] > 0) {
+                                            echo $eval['completed_count'] . ' of ' . $eval['evaluator_count'] . ' evaluations completed';
                                         } else {
-                                            echo 'Waiting for ' . $eval['evaluator_count'] . ' observer' . ($eval['evaluator_count'] > 1 ? 's' : '');
+                                            echo 'Waiting for evaluator' . ($eval['evaluator_count'] > 1 ? 's' : '') . ' to complete evaluation';
                                         }
                                     ?>
                                 </p>

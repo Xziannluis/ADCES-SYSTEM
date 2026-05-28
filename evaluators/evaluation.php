@@ -269,7 +269,7 @@ try {
            AND evaluator_id = :eid
            AND observation_date IS NOT NULL
            AND (
-                status IN ('draft','pending')
+                status IN ('draft','pending','observer_unbalanced')
                 OR status IS NULL
                 OR status = ''
            )
@@ -283,7 +283,7 @@ try {
          WHERE e.teacher_id = :tid
            AND e.observation_date IS NOT NULL
            AND (
-                e.status IN ('draft','pending')
+                e.status IN ('draft','pending','observer_unbalanced')
                 OR e.status IS NULL
                 OR e.status = ''
            )
@@ -387,6 +387,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                              WHERE e.teacher_id = :tid
                                AND e.observation_date = :obs_date
                                AND COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :obs_time
+                               AND (:balance_dept = '' OR e.department = :balance_dept_match)
                                AND (e.status IS NULL OR e.status <> 'completed')"
                         );
                     ?>
@@ -640,7 +641,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     $schedule_balance_stmt->execute([
                                         ':tid' => (int)$teacher_row['id'],
                                         ':obs_date' => $slot_date,
-                                        ':obs_time' => $slot_time
+                                        ':obs_time' => $slot_time,
+                                        ':balance_dept' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
+                                        ':balance_dept_match' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? ''))
                                     ]);
                                     $bal = $schedule_balance_stmt->fetch(PDO::FETCH_ASSOC) ?: [];
                                     $observer_count = (int)($bal['observer_count'] ?? 0);

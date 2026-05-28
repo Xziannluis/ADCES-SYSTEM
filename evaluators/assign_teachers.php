@@ -171,14 +171,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $check_stmt->execute();
     
     if ($check_stmt->rowCount() === 0) {
-        // Prevent assigning a teacher who is already assigned to a different chairperson
-        $chair_check_query = "SELECT ta.id FROM teacher_assignments ta JOIN users u ON ta.evaluator_id = u.id WHERE u.role = 'chairperson' AND ta.teacher_id = :teacher_id AND ta.evaluator_id != :evaluator_id LIMIT 1";
+        $chair_scope_programs = array_values(array_filter(array_map('trim', $target_programs)));
+        if (empty($chair_scope_programs)) {
+            $fallback_dept = trim((string)($coordinator_info['department'] ?? $_SESSION['department'] ?? ''));
+            if ($fallback_dept !== '') {
+                $chair_scope_programs = [$fallback_dept];
+            }
+        }
+        $chair_placeholders = [];
+        $chair_params = [
+            ':teacher_id' => $teacher_id,
+            ':evaluator_id' => $assign_target_evaluator_id
+        ];
+        foreach ($chair_scope_programs as $idx => $program) {
+            $key = ':chair_program_' . $idx;
+            $chair_placeholders[] = $key;
+            $chair_params[$key] = $program;
+        }
+        $chair_scope_sql = '';
+        if (!empty($chair_placeholders)) {
+            $chair_scope_sql = " AND u.department IN (" . implode(',', $chair_placeholders) . ")";
+        }
+        // Prevent duplicate chairperson ownership only inside the same target program.
+        // A teacher with secondary departments can still be assigned in another program.
+        $chair_check_query = "SELECT ta.id
+                              FROM teacher_assignments ta
+                              JOIN users u ON ta.evaluator_id = u.id
+                              WHERE u.role = 'chairperson'
+                                AND ta.teacher_id = :teacher_id
+                                AND ta.evaluator_id != :evaluator_id
+                                $chair_scope_sql
+                              LIMIT 1";
         $chair_check_stmt = $db->prepare($chair_check_query);
-        $chair_check_stmt->bindParam(':teacher_id', $teacher_id);
-        $chair_check_stmt->bindParam(':evaluator_id', $assign_target_evaluator_id);
-        $chair_check_stmt->execute();
+        $chair_check_stmt->execute($chair_params);
         if ($chair_check_stmt->rowCount() > 0) {
-            $_SESSION['error'] = "Teacher is already assigned to a chairperson and cannot be reassigned.";
+            $_SESSION['error'] = "Teacher is already assigned to a chairperson in this department/program and cannot be reassigned there.";
             header("Location: assign_teachers.php" . ($viewing_coordinator ? "?evaluator_id=" . $current_evaluator_id : ""));
             exit();
         }

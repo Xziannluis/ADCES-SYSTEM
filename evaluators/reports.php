@@ -62,6 +62,47 @@ $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'A
 // Report should include all observer/evaluator entries within the selected scope
 // so schedules show complete observer comments.
 $scoped_evaluator_id = null;
+$report_scope_observer_id = $is_coordinator ? (int)($_SESSION['user_id'] ?? 0) : null;
+$coordinator_report_scope_sql = "";
+if ($report_scope_observer_id) {
+    $coordinator_report_scope_sql = " AND (
+        e.evaluator_id = :scope_observer_user_id
+        OR EXISTS (
+            SELECT 1
+            FROM evaluations se
+            WHERE se.teacher_id = e.teacher_id
+              AND se.academic_year = e.academic_year
+              AND se.semester = e.semester
+              AND DATE(se.observation_date) = DATE(e.observation_date)
+              AND COALESCE(se.observation_time, '') = COALESCE(e.observation_time, '')
+              AND se.evaluator_id = :scope_observer_user_id_eval
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM teacher_assignments ta
+            WHERE ta.teacher_id = e.teacher_id
+              AND ta.evaluator_id = :scope_observer_user_id_assign
+              AND (
+                  ta.eval_id = e.id
+                  OR ta.eval_id IN (
+                      SELECT se2.id
+                      FROM evaluations se2
+                      WHERE se2.teacher_id = e.teacher_id
+                        AND se2.academic_year = e.academic_year
+                        AND se2.semester = e.semester
+                        AND DATE(se2.observation_date) = DATE(e.observation_date)
+                        AND COALESCE(se2.observation_time, '') = COALESCE(e.observation_time, '')
+                  )
+              )
+        )
+    )";
+}
+$bind_report_scope = static function(PDOStatement $stmt) use ($report_scope_observer_id): void {
+    if (!$report_scope_observer_id) return;
+    $stmt->bindValue(':scope_observer_user_id', $report_scope_observer_id, PDO::PARAM_INT);
+    $stmt->bindValue(':scope_observer_user_id_eval', $report_scope_observer_id, PDO::PARAM_INT);
+    $stmt->bindValue(':scope_observer_user_id_assign', $report_scope_observer_id, PDO::PARAM_INT);
+};
 
 // Build Academic Year list based on actual evaluations (so dropdown only shows years with data)
 $available_years = [];
@@ -71,13 +112,15 @@ try {
         // Leaders with no department filter: show all years and teachers
         $yearsQuery = "SELECT DISTINCT academic_year
                        FROM evaluations
-                       WHERE academic_year IS NOT NULL
+                         WHERE academic_year IS NOT NULL
                          AND academic_year <> ''
                          AND status = 'completed'
                          AND overall_avg IS NOT NULL
                          AND overall_avg > 0
+                         $coordinator_report_scope_sql
                        ORDER BY academic_year DESC";
         $yearsStmt = $db->prepare($yearsQuery);
+        $bind_report_scope($yearsStmt);
         $yearsStmt->execute();
         $available_years = $yearsStmt->fetchAll(PDO::FETCH_COLUMN);
 
@@ -87,8 +130,10 @@ try {
                           WHERE e.status = 'completed'
                             AND e.overall_avg IS NOT NULL
                             AND e.overall_avg > 0
+                            $coordinator_report_scope_sql
                           ORDER BY t.name ASC";
         $teachersStmt = $db->prepare($teachersQuery);
+        $bind_report_scope($teachersStmt);
         $teachersStmt->execute();
         $available_teachers = $teachersStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     } else {
@@ -100,6 +145,7 @@ try {
           AND e.status = 'completed'
           AND e.overall_avg IS NOT NULL
           AND e.overall_avg > 0";
+    $yearsQuery .= $coordinator_report_scope_sql;
     if ($scoped_evaluator_id !== null) {
         $yearsQuery .= " AND e.evaluator_id = :evaluator_id";
     }
@@ -107,6 +153,7 @@ try {
 
     $yearsStmt = $db->prepare($yearsQuery);
     $yearsStmt->bindValue(':department', $raw_department);
+    $bind_report_scope($yearsStmt);
     if ($scoped_evaluator_id !== null) {
         $yearsStmt->bindValue(':evaluator_id', $scoped_evaluator_id);
     }
@@ -120,6 +167,7 @@ try {
           AND e.status = 'completed'
           AND e.overall_avg IS NOT NULL
           AND e.overall_avg > 0";
+    $teachersQuery .= $coordinator_report_scope_sql;
     if ($scoped_evaluator_id !== null) {
         $teachersQuery .= " AND e.evaluator_id = :evaluator_id";
     }
@@ -130,6 +178,7 @@ try {
 
     $teachersStmt = $db->prepare($teachersQuery);
     $teachersStmt->bindValue(':department', $raw_department);
+    $bind_report_scope($teachersStmt);
     if ($scoped_evaluator_id !== null) {
         $teachersStmt->bindValue(':evaluator_id', $scoped_evaluator_id);
     }
@@ -170,7 +219,7 @@ foreach ($available_teachers as $teacher_option) {
 $report_department = $raw_department;
 // Exclude the current user from appearing as an observed teacher (dean/principal see department reports)
 $exclude_self = ($scoped_evaluator_id === null) ? $_SESSION['user_id'] : null;
-$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', $form_type_filter, $exclude_self);
+$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', $form_type_filter, $exclude_self, $report_scope_observer_id);
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
 $format_day_time = static function(array $eval): string {
@@ -1165,7 +1214,8 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             commentsWrap.innerHTML = '<div class="text-muted">Loading observer comments...</div>';
             const teacherId = btn.dataset.teacherId || '';
             const obsDateRaw = btn.dataset.observationDateRaw || '';
-            fetch('report_observer_comments.php?teacher_id=' + encodeURIComponent(teacherId) + '&observation_date=' + encodeURIComponent(obsDateRaw))
+            const obsTimeRaw = btn.dataset.observationTimeRaw || '';
+            fetch('report_observer_comments.php?teacher_id=' + encodeURIComponent(teacherId) + '&observation_date=' + encodeURIComponent(obsDateRaw) + '&observation_time=' + encodeURIComponent(obsTimeRaw))
                 .then(r => r.json())
                 .then(res => {
                     if (!res || !res.ok || !Array.isArray(res.items) || res.items.length === 0) {

@@ -69,6 +69,43 @@ if (!empty($scheduleRaw)) {
     $schedule_alert_class = 'alert-warning';
 }
 
+if ($can_evaluate && !empty($scheduleRaw)) {
+    try {
+        $slotDate = date('Y-m-d', strtotime((string)$scheduleRaw));
+        $slotTime = date('H:i', strtotime((string)$scheduleRaw));
+        $balanceStmt = $db->prepare(
+            "SELECT
+                COUNT(DISTINCT e.evaluator_id) AS observer_count,
+                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal') THEN 1 ELSE 0 END) AS has_head,
+                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('chairperson','subject_coordinator','grade_level_coordinator') THEN 1 ELSE 0 END) AS has_coordinator
+             FROM evaluations e
+             JOIN users u ON u.id = e.evaluator_id
+             WHERE e.teacher_id = :teacher_id
+               AND e.observation_date = :observation_date
+               AND COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :observation_time
+               AND (:department = '' OR e.department = :department_match)
+               AND (e.status IS NULL OR e.status <> 'completed')"
+        );
+        $balanceDept = trim((string)($teacher_data['scheduled_department'] ?? $teacher_data['department'] ?? ''));
+        $balanceStmt->execute([
+            ':teacher_id' => (int)$teacher_id,
+            ':observation_date' => $slotDate,
+            ':observation_time' => $slotTime,
+            ':department' => $balanceDept,
+            ':department_match' => $balanceDept
+        ]);
+        $balance = $balanceStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $observerCount = (int)($balance['observer_count'] ?? 0);
+        $hasHead = (int)($balance['has_head'] ?? 0) === 1;
+        $hasCoordinator = (int)($balance['has_coordinator'] ?? 0) === 1;
+        if ($observerCount < 2 || !$hasHead || !$hasCoordinator) {
+            $can_evaluate = false;
+            $schedule_message = 'Observer imbalance: evaluation cannot proceed until at least 2 observers are assigned, including a Dean/Principal and a Coordinator.';
+            $schedule_alert_class = 'alert-danger';
+        }
+    } catch (Exception $e) {}
+}
+
 $department_map = [
     'CCIS'  => 'College of Computing and Information Sciences',
     'CBM'   => 'College of Business and Management',

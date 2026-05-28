@@ -52,7 +52,7 @@ try {
                 form_type ENUM('iso','peac','both') NOT NULL DEFAULT 'iso',
                 scheduled_department VARCHAR(100) NULL,
                 scheduled_by INT NULL,
-                status ENUM('scheduled','rescheduled','cancelled','completed') NOT NULL DEFAULT 'scheduled',
+                status ENUM('scheduled','rescheduled','cancelled','completed','observer_unbalanced') NOT NULL DEFAULT 'scheduled',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 INDEX idx_teacher_schedules_teacher (teacher_id),
@@ -71,7 +71,14 @@ try {
         $statusCol = $db->query("SHOW COLUMNS FROM evaluations LIKE 'status'")->fetch(PDO::FETCH_ASSOC);
         $statusType = strtolower(trim((string)($statusCol['Type'] ?? '')));
         if ($statusType !== '' && strpos($statusType, "enum(") === 0 && strpos($statusType, "'rescheduled'") === false) {
-            $db->exec("ALTER TABLE evaluations MODIFY COLUMN status ENUM('draft','rescheduled','completed') DEFAULT 'draft'");
+            $db->exec("ALTER TABLE evaluations MODIFY COLUMN status ENUM('draft','pending','rescheduled','completed','observer_unbalanced') DEFAULT 'draft'");
+        } elseif ($statusType !== '' && strpos($statusType, "enum(") === 0 && strpos($statusType, "'observer_unbalanced'") === false) {
+            $db->exec("ALTER TABLE evaluations MODIFY COLUMN status ENUM('draft','pending','rescheduled','completed','observer_unbalanced') DEFAULT 'draft'");
+        }
+        $scheduleStatusCol = $db->query("SHOW COLUMNS FROM teacher_schedules LIKE 'status'")->fetch(PDO::FETCH_ASSOC);
+        $scheduleStatusType = strtolower(trim((string)($scheduleStatusCol['Type'] ?? '')));
+        if ($scheduleStatusType !== '' && strpos($scheduleStatusType, "enum(") === 0 && strpos($scheduleStatusType, "'observer_unbalanced'") === false) {
+            $db->exec("ALTER TABLE teacher_schedules MODIFY COLUMN status ENUM('scheduled','rescheduled','cancelled','completed','observer_unbalanced') NOT NULL DEFAULT 'scheduled'");
         }
         // Normalize previous invalid blank statuses created before enum update.
         $db->exec("UPDATE evaluations SET status = 'rescheduled' WHERE status = '' OR status IS NULL");
@@ -399,6 +406,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                      :observation_room, :subject_area, :evaluation_focus, :form_type,
                      :seat_plan, :course_syllabi, :others_requirements, :others_specify, 'draft', NOW(), NOW())"
             );
+            $count_slot_observers_stmt = $db->prepare(
+                "SELECT COUNT(DISTINCT evaluator_id)
+                 FROM evaluations
+                 WHERE teacher_id = :tid
+                   AND academic_year = :ay
+                   AND semester = :sem
+                   AND observation_date = :od
+                   AND COALESCE(observation_time, '') = COALESCE(:ot, '')
+                   AND status <> 'completed'"
+            );
+            $restore_balanced_slot_stmt = $db->prepare(
+                "UPDATE evaluations
+                 SET status = 'draft', updated_at = NOW()
+                 WHERE teacher_id = :tid
+                   AND academic_year = :ay
+                   AND semester = :sem
+                   AND observation_date = :od
+                   AND COALESCE(observation_time, '') = COALESCE(:ot, '')
+                   AND status = 'observer_unbalanced'"
+            );
+            $restore_balanced_schedule_stmt = $db->prepare(
+                "UPDATE teacher_schedules
+                 SET status = 'scheduled', updated_at = NOW()
+                 WHERE teacher_id = :tid
+                   AND academic_year = :ay
+                   AND semester = :sem
+                   AND DATE(schedule_start) = :od
+                   AND COALESCE(DATE_FORMAT(schedule_start, '%H:%i'), '00:00') = :ot_min
+                   AND status = 'observer_unbalanced'"
+            );
             $schedule_guard_stmt = $db->prepare(
                 "SELECT e.id,
                         COALESCE(
@@ -445,6 +482,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                     // Auto-create pending evaluation row(s) for the accepted observer
                     // so teacher "My Evaluations" immediately shows pending completion.
+                    $src = null;
                     try {
                         $eval_source_stmt->execute([':eid' => $eid]);
                         $src = $eval_source_stmt->fetch(PDO::FETCH_ASSOC) ?: null;
@@ -484,6 +522,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                     ':course_syllabi' => (int)($src['course_syllabi'] ?? 0),
                                     ':others_requirements' => (int)($src['others_requirements'] ?? 0),
                                     ':others_specify' => (string)($src['others_specify'] ?? ''),
+                                ]);
+                            }
+                        }
+                    } catch (Exception $e) {}
+
+                    try {
+                        if (!empty($src)) {
+                            $slotParamsBalance = [
+                                ':tid' => (int)$src['teacher_id'],
+                                ':ay' => (string)($src['academic_year'] ?? ''),
+                                ':sem' => (string)($src['semester'] ?? ''),
+                                ':od' => (string)($src['observation_date'] ?? ''),
+                                ':ot' => (string)($src['observation_time'] ?? '')
+                            ];
+                            $count_slot_observers_stmt->execute($slotParamsBalance);
+                            if ((int)$count_slot_observers_stmt->fetchColumn() >= 2) {
+                                $restore_balanced_slot_stmt->execute($slotParamsBalance);
+                                $restore_balanced_schedule_stmt->execute([
+                                    ':tid' => (int)$src['teacher_id'],
+                                    ':ay' => (string)($src['academic_year'] ?? ''),
+                                    ':sem' => (string)($src['semester'] ?? ''),
+                                    ':od' => (string)($src['observation_date'] ?? ''),
+                                    ':ot_min' => substr((string)($src['observation_time'] ?? '00:00'), 0, 5) ?: '00:00'
                                 ]);
                             }
                         }
@@ -648,6 +709,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                                          AND observation_date = :od
                                                          AND COALESCE(observation_time, '') = COALESCE(:ot, '')
                                                          AND status <> 'completed'");
+            $count_remaining_observers_stmt = $db->prepare("SELECT COUNT(DISTINCT evaluator_id)
+                                                            FROM evaluations
+                                                            WHERE teacher_id = :tid
+                                                              AND academic_year = :ay
+                                                              AND semester = :sem
+                                                              AND observation_date = :od
+                                                              AND COALESCE(observation_time, '') = COALESCE(:ot, '')
+                                                              AND status <> 'completed'");
+            $mark_unbalanced_slot_stmt = $db->prepare("UPDATE evaluations
+                                                       SET status = 'observer_unbalanced', updated_at = NOW()
+                                                       WHERE teacher_id = :tid
+                                                         AND academic_year = :ay
+                                                         AND semester = :sem
+                                                         AND observation_date = :od
+                                                         AND COALESCE(observation_time, '') = COALESCE(:ot, '')
+                                                         AND status <> 'completed'");
+            $mark_unbalanced_schedule_stmt = $db->prepare("UPDATE teacher_schedules
+                                                           SET status = 'observer_unbalanced', updated_at = NOW()
+                                                           WHERE teacher_id = :tid
+                                                             AND academic_year = :ay
+                                                             AND semester = :sem
+                                                             AND DATE(schedule_start) = :od
+                                                             AND COALESCE(DATE_FORMAT(schedule_start, '%H:%i'), '00:00') = :ot_min
+                                                             AND status <> 'completed'");
             $delete_remaining_slot_stmt = $db->prepare("DELETE FROM evaluations
                                                         WHERE teacher_id = :tid
                                                           AND academic_year = :ay
@@ -709,9 +794,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ];
                 $count_remaining_slot_stmt->execute($slotParams);
                 $remaining_slot_rows = (int)$count_remaining_slot_stmt->fetchColumn();
+                $count_remaining_observers_stmt->execute($slotParams);
+                $remaining_observers = (int)$count_remaining_observers_stmt->fetchColumn();
+                $is_observer_unbalanced = false;
                 if ($remaining_slot_rows <= 0) {
                     $delete_remaining_slot_stmt->execute($slotParams);
                     $clear_teacher_slot_stmt->execute([':tid' => $tid]);
+                } elseif ($remaining_observers < 2) {
+                    $mark_unbalanced_slot_stmt->execute($slotParams);
+                    $mark_unbalanced_schedule_stmt->execute([
+                        ':tid' => $tid,
+                        ':ay' => (string)($src['academic_year'] ?? ''),
+                        ':sem' => (string)($src['semester'] ?? ''),
+                        ':od' => (string)($src['observation_date'] ?? ''),
+                        ':ot_min' => substr((string)($src['observation_time'] ?? '00:00'), 0, 5) ?: '00:00'
+                    ]);
+                    $is_observer_unbalanced = true;
                 }
 
                 try {
@@ -722,6 +820,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         $obs_role = ucfirst(str_replace('_', ' ', (string)($_SESSION['role'] ?? 'evaluator')));
                         $title = 'Observer Unable to Attend';
                         $message = "{$obs_role} {$obs_name} will not be able to observe/evaluate your schedule. Reason: {$observer_reason}";
+                        if ($is_observer_unbalanced) {
+                            $title = 'Observer Imbalance';
+                            $message .= ' Only one observer remains, so the evaluation cannot proceed until another observer is assigned.';
+                        }
                         $teacher_link = 'observation_plan.php?view=my_observation&eval_id=' . urlencode((string)$eid);
 
                         $ins_notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, is_read)
@@ -1365,6 +1467,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             try {
                 $own_stmt = $db->prepare("UPDATE evaluations SET department = :dept WHERE id = :eval_id");
                 $own_stmt->execute([':dept' => $sched_dept_val, ':eval_id' => $eval_id]);
+                $sched_own_stmt = $db->prepare("UPDATE teacher_schedules SET scheduled_department = :dept WHERE evaluation_id = :eval_id AND teacher_id = :teacher_id");
+                $sched_own_stmt->execute([
+                    ':dept' => $sched_dept_val,
+                    ':eval_id' => (int)$eval_id,
+                    ':teacher_id' => (int)$teacher_id
+                ]);
             } catch (Exception $e) {}
         }
 
@@ -2522,21 +2630,22 @@ $get_required_observers = function(int $teacher_id, int $eval_id, string $dept, 
         } catch (Exception $e) {}
     }
 
-    // Include President/VP when they explicitly accepted as observer for this teacher.
-    // Do not restrict by eval_id to avoid missing accepted observers across merged slot rows.
-    if ($teacher_id > 0) {
+    // Include President/VP only when they explicitly accepted this schedule row.
+    if ($teacher_id > 0 && $eval_id > 0) {
         try {
             $pvp_stmt = $db->prepare(
                 "SELECT DISTINCT u.name
                  FROM teacher_assignments ta
                  JOIN users u ON u.id = ta.evaluator_id
                  WHERE ta.teacher_id = :teacher_id
+                   AND ta.eval_id = :eval_id
                    AND u.status = 'active'
                    AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('president','vice_president')
                  ORDER BY u.name"
             );
             $pvp_stmt->execute([
-                ':teacher_id' => $teacher_id
+                ':teacher_id' => $teacher_id,
+                ':eval_id' => $eval_id
             ]);
             while ($pn = $pvp_stmt->fetchColumn()) {
                 $pn = trim((string)$pn);
@@ -2901,6 +3010,7 @@ foreach ($scheduled_teachers as $t) {
                  WHERE teacher_id = :tid
                    AND academic_year = :ay
                    AND semester = :sem
+                   AND (:owning_dept = '' OR department = :owning_dept_match)
                    AND status <> 'completed'
                    AND DATE_FORMAT(CONCAT(observation_date, ' ', COALESCE(observation_time, '00:00:00')), '%Y-%m-%d %H:%i') = DATE_FORMAT(:sched_dt, '%Y-%m-%d %H:%i')
                  ORDER BY id DESC
@@ -2910,6 +3020,8 @@ foreach ($scheduled_teachers as $t) {
                 ':tid' => $tid,
                 ':ay' => $academic_year,
                 ':sem' => $semester,
+                ':owning_dept' => (string)$owning_dept,
+                ':owning_dept_match' => (string)$owning_dept,
                 ':sched_dt' => $sched_dt
             ]);
             $active_eval_id_for_schedule = (int)($activeEvalStmt->fetchColumn() ?: 0);
@@ -3047,8 +3159,9 @@ if (!empty($filter_status)) {
 
         if ($filter_status === 'done') return $is_done || $row_status === 'completed';
         if ($filter_status === 'rescheduled') return ($row_status === 'rescheduled');
+        if ($filter_status === 'observer_unbalanced') return ($row_status === 'observer_unbalanced');
         if ($filter_status === 'did_not_evaluate') return $is_overdue_not_evaluated;
-        if ($filter_status === 'scheduled') return $has_sched && !$is_done && $row_status !== 'rescheduled' && !$is_overdue_not_evaluated;
+        if ($filter_status === 'scheduled') return $has_sched && !$is_done && !in_array($row_status, ['rescheduled', 'observer_unbalanced'], true) && !$is_overdue_not_evaluated;
         return true;
     });
     $teachers_list = array_values($teachers_list);
@@ -3834,6 +3947,7 @@ try {
                                 <option value="" <?php echo $filter_status === '' ? 'selected' : ''; ?>>All Remarks</option>
                                 <option value="scheduled" <?php echo $filter_status === 'scheduled' ? 'selected' : ''; ?>>Scheduled</option>
                                 <option value="rescheduled" <?php echo $filter_status === 'rescheduled' ? 'selected' : ''; ?>>Rescheduled</option>
+                                <option value="observer_unbalanced" <?php echo $filter_status === 'observer_unbalanced' ? 'selected' : ''; ?>>Observer Imbalance</option>
                                 <option value="done" <?php echo $filter_status === 'done' ? 'selected' : ''; ?>>Conducted</option>
                                 <option value="did_not_evaluate" <?php echo $filter_status === 'did_not_evaluate' ? 'selected' : ''; ?>>Did Not Evaluate</option>
                             </select>
@@ -4415,9 +4529,8 @@ try {
                                 <th style="width: 8%;" id="th_subject_area"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Grade Level/Section' : 'Subject Area'; ?></th>
                                 <th style="width: 9%;" id="th_subject"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
                                 <th style="width: 5%;">Room</th>
-                                <th style="width: 10%;">Name of Observers</th>
-                                <th style="width: 6%;">Teacher Signature</th>
-                                <th style="width: 7%; min-width: 60px;">Remarks</th>
+                                <th style="width: 12%;">Name of Observers</th>
+                                <th style="width: 9%; min-width: 70px;">Remarks</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -4620,33 +4733,6 @@ try {
                                     </td>
                                     <td class="text-center" style="font-size:0.8rem;">
                                         <?php 
-                                        $ack = $ack_map[$tid] ?? null;
-                                        if ($has_schedule): ?>
-                                            <?php if ($is_schedule_signed && !empty($ack_eval['signature'])): ?>
-                                                <img src="<?php echo $ack_eval['signature']; ?>" alt="Signature" style="max-height: 30px; max-width: 60px;" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack_eval['acknowledged_at']))); ?>">
-                                            <?php elseif ($is_schedule_signed): ?>
-                                                <span class="text-success no-print" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack_eval['acknowledged_at']))); ?>">
-                                                    <i class="fas fa-check-circle"></i>
-                                                </span>
-                                                <span class="print-only">Signed</span>
-                                            <?php else: ?>
-                                                <span class="text-warning no-print"><i class="fas fa-clock"></i> Pending</span>
-                                                <span class="print-only">Pending</span>
-                                            <?php endif; ?>
-                                        <?php elseif ($ack && !empty($ack['signature'])): ?>
-                                            <img src="<?php echo $ack['signature']; ?>" alt="Signature" style="max-height: 30px; max-width: 60px;" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
-                                        <?php elseif ($ack): ?>
-                                            <span class="text-success no-print" title="Signed on <?php echo htmlspecialchars(date('M d, Y g:ia', strtotime($ack['acknowledged_at']))); ?>">
-                                                <i class="fas fa-check-circle"></i>
-                                            </span>
-                                            <span class="print-only">Signed</span>
-                                        <?php else: ?>
-                                            <span class="text-warning no-print"><i class="fas fa-clock"></i> Pending</span>
-                                            <span class="print-only">Pending</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="text-center" style="font-size:0.8rem;">
-                                        <?php 
                                         $row_required_form_type = strtolower(trim((string)($t['evaluation_form_type'] ?? 'iso')));
                                         if (!in_array($row_required_form_type, ['iso', 'peac', 'both'], true)) {
                                             $row_required_form_type = 'iso';
@@ -4696,6 +4782,10 @@ try {
                                             echo '<span class="badge bg-danger">Did Not Evaluate</span>';
                                         } elseif ($row_eval_status === 'rescheduled') {
                                             echo '<span class="badge bg-warning text-dark">Rescheduled</span>';
+                                        } elseif ($row_eval_status === 'observer_unbalanced') {
+                                            echo '<span class="badge bg-danger">Observer Imbalance</span>';
+                                        } elseif ($is_schedule_signed) {
+                                            echo '<span class="badge bg-success">Signed</span>';
                                         } elseif ($has_schedule) {
                                             echo '<span class="badge bg-info">Scheduled</span>';
                                         } else {
@@ -4707,7 +4797,7 @@ try {
                                 <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="11" class="text-center text-muted">No teachers found for this semester.</td>
+                                    <td colspan="10" class="text-center text-muted">No teachers found for this semester.</td>
                                 </tr>
                             <?php endif; ?>
                         </tbody>

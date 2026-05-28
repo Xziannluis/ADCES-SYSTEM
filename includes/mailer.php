@@ -210,12 +210,15 @@ function notifyScheduleParticipants($db, $teacherId, $schedule, $room, $setterId
              WHERE ta.teacher_id = ?
                AND u.role IN ($rolePlaceholders)
                AND u.status = 'active'
+               AND (? = '' OR u.department = ?)
                AND u.id != ?
                AND u.email IS NOT NULL
                AND u.email != ''"
         );
         $evalParams = [$teacherId];
         foreach ($targetRoles as $r) { $evalParams[] = $r; }
+        $evalParams[] = $setterDept;
+        $evalParams[] = $setterDept;
         $evalParams[] = $setterId;
         $evalStmt->execute($evalParams);
         $assignedEvaluators = $evalStmt->fetchAll(PDO::FETCH_ASSOC);

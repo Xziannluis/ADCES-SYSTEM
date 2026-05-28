@@ -64,7 +64,10 @@ $info = ['title' => 'Login', 'icon' => 'fas fa-sign-in-alt', 'color' => '#2a5298
             content: '';
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.15);
+            background:
+                radial-gradient(circle at 72% 18%, rgba(44, 82, 130, 0.32), transparent 32%),
+                radial-gradient(circle at 18% 82%, rgba(15, 160, 190, 0.30), transparent 34%),
+                linear-gradient(135deg, rgba(3, 12, 28, 0.72), rgba(7, 22, 45, 0.38));
             z-index: 1;
         }
 
@@ -163,11 +166,37 @@ $info = ['title' => 'Login', 'icon' => 'fas fa-sign-in-alt', 'color' => '#2a5298
         }
 
         .login-card {
-            background: #fff;
-            border-radius: 16px;
-            padding: 36px 32px 28px;
+            position: relative;
+            overflow: hidden;
+            background:
+                linear-gradient(145deg, rgba(255,255,255,0.94), rgba(233,243,255,0.88)),
+                radial-gradient(circle at top left, rgba(42,82,152,0.20), transparent 40%);
+            border: 1px solid rgba(255,255,255,0.72);
+            border-radius: 22px;
+            padding: 40px 32px 30px;
             width: 100%;
-            box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+            box-shadow: 0 24px 70px rgba(0,0,0,0.36);
+            backdrop-filter: blur(18px);
+        }
+
+        .login-card::before {
+            content: '';
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 8px;
+            background: linear-gradient(90deg, #0ea5c6, #2a5298, #4a6cf7);
+        }
+
+        .login-card::after {
+            content: '';
+            position: absolute;
+            width: 170px;
+            height: 170px;
+            right: -82px;
+            top: -82px;
+            border-radius: 50%;
+            background: rgba(42,82,152,0.12);
+            pointer-events: none;
         }
 
         .role-icon-wrap {
@@ -180,16 +209,17 @@ $info = ['title' => 'Login', 'icon' => 'fas fa-sign-in-alt', 'color' => '#2a5298
             align-items: center;
             justify-content: center;
             width: 52px; height: 52px;
-            border-radius: 14px;
+            border-radius: 16px;
             font-size: 1.4rem;
             color: #fff;
+            box-shadow: 0 10px 24px rgba(42,82,152,0.35);
         }
 
         .card-title {
             text-align: center;
             font-size: 1.2rem;
             font-weight: 700;
-            color: #1a2a44;
+            color: #18345d;
             margin-bottom: 4px;
         }
 
@@ -206,16 +236,19 @@ $info = ['title' => 'Login', 'icon' => 'fas fa-sign-in-alt', 'color' => '#2a5298
         }
 
         .form-floating .form-control {
-            border: 1.5px solid #dee2e6;
-            border-radius: 10px;
+            background: rgba(255,255,255,0.78);
+            border: 1.5px solid rgba(42,82,152,0.16);
+            border-radius: 14px;
             height: 50px;
             font-size: 0.95rem;
             padding: 16px 14px 6px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
         }
 
         .form-floating .form-control:focus {
             border-color: #2a5298;
-            box-shadow: 0 0 0 3px rgba(42,82,152,0.12);
+            background: #fff;
+            box-shadow: 0 0 0 4px rgba(42,82,152,0.14);
         }
 
         .form-floating label {
@@ -225,44 +258,46 @@ $info = ['title' => 'Login', 'icon' => 'fas fa-sign-in-alt', 'color' => '#2a5298
 
         /* Buttons */
         .btn-login {
-            background: #4a6cf7;
+            background: linear-gradient(135deg, #2a5298, #4a6cf7);
             border: none;
             padding: 12px;
             font-weight: 600;
             font-size: 1rem;
-            border-radius: 10px;
+            border-radius: 14px;
             color: #fff;
             transition: all 0.25s;
+            box-shadow: 0 10px 22px rgba(42,82,152,0.28);
         }
 
         .btn-login:hover {
-            background: #3b5de7;
+            background: linear-gradient(135deg, #234987, #3b5de7);
             transform: translateY(-1px);
-            box-shadow: 0 4px 14px rgba(74,108,247,0.4);
+            box-shadow: 0 14px 28px rgba(42,82,152,0.36);
             color: #fff;
         }
 
         .btn-back {
-            background: #f0f2f5;
-            border: 1px solid #dee2e6;
+            background: rgba(255,255,255,0.56);
+            border: 1px solid rgba(42,82,152,0.16);
             padding: 11px;
             font-weight: 600;
             font-size: 0.95rem;
-            border-radius: 10px;
-            color: #495057;
+            border-radius: 14px;
+            color: #2f4668;
             transition: all 0.25s;
         }
 
         .btn-back:hover {
-            background: #e2e6ea;
+            background: #fff;
             color: #1a2a44;
+            box-shadow: 0 8px 18px rgba(42,82,152,0.12);
         }
 
         .forgot-link {
-            color: #4a6cf7;
+            color: #2a5298;
             text-decoration: none;
             font-size: 0.85rem;
-            font-weight: 500;
+            font-weight: 700;
         }
 
         .forgot-link:hover {
@@ -274,6 +309,10 @@ $info = ['title' => 'Login', 'icon' => 'fas fa-sign-in-alt', 'color' => '#2a5298
             display: flex;
             justify-content: center;
             margin-bottom: 16px;
+        }
+
+        .g-recaptcha {
+            filter: drop-shadow(0 8px 18px rgba(24,52,93,0.10));
         }
 
         /* Alert */

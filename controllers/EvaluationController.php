@@ -153,13 +153,13 @@ class EvaluationController {
 
         try {
             $stmt = $this->db->prepare(
-                "SELECT observation_date, observation_time, observation_room, semester, academic_year, subject_observed, subject_area, evaluation_focus
+                "SELECT observation_date, observation_time, observation_room, semester, academic_year, subject_observed, subject_area, evaluation_focus, department
                  FROM evaluations
                  WHERE teacher_id = :tid
                    AND evaluator_id = :eid
                    AND observation_date IS NOT NULL
                    AND (
-                        status IN ('draft','pending')
+                        status IN ('draft','pending','observer_unbalanced')
                         OR status IS NULL
                         OR status = ''
                    )
@@ -190,13 +190,13 @@ class EvaluationController {
             // if no evaluator-specific pending slot, use closest pending slot in their department.
             if ($row === null && in_array($evaluatorRole, ['dean', 'principal'], true) && trim($evaluatorDept) !== '') {
                 $stmtAny = $this->db->prepare(
-                    "SELECT e.observation_date, e.observation_time, e.observation_room, e.semester, e.academic_year, e.subject_observed, e.subject_area, e.evaluation_focus
+                    "SELECT e.observation_date, e.observation_time, e.observation_room, e.semester, e.academic_year, e.subject_observed, e.subject_area, e.evaluation_focus, e.department
                      FROM evaluations e
                      INNER JOIN teachers t ON t.id = e.teacher_id
                      WHERE e.teacher_id = :tid
                        AND e.observation_date IS NOT NULL
                        AND (
-                            e.status IN ('draft','pending')
+                            e.status IN ('draft','pending','observer_unbalanced')
                             OR e.status IS NULL
                             OR e.status = ''
                        )
@@ -239,9 +239,46 @@ class EvaluationController {
                 'subject_observed' => trim((string)($row['subject_observed'] ?? '')),
                 'subject_area' => trim((string)($row['subject_area'] ?? '')),
                 'evaluation_focus' => trim((string)($row['evaluation_focus'] ?? '')),
+                'department' => trim((string)($row['department'] ?? '')),
             ];
         } catch (Exception $e) {
             return $fallback;
+        }
+    }
+
+    private function assertObserverBalance(int $teacherId, string $observationDate, string $observationTime, string $department = ''): void {
+        $observationDate = trim($observationDate);
+        $observationTime = trim($observationTime);
+        if ($observationDate === '') return;
+        if ($observationTime === '') $observationTime = '00:00';
+        $observationTime = substr($observationTime, 0, 5);
+
+        $balanceStmt = $this->db->prepare(
+            "SELECT
+                COUNT(DISTINCT e.evaluator_id) AS observer_count,
+                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal') THEN 1 ELSE 0 END) AS has_head,
+                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('chairperson','subject_coordinator','grade_level_coordinator') THEN 1 ELSE 0 END) AS has_coordinator
+             FROM evaluations e
+             JOIN users u ON u.id = e.evaluator_id
+             WHERE e.teacher_id = :teacher_id
+               AND e.observation_date = :observation_date
+               AND COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :observation_time
+               AND (:department = '' OR e.department = :department_match)
+               AND (e.status IS NULL OR e.status <> 'completed')"
+        );
+        $balanceStmt->execute([
+            ':teacher_id' => $teacherId,
+            ':observation_date' => $observationDate,
+            ':observation_time' => $observationTime,
+            ':department' => trim($department),
+            ':department_match' => trim($department)
+        ]);
+        $balance = $balanceStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $observerCount = (int)($balance['observer_count'] ?? 0);
+        $hasHead = (int)($balance['has_head'] ?? 0) === 1;
+        $hasCoordinator = (int)($balance['has_coordinator'] ?? 0) === 1;
+        if ($observerCount < 2 || !$hasHead || !$hasCoordinator) {
+            throw new Exception('Observer imbalance: evaluation cannot proceed until at least 2 observers are assigned, including a Dean/Principal and a Coordinator.');
         }
     }
 
@@ -351,6 +388,25 @@ class EvaluationController {
             if (empty($postData['academic_year']) && !empty($effectiveSchedule['academic_year'])) {
                 $postData['academic_year'] = (string)$effectiveSchedule['academic_year'];
             }
+
+            $balanceDate = trim((string)($postData['observation_date'] ?? ''));
+            $balanceTime = trim((string)($postData['observation_time'] ?? ''));
+            if ($balanceDate === '' && !empty($scheduleVal)) {
+                try {
+                    $balanceDt = new DateTime((string)$scheduleVal, new DateTimeZone(self::EVALUATION_TIMEZONE));
+                    $balanceDate = $balanceDt->format('Y-m-d');
+                    $balanceTime = $balanceDt->format('H:i:s');
+                } catch (Exception $e) {}
+            }
+            $balanceDepartment = trim((string)($effectiveSchedule['department'] ?? ''));
+            if ($balanceDepartment === '') {
+                try {
+                    $deptStmt = $this->db->prepare("SELECT COALESCE(NULLIF(scheduled_department, ''), department) FROM teachers WHERE id = :id LIMIT 1");
+                    $deptStmt->execute([':id' => (int)$teacherId]);
+                    $balanceDepartment = trim((string)$deptStmt->fetchColumn());
+                } catch (Exception $e) {}
+            }
+            $this->assertObserverBalance((int)$teacherId, $balanceDate, $balanceTime, $balanceDepartment);
 
             // Enforce teacher acknowledgment for the active schedule cycle.
             // A teacher can only be evaluated after signing the observation plan

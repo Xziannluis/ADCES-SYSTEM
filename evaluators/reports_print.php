@@ -65,6 +65,47 @@ $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'A
 // Keep print output aligned with reports.php and include all observer entries
 // in the selected scope.
 $scoped_evaluator_id = null;
+$report_scope_observer_id = $is_coordinator ? (int)($_SESSION['user_id'] ?? 0) : null;
+$coordinator_report_scope_sql = "";
+if ($report_scope_observer_id) {
+    $coordinator_report_scope_sql = " AND (
+        e.evaluator_id = :scope_observer_user_id
+        OR EXISTS (
+            SELECT 1
+            FROM evaluations se
+            WHERE se.teacher_id = e.teacher_id
+              AND se.academic_year = e.academic_year
+              AND se.semester = e.semester
+              AND DATE(se.observation_date) = DATE(e.observation_date)
+              AND COALESCE(se.observation_time, '') = COALESCE(e.observation_time, '')
+              AND se.evaluator_id = :scope_observer_user_id_eval
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM teacher_assignments ta
+            WHERE ta.teacher_id = e.teacher_id
+              AND ta.evaluator_id = :scope_observer_user_id_assign
+              AND (
+                  ta.eval_id = e.id
+                  OR ta.eval_id IN (
+                      SELECT se2.id
+                      FROM evaluations se2
+                      WHERE se2.teacher_id = e.teacher_id
+                        AND se2.academic_year = e.academic_year
+                        AND se2.semester = e.semester
+                        AND DATE(se2.observation_date) = DATE(e.observation_date)
+                        AND COALESCE(se2.observation_time, '') = COALESCE(e.observation_time, '')
+                  )
+              )
+        )
+    )";
+}
+$bind_report_scope = static function(PDOStatement $stmt) use ($report_scope_observer_id): void {
+    if (!$report_scope_observer_id) return;
+    $stmt->bindValue(':scope_observer_user_id', $report_scope_observer_id, PDO::PARAM_INT);
+    $stmt->bindValue(':scope_observer_user_id_eval', $report_scope_observer_id, PDO::PARAM_INT);
+    $stmt->bindValue(':scope_observer_user_id_assign', $report_scope_observer_id, PDO::PARAM_INT);
+};
 
 // Available teachers (for label lookup)
 $available_teachers = [];
@@ -76,22 +117,26 @@ try {
                           WHERE e.status = 'completed'
                             AND e.overall_avg IS NOT NULL
                             AND e.overall_avg > 0
+                            $coordinator_report_scope_sql
                           ORDER BY t.name ASC";
         $teachersStmt = $db->prepare($teachersQuery);
+        $bind_report_scope($teachersStmt);
     } else {
     $teachersQuery = "SELECT DISTINCT t.id, t.name
         FROM evaluations e
         INNER JOIN teachers t ON e.teacher_id = t.id
-        WHERE t.department = :department
+        WHERE e.department = :department
           AND e.status = 'completed'
           AND e.overall_avg IS NOT NULL
           AND e.overall_avg > 0";
+    $teachersQuery .= $coordinator_report_scope_sql;
     if ($scoped_evaluator_id !== null) {
         $teachersQuery .= " AND e.evaluator_id = :evaluator_id";
     }
     $teachersQuery .= " ORDER BY t.name ASC";
     $teachersStmt = $db->prepare($teachersQuery);
     $teachersStmt->bindValue(':department', $raw_department);
+    $bind_report_scope($teachersStmt);
     if ($scoped_evaluator_id !== null) {
         $teachersStmt->bindValue(':evaluator_id', $scoped_evaluator_id);
     }
@@ -119,7 +164,7 @@ foreach ($available_teachers as $teacher_option) {
 
 // Get evaluations
 $report_department = $raw_department;
-$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '');
+$evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', '', null, $report_scope_observer_id);
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
 $format_day_time = static function(array $eval): string {
