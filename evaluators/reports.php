@@ -1215,7 +1215,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             const teacherId = btn.dataset.teacherId || '';
             const obsDateRaw = btn.dataset.observationDateRaw || '';
             const obsTimeRaw = btn.dataset.observationTimeRaw || '';
-            fetch('report_observer_comments.php?teacher_id=' + encodeURIComponent(teacherId) + '&observation_date=' + encodeURIComponent(obsDateRaw) + '&observation_time=' + encodeURIComponent(obsTimeRaw))
+            fetch('report_observer_comments.php?eval_id=' + encodeURIComponent(currentPreviewEvalId) + '&teacher_id=' + encodeURIComponent(teacherId) + '&observation_date=' + encodeURIComponent(obsDateRaw) + '&observation_time=' + encodeURIComponent(obsTimeRaw))
                 .then(r => r.json())
                 .then(res => {
                     if (!res || !res.ok || !Array.isArray(res.items) || res.items.length === 0) {

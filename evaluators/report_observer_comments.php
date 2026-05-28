@@ -11,8 +11,31 @@ if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'sub
 }
 
 $teacherId = (int)($_GET['teacher_id'] ?? 0);
+$evalId = (int)($_GET['eval_id'] ?? 0);
 $obsDateRaw = trim((string)($_GET['observation_date'] ?? ''));
 $obsTimeRaw = trim((string)($_GET['observation_time'] ?? ''));
+
+$db = (new Database())->getConnection();
+$slotAcademicYear = '';
+$slotSemester = '';
+$slotDepartment = '';
+
+if ($evalId > 0) {
+    $slotStmt = $db->prepare("SELECT teacher_id, observation_date, observation_time, academic_year, semester, department
+                              FROM evaluations
+                              WHERE id = :eval_id
+                              LIMIT 1");
+    $slotStmt->execute([':eval_id' => $evalId]);
+    $slotRow = $slotStmt->fetch(PDO::FETCH_ASSOC);
+    if ($slotRow) {
+        $teacherId = (int)($slotRow['teacher_id'] ?? $teacherId);
+        $obsDateRaw = trim((string)($slotRow['observation_date'] ?? $obsDateRaw));
+        $obsTimeRaw = trim((string)($slotRow['observation_time'] ?? $obsTimeRaw));
+        $slotAcademicYear = trim((string)($slotRow['academic_year'] ?? ''));
+        $slotSemester = trim((string)($slotRow['semester'] ?? ''));
+        $slotDepartment = trim((string)($slotRow['department'] ?? ''));
+    }
+}
 
 if ($teacherId <= 0 || $obsDateRaw === '') {
     http_response_code(422);
@@ -20,7 +43,6 @@ if ($teacherId <= 0 || $obsDateRaw === '') {
     exit();
 }
 
-$db = (new Database())->getConnection();
 $dateYmd = date('Y-m-d', strtotime($obsDateRaw));
 $timeHm = '';
 if ($obsTimeRaw !== '' && $obsTimeRaw !== '00:00' && $obsTimeRaw !== '00:00:00' && strtotime($obsTimeRaw) !== false) {
@@ -39,7 +61,7 @@ if (in_array($_SESSION['role'] ?? '', ['chairperson', 'subject_coordinator', 'gr
         ':uid_assign' => (int)($_SESSION['user_id'] ?? 0),
     ];
     if ($timeHm !== '') {
-        $accessSql .= " AND COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :ot";
+        $accessSql .= " AND COALESCE(TIME_FORMAT(e.observation_time, '%H:%i'), '00:00') = :ot";
         $accessParams[':ot'] = $timeHm;
     }
     $accessSql .= " AND (
@@ -62,15 +84,31 @@ if (in_array($_SESSION['role'] ?? '', ['chairperson', 'subject_coordinator', 'gr
     }
 }
 
-$stmt = $db->prepare("SELECT e.id, e.strengths, e.improvement_areas, e.recommendations, e.agreement, e.overall_avg,
-                             u.name AS observer_name
-                      FROM evaluations e
-                      LEFT JOIN users u ON e.evaluator_id = u.id
-                      WHERE e.teacher_id = :tid AND DATE(e.observation_date) = :od
-                        AND (:ot_filter = '' OR COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :ot_match)
-                        AND e.status = 'completed'
-                      ORDER BY e.created_at ASC, e.id ASC");
-$stmt->execute([':tid' => $teacherId, ':od' => $dateYmd, ':ot_filter' => $timeHm, ':ot_match' => $timeHm]);
+$commentsSql = "SELECT e.id, e.strengths, e.improvement_areas, e.recommendations, e.agreement, e.overall_avg,
+                       u.name AS observer_name
+                FROM evaluations e
+                LEFT JOIN users u ON e.evaluator_id = u.id
+                WHERE e.teacher_id = :tid
+                  AND DATE(e.observation_date) = :od
+                  AND (:ot_filter = '' OR COALESCE(TIME_FORMAT(e.observation_time, '%H:%i'), '00:00') = :ot_match)
+                  AND (:ay_filter = '' OR e.academic_year = :ay_match)
+                  AND (:sem_filter = '' OR e.semester = :sem_match)
+                  AND (:dept_filter = '' OR e.department = :dept_match)
+                  AND e.status = 'completed'
+                ORDER BY e.created_at ASC, e.id ASC";
+$stmt = $db->prepare($commentsSql);
+$stmt->execute([
+    ':tid' => $teacherId,
+    ':od' => $dateYmd,
+    ':ot_filter' => $timeHm,
+    ':ot_match' => $timeHm,
+    ':ay_filter' => $slotAcademicYear,
+    ':ay_match' => $slotAcademicYear,
+    ':sem_filter' => $slotSemester,
+    ':sem_match' => $slotSemester,
+    ':dept_filter' => $slotDepartment,
+    ':dept_match' => $slotDepartment,
+]);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
 $items = [];

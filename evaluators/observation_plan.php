@@ -2870,8 +2870,10 @@ foreach ($eval_teachers as $t) {
     $eval_dept_val = trim((string)($t['eval_department'] ?? ''));
     $sched_dept_val = $t['scheduled_department'] ?? '';
     $teacher_primary_dept = $t['teacher_department'] ?? '';
-    // Ownership should follow the active schedule first.
-    $row_owning_dept = !empty($sched_dept_val) ? $sched_dept_val : ($eval_dept_val !== '' ? $eval_dept_val : $teacher_primary_dept);
+    // Evaluation rows are historical/per-slot records, so their own department
+    // must win over the teacher-level latest schedule fields. Otherwise a newer
+    // schedule in another department can make completed rows show wrong observers.
+    $row_owning_dept = $eval_dept_val !== '' ? $eval_dept_val : (!empty($sched_dept_val) ? $sched_dept_val : $teacher_primary_dept);
     $owning_dept = $row_owning_dept;
     $is_secondary_dept = !empty($raw_department) && $teacher_primary_dept !== $raw_department;
 
@@ -3059,7 +3061,10 @@ if (!empty($teachers_list)) {
         $sd = $schedule_data[$row_key] ?? [];
         // Keep rows from different owning departments separate so observer
         // lists are not merged across primary/secondary department contexts.
-        $row_owning_dept_key = trim((string)($t['scheduled_department'] ?? ''));
+        $row_owning_dept_key = trim((string)($t['eval_department'] ?? ''));
+        if ($row_owning_dept_key === '') {
+            $row_owning_dept_key = trim((string)($t['scheduled_department'] ?? ''));
+        }
         if ($row_owning_dept_key === '') {
             $row_owning_dept_key = trim((string)($t['teacher_department'] ?? ''));
         }
