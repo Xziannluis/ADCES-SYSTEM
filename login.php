@@ -5,27 +5,28 @@ require_once __DIR__ . '/includes/ai_autostart.php';
 
 // Redirect if already logged in
 if(isset($_SESSION['user_id'])) {
-    if($_SESSION['role'] == 'superadmin') {
-        header("Location: superadmin/dashboard.php");
+    $role = strtolower(trim((string)($_SESSION['role'] ?? '')));
+    $role = str_replace(['-', ' '], '_', $role);
+
+    if($role === 'edp') {
+        header("Location: edp/dashboard.php");
+    } elseif(in_array($role, ['president', 'vice_president', 'dean', 'principal'], true)) {
+        header("Location: evaluators/dashboard.php");
+    } elseif($role === 'teacher') {
+        header("Location: teachers/dashboard.php");
+    } elseif($role === 'chairperson') {
+        header("Location: evaluators/chairperson.php");
+    } elseif($role === 'subject_coordinator') {
+        header("Location: evaluators/subject_coordinator.php");
+    } elseif($role === 'grade_level_coordinator') {
+        header("Location: evaluators/grade_level_coordinator.php");
     } else {
         header("Location: evaluators/dashboard.php");
     }
     exit();
 }
 
-// Role group from index.php
-$role_group = isset($_GET['role']) ? trim($_GET['role']) : '';
-
-// Role display info
-$role_info = [
-    'edp'         => ['title' => 'EDP Login',                      'icon' => 'fas fa-server',              'color' => '#6c757d'],
-    'president'   => ['title' => 'President / VP Login',            'icon' => 'fas fa-crown',               'color' => '#8B0000'],
-    'dean'        => ['title' => 'Dean / Principal Login',          'icon' => 'fas fa-user-tie',            'color' => '#2a5298'],
-    'coordinator' => ['title' => 'Coordinator / Chairperson Login', 'icon' => 'fas fa-users-cog',           'color' => '#1a8754'],
-    'teacher'     => ['title' => 'Teacher Login',                   'icon' => 'fas fa-chalkboard-teacher',  'color' => '#e67e22'],
-];
-
-$info = $role_info[$role_group] ?? ['title' => 'Login', 'icon' => 'fas fa-sign-in-alt', 'color' => '#2a5298'];
+$info = ['title' => 'Login', 'icon' => 'fas fa-sign-in-alt', 'color' => '#2a5298'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -347,7 +348,6 @@ $info = $role_info[$role_group] ?? ['title' => 'Login', 'icon' => 'fas fa-sign-i
                 <?php endif; ?>
 
                 <form action="auth/login-process.php" method="POST">
-                    <input type="hidden" name="role" value="<?php echo htmlspecialchars($role_group); ?>">
                     <div class="form-floating">
                         <input type="text" class="form-control" id="username" name="username" required placeholder="Username">
                         <label for="username">Username</label>

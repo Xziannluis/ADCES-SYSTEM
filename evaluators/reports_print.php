@@ -62,9 +62,9 @@ if ($is_leader) {
 }
 $department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
 
-// Keep print output aligned with reports.php:
-// leaders may view department scope; all other evaluator roles see only their own records.
-$scoped_evaluator_id = $is_leader ? null : (int)($_SESSION['user_id'] ?? 0);
+// Keep print output aligned with reports.php and include all observer entries
+// in the selected scope.
+$scoped_evaluator_id = null;
 
 // Available teachers (for label lookup)
 $available_teachers = [];
@@ -150,23 +150,8 @@ $format_day_time = static function(array $eval): string {
     return $day;
 };
 
-// Deduplicate rows for the same schedule slot in print output.
-// Keep the newest evaluation entry for each teacher/date/time/subject/form.
-$deduped = [];
-foreach ($evaluations as $row) {
-    $key = implode('|', [
-        (string)($row['teacher_id'] ?? ''),
-        (string)($row['observation_date'] ?? ''),
-        (string)($row['observation_time'] ?? ''),
-        (string)($row['subject_observed'] ?? ''),
-        (string)($row['evaluation_form_type'] ?? ''),
-    ]);
-    $currentId = (int)($row['id'] ?? 0);
-    if (!isset($deduped[$key]) || $currentId > (int)($deduped[$key]['id'] ?? 0)) {
-        $deduped[$key] = $row;
-    }
-}
-$evaluations = array_values($deduped);
+// Keep all evaluator entries in print output so each observer's
+// comments and rating appear in separate rows.
 
 $report_ack_sig_map = [];
 try {
@@ -578,7 +563,7 @@ foreach ($evaluations as $evaluationRow) {
                     <td>
                         <div class="observation-notes">
                             <?php if(!empty($eval['agreement'])): ?>
-                                <?php echo htmlspecialchars($eval['agreement']); ?>
+                                <ul><li><?php echo htmlspecialchars($eval['agreement']); ?></li></ul>
                             <?php elseif(!empty($agreements)): ?>
                                 <ul><?php foreach($agreements as $ag): ?><li><?php echo $ag; ?></li><?php endforeach; ?></ul>
                             <?php else: ?>
@@ -604,17 +589,27 @@ foreach ($evaluations as $evaluationRow) {
 
     <!-- Signature -->
     <?php
-    $deanPrintedName = '';
-    $deanSignature = '';
-    if (is_array($deanPrintEvaluation)) {
+$deanPrintedName = '';
+$deanSignature = '';
+if (is_array($deanPrintEvaluation)) {
         $deanPrintedName = trim((string)($deanPrintEvaluation['rater_printed_name'] ?? ''));
         if ($deanPrintedName === '') {
             $deanPrintedName = trim((string)($deanPrintEvaluation['evaluator_name'] ?? ''));
         }
-        $deanSignature = trim((string)($deanPrintEvaluation['rater_signature'] ?? ''));
-    }
+    $deanSignature = trim((string)($deanPrintEvaluation['rater_signature'] ?? ''));
+}
+
+// Prefer signature captured from "Sign Before Printing" modal.
+$sessionPreparedSig = trim((string)($_SESSION['report_prepared_signature'] ?? ''));
+$sessionPreparedName = trim((string)($_SESSION['report_prepared_name'] ?? ''));
+if ($sessionPreparedSig !== '' && strpos($sessionPreparedSig, 'data:image/') === 0) {
+    $deanSignature = $sessionPreparedSig;
+}
+if ($sessionPreparedName !== '') {
+    $deanPrintedName = $sessionPreparedName;
+}
     ?>
-    <?php if ($deanPrintEvaluation !== null): ?>
+    <?php if ($deanPrintEvaluation !== null || $deanSignature !== '' || $deanPrintedName !== ''): ?>
         <div class="print-signature-block">
             <div class="print-signature-card">
                 <div style="font-size: 10px; text-align: left; margin-bottom: 2px;">Prepared by:</div>

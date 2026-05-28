@@ -373,6 +373,23 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 </div>
                 <div class="card-body">
                     <?php if($teachers->rowCount() > 0): ?>
+                    <?php
+                        // Schedule balance check:
+                        // A slot is "balanced" only when it has at least one Dean/Principal
+                        // and at least one Coordinator observer row.
+                        $schedule_balance_stmt = $db->prepare(
+                            "SELECT
+                                COUNT(DISTINCT e.evaluator_id) AS observer_count,
+                                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal') THEN 1 ELSE 0 END) AS has_head,
+                                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('chairperson','subject_coordinator','grade_level_coordinator') THEN 1 ELSE 0 END) AS has_coordinator
+                             FROM evaluations e
+                             JOIN users u ON u.id = e.evaluator_id
+                             WHERE e.teacher_id = :tid
+                               AND e.observation_date = :obs_date
+                               AND COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :obs_time
+                               AND (e.status IS NULL OR e.status <> 'completed')"
+                        );
+                    ?>
                     <div class="list-group" id="teacherList">
                         <?php while($teacher_row = $teachers->fetch(PDO::FETCH_ASSOC)): ?>
                         <?php
@@ -614,6 +631,30 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 $schedule_badge_class = 'bg-secondary';
                                 $schedule_badge_text = 'Schedule required';
                                 $can_evaluate_now = false;
+                            }
+
+                            // Guard: block evaluation when slot has only one observer/evaluator
+                            // or when required evaluator roles are unbalanced.
+                            if ($can_evaluate_now && $slot_date !== '') {
+                                try {
+                                    $schedule_balance_stmt->execute([
+                                        ':tid' => (int)$teacher_row['id'],
+                                        ':obs_date' => $slot_date,
+                                        ':obs_time' => $slot_time
+                                    ]);
+                                    $bal = $schedule_balance_stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                                    $observer_count = (int)($bal['observer_count'] ?? 0);
+                                    $has_head = (int)($bal['has_head'] ?? 0) === 1;
+                                    $has_coordinator = (int)($bal['has_coordinator'] ?? 0) === 1;
+                                    if ($observer_count <= 1 || !$has_head || !$has_coordinator) {
+                                        $can_evaluate_now = false;
+                                        $schedule_badge_class = 'bg-danger';
+                                        $schedule_badge_text = 'Evaluator unbalanced';
+                                        $schedule_block_message = 'Evaluation cannot proceed: this schedule needs at least 2 observers and balanced roles (Dean/Principal and Coordinator).';
+                                    }
+                                } catch (Exception $e) {
+                                    // fail-open to avoid blocking all rows on query issues
+                                }
                             }
 
                             // President/VP can only evaluate teachers they've accepted as observer

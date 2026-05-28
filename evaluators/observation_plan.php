@@ -15,7 +15,8 @@ require_once '../models/Teacher.php';
 require_once '../includes/mailer.php';
 require_once '../includes/program_assignments.php';
 
-$is_observer_only_role = in_array($_SESSION['role'] ?? '', ['president', 'vice_president'], true);
+$is_observer_only_role = (($_SESSION['role'] ?? '') === 'president');
+$is_president_role = (($_SESSION['role'] ?? '') === 'president');
 
 $database = new Database();
 $db = $database->getConnection();
@@ -82,7 +83,7 @@ try {
 // Handle bulk schedule cancel
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule') {
     if ($is_observer_only_role) {
-        $_SESSION['error'] = 'President/Vice President can only accept as observer.';
+        $_SESSION['error'] = 'President can only observe/evaluate.';
         $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
         if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
         if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
@@ -398,8 +399,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                      :observation_room, :subject_area, :evaluation_focus, :form_type,
                      :seat_plan, :course_syllabi, :others_requirements, :others_specify, 'draft', NOW(), NOW())"
             );
+            $schedule_guard_stmt = $db->prepare(
+                "SELECT e.id,
+                        COALESCE(
+                            NULLIF(t.evaluation_schedule_end, ''),
+                            NULLIF(CONCAT(e.observation_date, ' ', COALESCE(NULLIF(e.observation_time, ''), '00:00:00')), ''),
+                            NULLIF(t.evaluation_schedule, '')
+                        ) AS cutoff_raw
+                 FROM evaluations e
+                 LEFT JOIN teachers t ON t.id = e.teacher_id
+                 WHERE e.id = :eid
+                 LIMIT 1"
+            );
             $added_count = 0;
+            $skipped_past_count = 0;
             foreach ($eval_ids as $eid) {
+                // Past schedules can no longer be accepted as observer.
+                $schedule_guard_stmt->execute([':eid' => $eid]);
+                $guard_row = $schedule_guard_stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+                if ($guard_row) {
+                    $cutoff_raw = trim((string)($guard_row['cutoff_raw'] ?? ''));
+                    if ($cutoff_raw !== '') {
+                        try {
+                            $tz = new DateTimeZone('Asia/Manila');
+                            $cutoff_at = new DateTime($cutoff_raw, $tz);
+                            $now_at = new DateTime('now', $tz);
+                            if ($now_at > $cutoff_at) {
+                                $skipped_past_count++;
+                                continue;
+                            }
+                        } catch (Exception $e) {}
+                    }
+                }
+
                 $eval_teacher_stmt->execute([':eid' => $eid]);
                 $tid = (int)$eval_teacher_stmt->fetchColumn();
                 if ($tid <= 0) continue;
@@ -531,9 +563,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
 
             if ($added_count > 0) {
-                $_SESSION['success'] = $added_count . ' teacher(s) accepted as observer.';
+                $msg = $added_count . ' teacher(s) accepted as observer.';
+                if ($skipped_past_count > 0) {
+                    $msg .= ' ' . $skipped_past_count . ' skipped because the schedule already passed.';
+                }
+                $_SESSION['success'] = $msg;
             } else {
-                $_SESSION['info'] = 'Selected teacher(s) are already in your observer list.';
+                if ($skipped_past_count > 0) {
+                    $_SESSION['error'] = 'Selected schedule(s) already passed and can no longer be accepted as observer.';
+                } else {
+                    $_SESSION['info'] = 'Selected teacher(s) are already in your observer list.';
+                }
             }
         }
     }
@@ -552,6 +592,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (!$is_leader_role) {
         $_SESSION['error'] = 'Only president/vice president can cancel as observer.';
     } else {
+        $observer_reason = trim((string)($_POST['observer_reason'] ?? ''));
+        if ($observer_reason === '') {
+            $_SESSION['error'] = 'Reason is required when cancelling as observer.';
+            $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
+            if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
+            if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
+            if (!empty($_GET['status'])) $redirect .= '&status=' . urlencode($_GET['status']);
+            header("Location: $redirect");
+            exit();
+        }
         $raw_ids = $_POST['eval_ids'] ?? '[]';
         $eval_ids = [];
         if (is_string($raw_ids)) {
@@ -572,6 +622,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                       FROM evaluations
                                       WHERE id = :eid
                                       LIMIT 1");
+            $teacher_user_stmt = $db->prepare("SELECT t.name, t.user_id, u.email
+                                               FROM teachers t
+                                               LEFT JOIN users u ON u.id = t.user_id
+                                               WHERE t.id = :tid
+                                               LIMIT 1");
             $del_assign_stmt = $db->prepare("DELETE FROM teacher_assignments
                                              WHERE evaluator_id = :uid
                                                AND teacher_id = :tid
@@ -585,6 +640,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                                      AND COALESCE(observation_time, '') = COALESCE(:ot, '')
                                                      AND evaluation_form_type = :ft
                                                      AND status <> 'completed'");
+            $count_remaining_slot_stmt = $db->prepare("SELECT COUNT(*)
+                                                       FROM evaluations
+                                                       WHERE teacher_id = :tid
+                                                         AND academic_year = :ay
+                                                         AND semester = :sem
+                                                         AND observation_date = :od
+                                                         AND COALESCE(observation_time, '') = COALESCE(:ot, '')
+                                                         AND status <> 'completed'");
+            $delete_remaining_slot_stmt = $db->prepare("DELETE FROM evaluations
+                                                        WHERE teacher_id = :tid
+                                                          AND academic_year = :ay
+                                                          AND semester = :sem
+                                                          AND observation_date = :od
+                                                          AND COALESCE(observation_time, '') = COALESCE(:ot, '')
+                                                          AND status <> 'completed'");
+            $clear_teacher_slot_stmt = $db->prepare("UPDATE teachers
+                                                     SET evaluation_schedule = NULL,
+                                                         evaluation_schedule_end = NULL,
+                                                         evaluation_room = NULL,
+                                                         evaluation_focus = NULL,
+                                                         evaluation_subject_area = NULL,
+                                                         evaluation_subject = NULL,
+                                                         evaluation_semester = NULL,
+                                                         evaluation_form_type = NULL,
+                                                         scheduled_by = NULL,
+                                                         scheduled_department = NULL,
+                                                         updated_at = NOW()
+                                                     WHERE id = :tid");
 
             foreach ($eval_ids as $eid) {
                 $src_stmt->execute([':eid' => $eid]);
@@ -614,6 +697,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         ':ft' => $ft_remove
                     ]);
                 }
+
+                // If this action leaves the schedule slot with no active evaluator row,
+                // cancel the slot so evaluation cannot proceed.
+                $slotParams = [
+                    ':tid' => $tid,
+                    ':ay' => (string)($src['academic_year'] ?? ''),
+                    ':sem' => (string)($src['semester'] ?? ''),
+                    ':od' => (string)($src['observation_date'] ?? ''),
+                    ':ot' => (string)($src['observation_time'] ?? ''),
+                ];
+                $count_remaining_slot_stmt->execute($slotParams);
+                $remaining_slot_rows = (int)$count_remaining_slot_stmt->fetchColumn();
+                if ($remaining_slot_rows <= 0) {
+                    $delete_remaining_slot_stmt->execute($slotParams);
+                    $clear_teacher_slot_stmt->execute([':tid' => $tid]);
+                }
+
+                try {
+                    $teacher_user_stmt->execute([':tid' => $tid]);
+                    $teacher_user = $teacher_user_stmt->fetch(PDO::FETCH_ASSOC);
+                    if ($teacher_user && !empty($teacher_user['user_id'])) {
+                        $obs_name = trim((string)($_SESSION['name'] ?? 'Observer'));
+                        $obs_role = ucfirst(str_replace('_', ' ', (string)($_SESSION['role'] ?? 'evaluator')));
+                        $title = 'Observer Unable to Attend';
+                        $message = "{$obs_role} {$obs_name} will not be able to observe/evaluate your schedule. Reason: {$observer_reason}";
+                        $teacher_link = 'observation_plan.php?view=my_observation&eval_id=' . urlencode((string)$eid);
+
+                        $ins_notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, is_read)
+                                                   VALUES (:uid, :tid, 'observer_unavailable', :title, :msg, :lnk, 0)");
+                        $ins_notif->execute([
+                            ':uid' => (int)$teacher_user['user_id'],
+                            ':tid' => $tid,
+                            ':title' => $title,
+                            ':msg' => $message,
+                            ':lnk' => $teacher_link
+                        ]);
+
+                        $teacher_email = trim((string)($teacher_user['email'] ?? ''));
+                        if ($teacher_email !== '') {
+                            sendGenericNotificationEmail(
+                                $teacher_email,
+                                trim((string)($teacher_user['name'] ?? 'Teacher')),
+                                $title,
+                                $message
+                            );
+                        }
+                    }
+                } catch (Exception $e) {}
+
                 $removed_count++;
             }
 
@@ -825,9 +957,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit();
 }
 
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_schedule') {
-    if ($is_observer_only_role) {
-        $_SESSION['error'] = 'President/Vice President can only accept as observer.';
+    if ($is_president_role) {
+        $_SESSION['error'] = 'President can only observe/evaluate.';
         $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
         if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
         if (!empty($_GET['month'])) $redirect .= '&month=' . urlencode($_GET['month']);
@@ -1783,7 +1916,7 @@ $department_map = [
 ];
 
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
-$is_observer_only = $is_leader;
+$is_observer_only = (($_SESSION['role'] ?? '') === 'president');
 $is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
 
 $all_departments = ['ELEM', 'JHS', 'SHS', 'CCIS', 'CAS', 'CTEAS', 'CBM', 'CTHM', 'CCJE'];
@@ -2531,7 +2664,7 @@ foreach ($eval_teachers as $t) {
     $faculty_sig = $t['faculty_signature'] ?? '';
 
     // Store per-row eval data (used during rendering)
-    $eval_data[$row_key] = ['date' => $obs_date, 'done' => $is_done, 'faculty_signature' => $faculty_sig, 'eval_id' => $eval_id ?: null, 'status' => $eval_status];
+    $eval_data[$row_key] = ['date' => $obs_date, 'done' => $is_done, 'faculty_signature' => $faculty_sig, 'eval_id' => $eval_id ?: null, 'status' => $eval_status, 'cutoff' => ''];
 
     // Track all evaluation datetimes for this teacher to compare against
     // teacher-level schedules later (to avoid duplicate rows when identical).
@@ -2569,7 +2702,11 @@ foreach ($eval_teachers as $t) {
     // - evaluation rows: use observation_date + observation_time from that row
     // - schedule-only rows: use current teacher schedule fields
     $sched_dt = $t['evaluation_schedule'] ?? '';
-    $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
+    if ($is_eval_row && !empty($obs_date)) {
+        $obs_time_for_cutoff = trim((string)($t['observation_time'] ?? ''));
+        $sched_dt = $obs_time_for_cutoff !== '' ? ($obs_date . ' ' . $obs_time_for_cutoff) : $obs_date;
+    }
+    $sched_dt_end = $is_eval_row ? '' : ($t['evaluation_schedule_end'] ?? '');
     if ($eval_id > 0 && !empty($slot_end_by_eval_id[$eval_id])) {
         $sched_dt_end = $slot_end_by_eval_id[$eval_id];
     } elseif (!empty($sched_dt)) {
@@ -2578,6 +2715,7 @@ foreach ($eval_teachers as $t) {
             $sched_dt_end = $slot_end_by_teacher_start[$slot_key_lookup];
         }
     }
+    $eval_data[$row_key]['cutoff'] = trim((string)$sched_dt_end) !== '' ? $sched_dt_end : $sched_dt;
     if ($is_eval_row && !empty($obs_date)) {
         $schedule_data[$row_key]['day_time'] = date('l', strtotime($obs_date));
         $obs_time_fmt = trim((string)($t['observation_time'] ?? ''));
@@ -2711,7 +2849,14 @@ foreach ($scheduled_teachers as $t) {
     $t['_row_key'] = $row_key;
     $teachers_list[] = $t;
 
-    $eval_data[$row_key] = ['date' => $sched_date, 'done' => false, 'faculty_signature' => '', 'eval_id' => null, 'status' => 'scheduled'];
+    $eval_data[$row_key] = [
+        'date' => $sched_date,
+        'done' => false,
+        'faculty_signature' => '',
+        'eval_id' => null,
+        'status' => 'scheduled',
+        'cutoff' => trim((string)($t['evaluation_schedule_end'] ?? '')) !== '' ? $t['evaluation_schedule_end'] : $sched_dt,
+    ];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
     $focus_arr = [];
@@ -2885,7 +3030,7 @@ if (!empty($filter_status)) {
 
         $is_overdue_not_evaluated = false;
         if (!$is_done) {
-            $row_sched_end_raw = trim((string)($t['evaluation_schedule_end'] ?? ''));
+            $row_sched_end_raw = trim((string)($eval_data[$row_key]['cutoff'] ?? ''));
             $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
             $cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
             if ($cutoff_raw !== '') {
@@ -2907,6 +3052,31 @@ if (!empty($filter_status)) {
         return true;
     });
     $teachers_list = array_values($teachers_list);
+}
+
+// For President/Vice President Observation Plan:
+// hide rows that are already in "Did Not Evaluate" state.
+if ($is_leader) {
+    $teachers_list = array_values(array_filter($teachers_list, function($t) use ($eval_data) {
+        $row_key = $t['_row_key'] ?? $t['id'];
+        $is_done = !empty($eval_data[$row_key]['done']);
+        if ($is_done) return true;
+
+        $row_sched_end_raw = trim((string)($eval_data[$row_key]['cutoff'] ?? ''));
+        $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
+        $cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
+        if ($cutoff_raw === '') return true;
+
+        try {
+            $tz = new DateTimeZone('Asia/Manila');
+            $cutoff_at = new DateTime($cutoff_raw, $tz);
+            $now_at = new DateTime('now', $tz);
+            // Exclude overdue + not done rows ("Did Not Evaluate")
+            return !($now_at > $cutoff_at);
+        } catch (Exception $e) {
+            return true;
+        }
+    }));
 }
 $dean_role_display = ucfirst(str_replace('_', ' ', $_SESSION['role']));
 
@@ -3263,6 +3433,22 @@ try {
         .print-only { display: none; }
         .no-print {}
 
+        /* Global modal scrolling: apply to every modal on this page */
+        .modal .modal-dialog {
+            margin-top: 0.6rem;
+            margin-bottom: 0.6rem;
+        }
+        .modal .modal-content {
+            max-height: calc(100dvh - 1.2rem);
+            max-height: calc(100vh - 1.2rem);
+            overflow: hidden;
+        }
+        .modal .modal-body {
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
+        }
+
         /* Fast, zoom-safe modal sizing (applies immediately at any browser zoom) */
         #scheduleModal .modal-dialog {
             width: min(680px, calc(100vw - 1.25rem));
@@ -3277,9 +3463,12 @@ try {
         /* Keep footer visible: only body scrolls inside dialog */
         #scheduleModal .modal-dialog.modal-dialog-scrollable .modal-content {
             max-height: calc(100dvh - 1.6rem);
+            max-height: calc(100vh - 1.6rem);
         }
         #scheduleModal .modal-dialog.modal-dialog-scrollable .modal-body {
             overflow-y: auto;
+            max-height: calc(100dvh - 11.5rem);
+            max-height: calc(100vh - 11.5rem);
         }
         #scheduleModal .modal-body {
             position: relative;
@@ -3386,6 +3575,14 @@ try {
             padding: 1rem 1.25rem;
             max-height: 72vh;
             overflow-y: auto;
+        }
+        #unableObserveModal .modal-dialog {
+            max-width: 560px;
+            width: calc(100% - 1.25rem);
+            margin: 0.75rem auto;
+        }
+        #unableObserveCommentsWrap {
+            display: block;
         }
 
         @media print {
@@ -4189,23 +4386,18 @@ try {
                     <button type="button" class="btn btn-primary" onclick="openRescheduleModal()">
                         <i class="fas fa-redo me-1"></i>Reschedule
                     </button>
+                    <?php endif; ?>
                     <?php if (in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'], true)): ?>
                     <button type="button" class="btn btn-warning" id="acceptRescheduleBtn" disabled onclick="acceptRescheduleRequest()">
                         <i class="fas fa-check-circle me-1"></i>Accept Reschedule Request
                     </button>
                     <?php endif; ?>
-                    <?php endif; ?>
                     <?php if ($is_leader): ?>
                     <button class="btn btn-success" id="joinObserverBtn" disabled onclick="joinAsObserver()">
                         <i class="fas fa-user-plus me-1"></i>Observe
                     </button>
-                    <button class="btn btn-outline-danger" id="leaveObserverBtn" disabled onclick="leaveAsObserver()">
-                        <i class="fas fa-user-minus me-1"></i>Cancel as Observer
-                    </button>
-                    <?php endif; ?>
-                    <?php if (!$is_observer_only): ?>
-                    <button type="button" class="btn btn-outline-danger" id="bulkCancelBtn" disabled onclick="cancelSelectedSchedules()">
-                        <i class="fas fa-times me-1"></i>Cancel
+                    <button class="btn btn-danger" id="unableObserveBtn" disabled onclick="openUnableObserveModal()">
+                        <i class="fas fa-envelope-open-text me-1"></i>Unable to Observe/Evaluate
                     </button>
                     <?php endif; ?>
                 </div>
@@ -4313,6 +4505,56 @@ try {
                                     $has_pending_req = !empty($pending_req_info);
                                     $pending_req_id = (int)($pending_req_info['notification_id'] ?? 0);
                                     $has_pending_req_strict = $has_pending_req;
+                                    $is_schedule_past_for_observer = false;
+                                    $row_sched_end_raw = trim((string)($eval_data[$row_key]['cutoff'] ?? ''));
+                                    $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
+                                    $observer_cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
+                                    if ($observer_cutoff_raw !== '') {
+                                        try {
+                                            $tz = new DateTimeZone('Asia/Manila');
+                                            $cutoff_at = new DateTime($observer_cutoff_raw, $tz);
+                                            $now_at = new DateTime('now', $tz);
+                                            if ($now_at > $cutoff_at) {
+                                                $is_schedule_past_for_observer = true;
+                                            }
+                                        } catch (Exception $e) {}
+                                    }
+
+                                    // For President/Vice President view, hide rows that would show
+                                    // "Did Not Evaluate" in remarks.
+                                    $hide_for_leader_dne = false;
+                                    if ($is_leader) {
+                                        $row_required_form_type_hide = strtolower(trim((string)($t['evaluation_form_type'] ?? 'iso')));
+                                        if (!in_array($row_required_form_type_hide, ['iso', 'peac', 'both'], true)) {
+                                            $row_required_form_type_hide = 'iso';
+                                        }
+                                        $slot_date_hide = $eval_data[$row_key]['date'] ?? '';
+                                        if (!empty($slot_date_hide)) {
+                                            $slot_date_hide = date('Y-m-d', strtotime((string)$slot_date_hide));
+                                        }
+                                        $slot_key_hide = implode('|', [
+                                            (string)$tid,
+                                            (string)$slot_date_hide,
+                                            strtolower(trim((string)($sd['room'] ?? ''))),
+                                            strtolower(trim((string)($sd['subject_area'] ?? ''))),
+                                            strtolower(trim((string)normalizeSubjectDisplay((string)($sd['subject'] ?? '')))),
+                                        ]);
+                                        $slot_done_hide = $completed_forms_by_slot[$slot_key_hide] ?? [];
+                                        $is_done_required_hide = false;
+                                        if ($row_required_form_type_hide === 'both') {
+                                            $is_done_required_hide = !empty($slot_done_hide['iso']) && !empty($slot_done_hide['peac']);
+                                        } elseif ($row_required_form_type_hide === 'peac') {
+                                            $is_done_required_hide = !empty($slot_done_hide['peac']);
+                                        } else {
+                                            $is_done_required_hide = !empty($slot_done_hide['iso']);
+                                        }
+                                        if (!$is_done_required_hide && $observer_cutoff_raw !== '' && $is_schedule_past_for_observer) {
+                                            $hide_for_leader_dne = true;
+                                        }
+                                    }
+                                    if ($hide_for_leader_dne) {
+                                        continue;
+                                    }
                                 ?>
                                 <tr>
                                     <td>
@@ -4325,7 +4567,8 @@ try {
                                                 <?php if (!$is_observer_only && $scheduled_by_me): ?>
                                                     <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;" title="Scheduled by you">
                                                 <?php else: ?>
-                                                    <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo $eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $is_opted ? 'You are an observer' : 'Check to join as observer'; ?>">
+                                                    <?php $disable_observer_opt = $is_schedule_past_for_observer && !$is_opted; ?>
+                                                    <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo $eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $disable_observer_opt ? 'Schedule already passed; cannot accept as observer.' : ($is_opted ? 'You are an observer' : 'Check to join as observer'); ?>" <?php echo $disable_observer_opt ? 'disabled' : ''; ?>>
                                                 <?php endif; ?>
                                             <?php else: ?>
                                                 <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
@@ -4431,7 +4674,7 @@ try {
                                         // After schedule end time, incomplete required forms become "Did Not Evaluate".
                                         $is_overdue_not_evaluated = false;
                                         if (!$is_done_by_requirement) {
-                                            $row_sched_end_raw = trim((string)($t['evaluation_schedule_end'] ?? ''));
+                                            $row_sched_end_raw = trim((string)($eval_data[$row_key]['cutoff'] ?? ''));
                                             $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
                                             $cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
                                             if ($cutoff_raw !== '') {
@@ -4687,6 +4930,44 @@ try {
             </div>
         </div>
     </div>
+
+    <?php if ($is_leader): ?>
+    <div class="modal fade" id="unableObserveModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-envelope-open-text me-2"></i>Unable to Observe/Evaluate</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="unableObserveReasonSelect" class="form-label fw-bold">Reason (required)</label>
+                        <select id="unableObserveReasonSelect" class="form-select" onchange="toggleUnableObserveComments(this.value)">
+                            <option value="">-- Select reason --</option>
+                            <option value="Schedule conflict">Schedule conflict</option>
+                            <option value="Official meeting/administrative duty">Official meeting/administrative duty</option>
+                            <option value="Emergency situation">Emergency situation</option>
+                            <option value="Health concern">Health concern</option>
+                            <option value="Travel/field assignment">Travel/field assignment</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    <div class="mb-2" id="unableObserveCommentsWrap">
+                        <label for="unableObserveComments" class="form-label fw-bold">Comments <span id="unableObserveCommentsRequiredText">(required for Other)</span></label>
+                        <textarea id="unableObserveComments" class="form-control" rows="3" placeholder="Enter details/comments..."></textarea>
+                    </div>
+                    <small class="text-muted d-block mt-2">Reason will be sent automatically to the teacher via notification and email.</small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger" onclick="submitUnableObserveReason()">
+                        <i class="fas fa-paper-plane me-1"></i>Send Reason & Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
 
 <script>
 // Available departments for current user based on their role
@@ -5291,6 +5572,11 @@ function acceptRescheduleRequest() {
 
 // When a teacher is selected from dropdown, populate their existing schedule data
 document.addEventListener('DOMContentLoaded', () => {
+    // Make every Bootstrap modal scrollable (body scroll inside modal).
+    document.querySelectorAll('.modal .modal-dialog').forEach(function(dialog) {
+        dialog.classList.add('modal-dialog-scrollable');
+    });
+
     const select = document.getElementById('schedule_teacher_id');
     if (select) {
         select.addEventListener('change', function() {
@@ -5558,21 +5844,31 @@ document.addEventListener('DOMContentLoaded', () => {
 (function() {
     var joinBtn = document.getElementById('joinObserverBtn');
     var leaveBtn = document.getElementById('leaveObserverBtn');
+    var unableBtn = document.getElementById('unableObserveBtn');
 
     function updateObserverBtnState() {
         var checks = document.querySelectorAll('.observer-opt-check');
         var toJoin = 0;
         var toLeave = 0;
+        var selectedSched = 0;
         checks.forEach(function(cb) {
             var wasOpted = cb.dataset.opted === '1';
             if (cb.checked && !wasOpted) toJoin++;
             if (cb.checked && wasOpted) toLeave++;
         });
+        document.querySelectorAll('.reschedule-check').forEach(function(cb) {
+            var eid = parseInt(cb.dataset.evalId || '0', 10);
+            if (cb.checked && eid > 0) selectedSched++;
+        });
         if (joinBtn) joinBtn.disabled = (toJoin === 0);
         if (leaveBtn) leaveBtn.disabled = (toLeave === 0);
+        if (unableBtn) unableBtn.disabled = (selectedSched === 0);
     }
 
     document.querySelectorAll('.observer-opt-check').forEach(function(cb) {
+        cb.addEventListener('change', updateObserverBtnState);
+    });
+    document.querySelectorAll('.reschedule-check').forEach(function(cb) {
         cb.addEventListener('change', updateObserverBtnState);
     });
     updateObserverBtnState();
@@ -5606,20 +5902,87 @@ function joinAsObserver() {
 }
 
 function leaveAsObserver() {
+    openUnableObserveModal();
+}
+
+function openUnableObserveModal() {
     var evalIds = [];
-    document.querySelectorAll('.observer-opt-check').forEach(function(cb) {
+    document.querySelectorAll('.reschedule-check').forEach(function(cb) {
         var eid = parseInt(cb.dataset.evalId || '0', 10);
-        if (cb.checked && cb.dataset.opted === '1' && eid > 0) {
+        if (cb.checked && eid > 0) evalIds.push(eid);
+    });
+    if (evalIds.length === 0) {
+        alert('Please select at least one schedule.');
+        return;
+    }
+    var reasonSelect = document.getElementById('unableObserveReasonSelect');
+    var commentsBox = document.getElementById('unableObserveComments');
+    var commentsWrap = document.getElementById('unableObserveCommentsWrap');
+    if (reasonSelect) reasonSelect.value = '';
+    if (commentsBox) commentsBox.value = '';
+    toggleUnableObserveComments(reasonSelect ? reasonSelect.value : '');
+    var el = document.getElementById('unableObserveModal');
+    if (!el || typeof bootstrap === 'undefined' || !bootstrap.Modal) {
+        var reasonFallback = (window.prompt('Reason (e.g., Schedule conflict / Emergency / Other):', '') || '').trim();
+        if (!reasonFallback) return;
+        var commentsFallback = (window.prompt('Comments:', '') || '').trim();
+        if (!commentsFallback) return;
+        submitUnableObserveReason(reasonFallback + ' | Comments: ' + commentsFallback);
+        return;
+    }
+    var modal = bootstrap.Modal.getOrCreateInstance(el);
+    modal.show();
+}
+
+function toggleUnableObserveComments(reasonValue) {
+    var wrap = document.getElementById('unableObserveCommentsWrap');
+    var comments = document.getElementById('unableObserveComments');
+    var requiredText = document.getElementById('unableObserveCommentsRequiredText');
+    var isOther = String(reasonValue || '').trim() === 'Other';
+    if (wrap) wrap.style.display = '';
+    if (comments) comments.required = isOther;
+    if (requiredText) requiredText.style.display = isOther ? '' : 'none';
+}
+
+function submitUnableObserveReason(reasonArg) {
+    var reason = '';
+    if (typeof reasonArg === 'string') {
+        reason = reasonArg.trim();
+    } else {
+        var selectedReason = (document.getElementById('unableObserveReasonSelect')?.value || '').trim();
+        var comments = (document.getElementById('unableObserveComments')?.value || '').trim();
+        if (!selectedReason) {
+            alert('Please select a reason.');
+            return;
+        }
+        if (selectedReason === 'Other') {
+            if (!comments) {
+                alert('Please enter comments for Other reason.');
+                var commentsBox = document.getElementById('unableObserveComments');
+                if (commentsBox) commentsBox.focus();
+                return;
+            }
+            reason = 'Other | Comments: ' + comments;
+        } else {
+            reason = comments ? selectedReason + ' | Comments: ' + comments : selectedReason;
+        }
+    }
+
+    var evalIds = [];
+    document.querySelectorAll('.reschedule-check').forEach(function(cb) {
+        var eid = parseInt(cb.dataset.evalId || '0', 10);
+        if (cb.checked && eid > 0) {
             evalIds.push(eid);
         }
     });
     if (evalIds.length === 0) return;
-    if (!confirm('Cancel as observer for ' + evalIds.length + ' schedule(s)?')) return;
+    if (!confirm('Cancel as observer for ' + evalIds.length + ' schedule(s) and notify the teacher?')) return;
     var form = document.createElement('form');
     form.method = 'POST';
     form.action = window.location.href;
     var a = document.createElement('input'); a.type = 'hidden'; a.name = 'action'; a.value = 'leave_observer'; form.appendChild(a);
     var t = document.createElement('input'); t.type = 'hidden'; t.name = 'eval_ids'; t.value = JSON.stringify(evalIds); form.appendChild(t);
+    var r = document.createElement('input'); r.type = 'hidden'; r.name = 'observer_reason'; r.value = reason; form.appendChild(r);
     var semEl = document.querySelector('select[name=\"semester\"]');
     var ayEl = document.querySelector('select[name=\"academic_year\"]');
     var semIn = document.createElement('input'); semIn.type = 'hidden'; semIn.name = 'semester'; semIn.value = semEl ? semEl.value : ''; form.appendChild(semIn);
@@ -5627,6 +5990,11 @@ function leaveAsObserver() {
     document.body.appendChild(form);
     form.submit();
 }
+
+document.addEventListener('change', function(e) {
+    if (!e.target || e.target.id !== 'unableObserveReasonSelect') return;
+    toggleUnableObserveComments(e.target.value || '');
+});
 
 <?php endif; ?>
 

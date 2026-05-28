@@ -30,7 +30,7 @@ $ai_lock_file = __DIR__ . '/ai_service/.ai_starting.lock';
 $ai_starting = file_exists($ai_lock_file) && (time() - filemtime($ai_lock_file) <= 60);
 
 // Redirect to login if not authenticated, otherwise to appropriate dashboard
-    if(isset($_SESSION['user_id']) && isset($_SESSION['role'])) {
+if(isset($_SESSION['user_id']) && isset($_SESSION['role'])) {
     	$role = $_SESSION['role'];
     	
     	if($role === 'edp') {
@@ -50,8 +50,11 @@ $ai_starting = file_exists($ai_lock_file) && (time() - filemtime($ai_lock_file) 
     	} else {
     		header("Location: evaluators/dashboard.php");
     	}
-	exit();
+    exit();
 }
+
+header("Location: login.php");
+exit();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -155,7 +158,7 @@ $ai_starting = file_exists($ai_lock_file) && (time() - filemtime($ai_lock_file) 
             z-index: 1;
         }
 
-        /* Right Panel — role cards */
+        /* Right Panel — single login entry */
         .right-panel {
             width: 55%;
             display: flex;
@@ -169,7 +172,7 @@ $ai_starting = file_exists($ai_lock_file) && (time() - filemtime($ai_lock_file) 
 
         .right-content {
             width: 100%;
-            max-width: 460px;
+            max-width: 420px;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -193,33 +196,28 @@ $ai_starting = file_exists($ai_lock_file) && (time() - filemtime($ai_lock_file) 
             text-align: center;
         }
 
-        /* Role Cards */
-        .roles-container {
-            width: 100%;
-        }
-
-        .role-card {
+        .login-entry {
             display: flex;
             align-items: center;
             background: #fff;
             border: 1px solid #e0e4ea;
             border-radius: 12px;
             padding: 16px 22px;
-            margin-bottom: 12px;
+            width: 100%;
             cursor: pointer;
             transition: all 0.25s ease;
             text-decoration: none;
             color: inherit;
         }
 
-        .role-card:hover {
+        .login-entry:hover {
             border-color: #2a5298;
             box-shadow: 0 4px 18px rgba(42, 82, 152, 0.2);
             transform: translateY(-2px);
             color: inherit;
         }
 
-        .role-card .role-icon {
+        .login-entry .entry-icon {
             width: 42px;
             height: 42px;
             border-radius: 10px;
@@ -232,30 +230,25 @@ $ai_starting = file_exists($ai_lock_file) && (time() - filemtime($ai_lock_file) 
             margin-right: 16px;
         }
 
-        .role-card .role-name {
+        .login-entry .entry-name {
             font-size: 1rem;
             font-weight: 600;
             color: #1a2a44;
             flex: 1;
         }
 
-        .role-card .role-arrow {
+        .login-entry .entry-arrow {
             color: #adb5bd;
             font-size: 1rem;
             transition: transform 0.2s;
         }
 
-        .role-card:hover .role-arrow {
+        .login-entry:hover .entry-arrow {
             transform: translateX(4px);
             color: #2a5298;
         }
 
-        /* Icon backgrounds */
-        .bg-edp       { background: #6c757d; }
-        .bg-president { background: #8B0000; }
-        .bg-dean      { background: #2a5298; }
-        .bg-coord     { background: #1a8754; }
-        .bg-teacher   { background: #e67e22; }
+        .bg-login { background: #2a5298; }
 
         /* Footer */
         .footer-text {
@@ -291,38 +284,12 @@ $ai_starting = file_exists($ai_lock_file) && (time() - filemtime($ai_lock_file) 
     <div class="right-panel">
         <div class="right-content">
             <h2>AI-Driven Classroom Evaluation System</h2>
-            <p class="subtitle">Select your role to continue</p>
-            <div class="roles-container">
-                <a href="login.php?role=edp" class="role-card">
-                    <div class="role-icon bg-edp"><i class="fas fa-server"></i></div>
-                    <span class="role-name">EDP</span>
-                    <span class="role-arrow"><i class="fas fa-arrow-right"></i></span>
-                </a>
-
-                <a href="login.php?role=president" class="role-card">
-                    <div class="role-icon bg-president"><i class="fas fa-crown"></i></div>
-                    <span class="role-name">President / Vice President</span>
-                    <span class="role-arrow"><i class="fas fa-arrow-right"></i></span>
-                </a>
-
-                <a href="login.php?role=dean" class="role-card">
-                    <div class="role-icon bg-dean"><i class="fas fa-user-tie"></i></div>
-                    <span class="role-name">Dean / Principal</span>
-                    <span class="role-arrow"><i class="fas fa-arrow-right"></i></span>
-                </a>
-
-                <a href="login.php?role=coordinator" class="role-card">
-                    <div class="role-icon bg-coord"><i class="fas fa-users-cog"></i></div>
-                    <span class="role-name">Coordinator / Chairperson</span>
-                    <span class="role-arrow"><i class="fas fa-arrow-right"></i></span>
-                </a>
-
-                <a href="login.php?role=teacher" class="role-card">
-                    <div class="role-icon bg-teacher"><i class="fas fa-chalkboard-teacher"></i></div>
-                    <span class="role-name">Teacher</span>
-                    <span class="role-arrow"><i class="fas fa-arrow-right"></i></span>
-                </a>
-            </div>
+            <p class="subtitle">Login using your account credentials</p>
+            <a href="login.php" class="login-entry">
+                <div class="entry-icon bg-login"><i class="fas fa-sign-in-alt"></i></div>
+                <span class="entry-name">Login</span>
+                <span class="entry-arrow"><i class="fas fa-arrow-right"></i></span>
+            </a>
 
             <p class="footer-text">&copy; <?php echo date('Y'); ?> Saint Michael College of Caraga | All Rights Reserved</p>
         </div>

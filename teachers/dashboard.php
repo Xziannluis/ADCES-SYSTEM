@@ -413,7 +413,7 @@ if (empty($display_evaluations)) {
                 </div>
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" id="teacherMenu" data-bs-toggle="dropdown" aria-expanded="false">
-                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?> (Teacher)
+                        <i class="fas fa-user-circle me-1"></i> <?php echo htmlspecialchars($_SESSION['name']); ?>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="teacherMenu">
                         <li><a class="dropdown-item" href="profile.php"><i class="fas fa-user me-2"></i>Profile</a></li>
@@ -446,7 +446,6 @@ if (empty($display_evaluations)) {
                 <h3>
                     Welcome, <?php echo htmlspecialchars($teacher_data['name']); ?>!
                 </h3>
-                <p><i class="fas fa-building me-2"></i>Department: <?php echo htmlspecialchars($teacher_data['department']); ?></p>
                 <p><i class="fas fa-check-circle me-2"></i>Status: <span class="badge bg-success">Active</span></p>
             </div>
 

@@ -21,7 +21,7 @@ if(!isset($_GET['date'])) {
 $obs_date = trim($_GET['date']);
 
 // Get all evaluations for this teacher on this date
-$query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, t.name as teacher_name, 
+$query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, u.department as evaluator_department, t.name as teacher_name, 
                  t.evaluation_schedule, t.evaluation_schedule_end
           FROM evaluations e
           JOIN users u ON e.evaluator_id = u.id
@@ -91,25 +91,22 @@ foreach ($all_evaluations as $eval) {
         }
         .eval-header h3 { margin: 0; font-weight: 700; }
         .eval-header p { margin: 8px 0 0 0; opacity: 0.9; }
-        .report-table {
-            width: 100%;
-            border-collapse: collapse;
-            background: #fff;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        .report-table th, .report-table td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid #dee2e6;
-            vertical-align: top;
-        }
-        .report-table th {
+        .report-summary {
             background: #f8f9fa;
-            font-weight: 600;
+            border: 1px solid #dee2e6;
+            border-radius: 10px;
+            padding: 16px;
+        }
+        .report-item {
+            margin-bottom: 10px;
             color: #2c3e50;
-            white-space: nowrap;
+        }
+        .report-item:last-child {
+            margin-bottom: 0;
+        }
+        .report-item strong {
+            display: inline-block;
+            min-width: 190px;
         }
         .observer-section {
             margin-bottom: 20px;
@@ -146,7 +143,7 @@ foreach ($all_evaluations as $eval) {
         }
         .back-button:hover { color: #2c3e50; transform: translateX(-5px); }
         @media (max-width: 767.98px) {
-            .report-table { min-width: 920px; }
+            .report-item strong { min-width: 100%; margin-bottom: 4px; }
         }
     </style>
 </head>
@@ -185,53 +182,52 @@ foreach ($all_evaluations as $eval) {
 
                 <!-- Evaluation Content -->
                 <div class="content-area">
-                    <!-- Single merged row table -->
-                    <div class="table-responsive">
-                        <table class="report-table">
-                            <thead>
-                                <tr>
-                                    <th>Date</th>
-                                    <th>Subject/Class Schedule</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr>
-                                    <td><?php echo date('F j, Y', strtotime($observation_date)); ?></td>
-                                    <td>
-                                        <?php 
-                                        $subject_observed = trim((string)($all_evaluations[0]['subject_observed'] ?? ''));
-                                        $schedule_text = htmlspecialchars($subject_observed !== '' ? $subject_observed : 'N/A');
-                                        
-                                        // Prefer explicit observation range, then teacher schedule range, then single time fallback.
-                                        $start_raw = $all_evaluations[0]['observation_start_time'] ?? '';
-                                        $end_raw = $all_evaluations[0]['observation_end_time'] ?? '';
+                    <div class="report-summary">
+                        <?php
+                        $subject_observed = trim((string)($all_evaluations[0]['subject_observed'] ?? ''));
+                        $schedule_text = htmlspecialchars($subject_observed !== '' ? $subject_observed : 'N/A');
 
-                                        // If start range isn't present, use single observation_time as start.
-                                        if (empty($start_raw) && !empty($all_evaluations[0]['observation_time'])) {
-                                            $start_raw = $all_evaluations[0]['observation_time'];
-                                        }
-                                        if (empty($start_raw) && !empty($all_evaluations[0]['evaluation_schedule'])) {
-                                            $start_raw = $all_evaluations[0]['evaluation_schedule'];
-                                        }
-                                        if (empty($end_raw) && !empty($all_evaluations[0]['evaluation_schedule_end'])) {
-                                            $end_raw = $all_evaluations[0]['evaluation_schedule_end'];
-                                        }
+                        // Prefer explicit observation range, then teacher schedule range, then single time fallback.
+                        $start_raw = $all_evaluations[0]['observation_start_time'] ?? '';
+                        $end_raw = $all_evaluations[0]['observation_end_time'] ?? '';
 
-                                        if (!empty($start_raw) && !empty($end_raw)) {
-                                            $start_time = date('g:i', strtotime($start_raw));
-                                            $end_time = date('g:i A', strtotime($end_raw));
-                                            $schedule_text .= ' (' . $start_time . ' - ' . $end_time . ')';
-                                        } elseif (!empty($start_raw)) {
-                                            $time = date('g:i A', strtotime($start_raw));
-                                            $schedule_text .= ' (' . $time . ')';
-                                        }
-                                        
-                                        echo $schedule_text;
-                                        ?>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
+                        if (empty($start_raw) && !empty($all_evaluations[0]['observation_time'])) {
+                            $start_raw = $all_evaluations[0]['observation_time'];
+                        }
+                        if (empty($start_raw) && !empty($all_evaluations[0]['evaluation_schedule'])) {
+                            $start_raw = $all_evaluations[0]['evaluation_schedule'];
+                        }
+                        if (empty($end_raw) && !empty($all_evaluations[0]['evaluation_schedule_end'])) {
+                            $end_raw = $all_evaluations[0]['evaluation_schedule_end'];
+                        }
+
+                        if (!empty($start_raw) && !empty($end_raw)) {
+                            $start_time = date('g:i', strtotime($start_raw));
+                            $end_time = date('g:i A', strtotime($end_raw));
+                            $schedule_text .= ' (' . $start_time . ' - ' . $end_time . ')';
+                        } elseif (!empty($start_raw)) {
+                            $time = date('g:i A', strtotime($start_raw));
+                            $schedule_text .= ' (' . $time . ')';
+                        }
+
+                        $observer_names = [];
+                        $evaluator_departments = [];
+                        foreach ($all_evaluations_data as $entry) {
+                            $observer_name = trim((string)($entry['eval']['evaluator_name'] ?? ''));
+                            if ($observer_name !== '') {
+                                $observer_names[] = $observer_name;
+                            }
+                            $evaluator_department = trim((string)($entry['eval']['evaluator_department'] ?? ''));
+                            if ($evaluator_department !== '') {
+                                $evaluator_departments[] = $evaluator_department;
+                            }
+                        }
+                        $observer_names = array_values(array_unique($observer_names));
+                        $evaluator_departments = array_values(array_unique($evaluator_departments));
+                        ?>
+                        <div class="report-item"><strong>Date:</strong> <?php echo date('F j, Y', strtotime($observation_date)); ?></div>
+                        <div class="report-item"><strong>Department:</strong> <?php echo !empty($evaluator_departments) ? htmlspecialchars(implode(', ', $evaluator_departments)) : 'N/A'; ?></div>
+                        <div class="report-item"><strong>Subject/Class Schedule:</strong> <?php echo $schedule_text; ?></div>
                     </div>
 
                     <!-- Comments Section - Display Automatically -->

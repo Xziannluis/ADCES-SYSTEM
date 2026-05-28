@@ -1,5 +1,10 @@
 <?php
 require_once '../auth/session-check.php';
+$session_role = strtolower(trim((string)($_SESSION['role'] ?? '')));
+$session_role = str_replace(' ', '_', $session_role);
+if ($session_role !== '') {
+    $_SESSION['role'] = $session_role;
+}
 if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'])) {
     header("Location: ../login.php");
     exit();
@@ -54,6 +59,9 @@ if ($_GET && isset($_GET['action']) && $_GET['action'] === 'toggle_status') {
 
 // Update evaluation schedule and room
 if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule') {
+    if (($_SESSION['role'] ?? '') === 'president') {
+        $error_message = "President can only observe/evaluate.";
+    } else {
     $teacher_id = $_POST['teacher_id'] ?? '';
     $schedule = $_POST['evaluation_schedule'] ?? '';
     $room = $_POST['evaluation_room'] ?? '';
@@ -103,13 +111,15 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'update_schedule')
     } else {
         $error_message = "Teacher ID is required.";
     }
+    }
 }
 
 // Cancel / clear evaluation schedule and room
 if ($_POST && isset($_POST['action']) && $_POST['action'] === 'cancel_schedule') {
     $teacher_id = $_POST['teacher_id'] ?? '';
-
-    if (!empty($teacher_id)) {
+    if (($_SESSION['role'] ?? '') === 'president') {
+        $error_message = "President can only observe/evaluate.";
+    } elseif (!empty($teacher_id)) {
         $is_top_leader = in_array($_SESSION['role'] ?? '', ['president', 'vice_president'], true);
         if ($is_top_leader) {
             $query = "UPDATE teachers SET evaluation_schedule = NULL, evaluation_schedule_end = NULL, evaluation_room = NULL, evaluation_focus = NULL, evaluation_subject_area = NULL, evaluation_subject = NULL, evaluation_semester = NULL, scheduled_by = NULL, scheduled_department = NULL, updated_at = NOW() WHERE id = :id";

@@ -428,10 +428,16 @@ class Evaluation {
         $final_mgmt_avg = $mgmt_avg ?? $sla_avg;
         $final_assess_avg = $assess_avg;
 
-        // Calculate overall average — only from categories that have ratings
-        // (focused evaluations may only cover 1 or 2 categories)
-        $active_avgs = array_filter([$final_comm_avg, $final_mgmt_avg, $final_assess_avg], function($v) { return $v !== null; });
-        $overall_avg = count($active_avgs) > 0 ? array_sum($active_avgs) / count($active_avgs) : 0;
+        // Calculate overall average from ALL rated indicators (weighted by item count).
+        // This keeps ISO and PEAC totals accurate and consistent with UI calculations.
+        $overall_query = "SELECT AVG(rating) as avg_rating, COUNT(*) as cnt
+                          FROM evaluation_details
+                          WHERE evaluation_id = :evaluation_id";
+        $overall_stmt = $this->conn->prepare($overall_query);
+        $overall_stmt->bindParam(':evaluation_id', $evaluation_id);
+        $overall_stmt->execute();
+        $overall_row = $overall_stmt->fetch(PDO::FETCH_ASSOC);
+        $overall_avg = ((int)($overall_row['cnt'] ?? 0) > 0) ? ((float)($overall_row['avg_rating'] ?? 0)) : 0;
 
         // Update evaluation with calculated averages
         $update_query = "UPDATE " . $this->table_name . " 

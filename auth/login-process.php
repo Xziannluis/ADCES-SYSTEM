@@ -5,16 +5,12 @@ require_once '../config/constants.php';
 require_once '../models/User.php';
 
 if (!empty($_POST)) {
-    // Preserve role for redirect on failure
-    $role = isset($_POST['role']) ? preg_replace('/[^a-z_]/', '', $_POST['role']) : '';
-    $roleParam = $role ? '?role=' . $role : '';
-
     $recaptchaSecret = RECAPTCHA_SECRET_KEY;
     $recaptchaResponse = $_POST['g-recaptcha-response'] ?? '';
 
     if (empty($recaptchaResponse)) {
         $_SESSION['error'] = 'Please complete the CAPTCHA.';
-        header('Location: ../login.php' . $roleParam);
+        header('Location: ../login.php');
         exit();
     }
 
@@ -40,7 +36,7 @@ if (!empty($_POST)) {
 
     if (empty($captchaSuccess['success'])) {
         $_SESSION['error'] = 'CAPTCHA verification failed. Try again.';
-        header('Location: ../login.php' . $roleParam);
+        header('Location: ../login.php');
         exit();
     }
 
@@ -49,7 +45,7 @@ if (!empty($_POST)) {
 
     if(!$db) {
         $_SESSION['error'] = "Database connection is unavailable right now. Please make sure MySQL is running in XAMPP, then try again.";
-        header("Location: ../login.php" . $roleParam);
+        header("Location: ../login.php");
         exit();
     }
     
@@ -62,21 +58,6 @@ if (!empty($_POST)) {
     $sessionRole = strtolower(trim((string)$user->role));
     $sessionRole = str_replace(['-', ' '], '_', $sessionRole);
     $sessionRole = preg_replace('/_+/', '_', $sessionRole);
-
-    // Enforce role-group selection from login page.
-    // If a role group is selected, account role must belong to that group.
-    $roleGroups = [
-        'edp' => ['edp'],
-        'president' => ['president', 'vice_president'],
-        'dean' => ['dean', 'principal'],
-        'coordinator' => ['chairperson', 'subject_coordinator', 'grade_level_coordinator'],
-        'teacher' => ['teacher'],
-    ];
-    if ($role !== '' && isset($roleGroups[$role]) && !in_array($sessionRole, $roleGroups[$role], true)) {
-        $_SESSION['error'] = 'Role mismatch. Please choose the correct role before logging in.';
-        header("Location: ../login.php" . $roleParam);
-        exit();
-    }
 
     $_SESSION['user_id'] = $user->id;
     $_SESSION['username'] = $user->username;
@@ -123,7 +104,7 @@ if (!empty($_POST)) {
         exit();
     } else {
         $_SESSION['error'] = "Invalid username or password. Please try again.";
-        header("Location: ../login.php" . $roleParam);
+        header("Location: ../login.php");
         exit();
     }
 } else {
