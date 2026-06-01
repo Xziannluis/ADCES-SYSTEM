@@ -679,8 +679,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             header("Location: $redirect");
             exit();
         }
-        $unable_semester = trim((string)($_POST['semester'] ?? ($_POST['filter_semester'] ?? ($_GET['semester'] ?? '1st'))));
-        $unable_academic_year = trim((string)($_POST['academic_year'] ?? ($_POST['filter_academic_year'] ?? ($_GET['academic_year'] ?? ''))));
         $raw_ids = $_POST['eval_ids'] ?? '[]';
         $eval_ids = [];
         if (is_string($raw_ids)) {
@@ -745,17 +743,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                              WHERE evaluator_id = :uid
                                                AND teacher_id = :tid
                                                AND eval_id = :eid");
-            $del_slot_assign_stmt = $db->prepare("DELETE ta
-                                                  FROM teacher_assignments ta
-                                                  JOIN evaluations e ON e.id = ta.eval_id
-                                                  WHERE ta.evaluator_id = :uid
-                                                    AND ta.teacher_id = :tid
-                                                    AND e.teacher_id = :tid_eval
-                                                    AND e.academic_year = :ay
-                                                    AND e.semester = :sem
-                                                    AND e.observation_date = :od
-                                                    AND COALESCE(e.observation_time, '') = COALESCE(:ot, '')
-                                                    AND e.status <> 'completed'");
             $del_pending_slot_stmt = $db->prepare("DELETE FROM evaluations
                                                    WHERE evaluator_id = :uid
                                                      AND teacher_id = :tid
@@ -851,8 +838,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         ':user_id' => (int)($_SESSION['user_id'] ?? 0),
                         ':teacher_id' => $tid,
                         ':eval_id' => $eid,
-                        ':academic_year' => (string)($src['academic_year'] ?? $unable_academic_year),
-                        ':semester' => (string)($src['semester'] ?? $unable_semester),
+                        ':academic_year' => (string)($src['academic_year'] ?? $academic_year),
+                        ':semester' => (string)($src['semester'] ?? $semester),
                         ':schedule_start' => $slot_start,
                         ':reason' => $observer_reason
                     ]);
@@ -862,15 +849,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     ':uid' => (int)($_SESSION['user_id'] ?? 0),
                     ':tid' => $tid,
                     ':eid' => $eid
-                ]);
-                $del_slot_assign_stmt->execute([
-                    ':uid' => (int)($_SESSION['user_id'] ?? 0),
-                    ':tid' => $tid,
-                    ':tid_eval' => $tid,
-                    ':ay' => (string)($src['academic_year'] ?? ''),
-                    ':sem' => (string)($src['semester'] ?? ''),
-                    ':od' => (string)($src['observation_date'] ?? ''),
-                    ':ot' => (string)($src['observation_time'] ?? '')
                 ]);
 
                 $raw_ft = strtolower(trim((string)($src['evaluation_form_type'] ?? 'iso')));
@@ -986,8 +964,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         ':user_id' => (int)($_SESSION['user_id'] ?? 0),
                         ':teacher_id' => $tid,
                         ':eval_id' => null,
-                        ':academic_year' => (string)$unable_academic_year,
-                        ':semester' => (string)$unable_semester,
+                        ':academic_year' => (string)$academic_year,
+                        ':semester' => (string)$semester,
                         ':schedule_start' => $schedule_start,
                         ':reason' => $observer_reason
                     ]);
@@ -996,8 +974,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 try {
                     $mark_unbalanced_schedule_stmt->execute([
                         ':tid' => $tid,
-                        ':ay' => (string)$unable_academic_year,
-                        ':sem' => (string)$unable_semester,
+                        ':ay' => (string)$academic_year,
+                        ':sem' => (string)$semester,
                         ':od' => date('Y-m-d', strtotime($schedule_start)),
                         ':ot_min' => date('H:i', strtotime($schedule_start))
                     ]);
@@ -2867,15 +2845,13 @@ $filter_unavailable_observers = function(array $observer_list, int $teacher_id, 
              FROM observation_observer_unavailability ou
              JOIN users u ON u.id = ou.user_id
              WHERE ou.teacher_id = :teacher_id
-               AND (ou.academic_year = :academic_year OR ou.academic_year = '' OR ou.academic_year IS NULL)
-               AND (ou.semester = :semester OR ou.semester = '' OR ou.semester IS NULL)
+               AND ou.academic_year = :academic_year
+               AND ou.semester = :semester
                AND (
                     (:eval_id > 0 AND ou.eval_id = :eval_id_match)
                     OR (:schedule_start <> '' AND DATE_FORMAT(ou.schedule_start, '%Y-%m-%d %H:%i') = DATE_FORMAT(:schedule_start_match, '%Y-%m-%d %H:%i'))
-                    OR (:schedule_start_date <> '' AND DATE(ou.schedule_start) = :schedule_start_date_match)
                )"
         );
-        $schedule_start_date = $schedule_start_norm !== '' ? date('Y-m-d', strtotime($schedule_start_norm)) : '';
         $stmt->execute([
             ':teacher_id' => $teacher_id,
             ':academic_year' => $academic_year,
@@ -2883,9 +2859,7 @@ $filter_unavailable_observers = function(array $observer_list, int $teacher_id, 
             ':eval_id' => $eval_id,
             ':eval_id_match' => $eval_id,
             ':schedule_start' => $schedule_start_norm,
-            ':schedule_start_match' => $schedule_start_norm,
-            ':schedule_start_date' => $schedule_start_date,
-            ':schedule_start_date_match' => $schedule_start_date
+            ':schedule_start_match' => $schedule_start_norm
         ]);
         while ($name = $stmt->fetchColumn()) {
             $name = trim((string)$name);
@@ -4872,12 +4846,7 @@ try {
                                     $row_sched_end_raw = trim((string)($eval_data[$row_key]['cutoff'] ?? ''));
                                     $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
                                     $row_unable_schedule_start = trim((string)($eval_data[$row_key]['date'] ?? ''));
-                                    if ($row_unable_schedule_start !== '') {
-                                        $row_unable_time = trim((string)($t['observation_time'] ?? ''));
-                                        if ($row_unable_time !== '' && $row_unable_time !== '00:00:00' && $row_unable_time !== '00:00') {
-                                            $row_unable_schedule_start = date('Y-m-d H:i:s', strtotime($row_unable_schedule_start . ' ' . $row_unable_time));
-                                        }
-                                    } else {
+                                    if ($row_unable_schedule_start === '') {
                                         $row_unable_schedule_start = $row_sched_start_raw;
                                     }
                                     $observer_cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
@@ -5310,7 +5279,7 @@ try {
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="button" class="btn btn-danger" onclick="submitUnableObserveReason()">
-                        <i class="fas fa-paper-plane me-1"></i>Send Reason
+                        <i class="fas fa-paper-plane me-1"></i>Send Reason & Cancel
                     </button>
                 </div>
             </div>
@@ -6298,18 +6267,6 @@ function toggleUnableObserveComments(reasonValue) {
     if (!isOther && comments) comments.value = '';
 }
 
-function getCurrentFilterValue(name, fallback) {
-    var el = document.querySelector('select[name="' + name + '"], input[name="' + name + '"]');
-    if (el && String(el.value || '').trim() !== '') {
-        return String(el.value || '').trim();
-    }
-    try {
-        return (new URLSearchParams(window.location.search).get(name) || fallback || '').trim();
-    } catch (e) {
-        return fallback || '';
-    }
-}
-
 function submitUnableObserveReason(reasonArg) {
     var reason = '';
     if (typeof reasonArg === 'string') {
@@ -6363,8 +6320,10 @@ function submitUnableObserveReason(reasonArg) {
     var t = document.createElement('input'); t.type = 'hidden'; t.name = 'eval_ids'; t.value = JSON.stringify(evalIds); form.appendChild(t);
     var itemsInput = document.createElement('input'); itemsInput.type = 'hidden'; itemsInput.name = 'unavailable_items'; itemsInput.value = JSON.stringify(unavailableItems); form.appendChild(itemsInput);
     var r = document.createElement('input'); r.type = 'hidden'; r.name = 'observer_reason'; r.value = reason; form.appendChild(r);
-    var semIn = document.createElement('input'); semIn.type = 'hidden'; semIn.name = 'semester'; semIn.value = getCurrentFilterValue('semester', '1st'); form.appendChild(semIn);
-    var ayIn = document.createElement('input'); ayIn.type = 'hidden'; ayIn.name = 'academic_year'; ayIn.value = getCurrentFilterValue('academic_year', ''); form.appendChild(ayIn);
+    var semEl = document.querySelector('select[name=\"semester\"]');
+    var ayEl = document.querySelector('select[name=\"academic_year\"]');
+    var semIn = document.createElement('input'); semIn.type = 'hidden'; semIn.name = 'semester'; semIn.value = semEl ? semEl.value : ''; form.appendChild(semIn);
+    var ayIn = document.createElement('input'); ayIn.type = 'hidden'; ayIn.name = 'academic_year'; ayIn.value = ayEl ? ayEl.value : ''; form.appendChild(ayIn);
     document.body.appendChild(form);
     form.submit();
 }
