@@ -2457,7 +2457,9 @@ if ($is_leader) {
               AND e.semester = :semester
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    $stmt->bindParam(':department_match1', $raw_department);
+    $stmt->bindParam(':department_match2', $raw_department);
+    $stmt->bindParam(':department_match3', $raw_department);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
@@ -2590,7 +2592,8 @@ if ($is_leader) {
                       )
                     ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
-    $sched_stmt->bindParam(':coord_evaluator_id', $_SESSION['user_id']);
+    $sched_stmt->bindParam(':department_match_sched', $raw_department);
+    $sched_stmt->bindParam(':department_match_primary', $raw_department);
     $sched_stmt->bindParam(':filter_semester', $semester);
     $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $sched_stmt->bindParam(':academic_year', $academic_year);
