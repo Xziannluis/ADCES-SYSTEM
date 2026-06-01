@@ -2417,17 +2417,26 @@ if ($is_leader) {
     $sched_stmt->bindParam(':semester', $semester);
 } else {
     // Dean/principal: show scheduled teachers only when schedule is set for this
-    // department explicitly via scheduled_department field.
+    // department, or (legacy) teacher primary department matches this department.
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester, t.evaluation_form_type,
                            t.scheduled_by, t.scheduled_department
                     FROM teachers t
-                    WHERE t.status = 'active'
+                    WHERE (
+                          (
+                            t.scheduled_department IS NOT NULL
+                            AND t.scheduled_department <> ''
+                            AND t.scheduled_department = :department_sched
+                          )
+                          OR
+                          (
+                            (t.scheduled_department IS NULL OR t.scheduled_department = '')
+                            AND t.department = :department_primary
+                          )
+                    )
+                      AND t.status = 'active'
                       AND t.evaluation_schedule IS NOT NULL
-                      AND t.scheduled_department IS NOT NULL
-                      AND t.scheduled_department <> ''
-                      AND t.scheduled_department = :department_sched
                       AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                       AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                       AND NOT EXISTS (
@@ -2441,6 +2450,7 @@ if ($is_leader) {
                     ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
     $sched_stmt->bindParam(':department_sched', $raw_department);
+    $sched_stmt->bindParam(':department_primary', $raw_department);
     $sched_stmt->bindParam(':filter_semester', $semester);
     $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $sched_stmt->bindParam(':academic_year', $academic_year);
