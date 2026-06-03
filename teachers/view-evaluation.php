@@ -27,7 +27,8 @@ $query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, u.depa
           JOIN users u ON e.evaluator_id = u.id
           JOIN teachers t ON e.teacher_id = t.id
           WHERE DATE(e.observation_date) = :obs_date AND e.teacher_id = :teacher_id
-          ORDER BY e.created_at DESC";
+            AND e.status = 'completed'
+          ORDER BY e.created_at ASC, e.id ASC";
 
 $stmt = $db->prepare($query);
 $stmt->bindParam(':obs_date', $obs_date);
@@ -279,14 +280,16 @@ foreach ($all_evaluations as $eval) {
                                 <strong>Overall Rating:</strong> 
                                 <span style="font-size: 1.2rem; color: #3498db; font-weight: bold;">
                                     <?php 
-                                    $rscore = (int) floor($eval['overall_avg']);
+                                    $rscore = (float)$eval['overall_avg'];
                                     $rating_text = 'Needs Improvement';
-                                    switch ($rscore) {
-                                        case 5: $rating_text = 'Excellent'; break;
-                                        case 4: $rating_text = 'Very Satisfactory'; break;
-                                        case 3: $rating_text = 'Satisfactory'; break;
-                                        case 2: $rating_text = 'Below Satisfactory'; break;
-                                        default: $rating_text = 'Needs Improvement'; break;
+                                    if ($rscore >= 4.6) {
+                                        $rating_text = 'Excellent';
+                                    } elseif ($rscore >= 3.6) {
+                                        $rating_text = 'Very Satisfactory';
+                                    } elseif ($rscore >= 2.6) {
+                                        $rating_text = 'Satisfactory';
+                                    } elseif ($rscore >= 1.6) {
+                                        $rating_text = 'Below Satisfactory';
                                     }
                                     echo htmlspecialchars(number_format($eval['overall_avg'], 1)) . ' - ' . $rating_text;
                                     ?>

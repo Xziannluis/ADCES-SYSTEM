@@ -39,7 +39,12 @@ if (in_array($_SESSION['role'] ?? '', ['chairperson', 'subject_coordinator', 'gr
         ':uid_assign' => (int)($_SESSION['user_id'] ?? 0),
     ];
     if ($timeHm !== '') {
-        $accessSql .= " AND COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :ot";
+        $accessSql .= " AND (
+                            CASE
+                                WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                ELSE LEFT(TRIM(e.observation_time), 5)
+                            END
+                        ) = :ot";
         $accessParams[':ot'] = $timeHm;
     }
     $accessSql .= " AND (
@@ -67,7 +72,15 @@ $stmt = $db->prepare("SELECT e.id, e.strengths, e.improvement_areas, e.recommend
                       FROM evaluations e
                       LEFT JOIN users u ON e.evaluator_id = u.id
                       WHERE e.teacher_id = :tid AND DATE(e.observation_date) = :od
-                        AND (:ot_filter = '' OR COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :ot_match)
+                        AND (
+                            :ot_filter = ''
+                            OR (
+                                CASE
+                                    WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                    ELSE LEFT(TRIM(e.observation_time), 5)
+                                END
+                            ) = :ot_match
+                        )
                         AND e.status = 'completed'
                       ORDER BY e.created_at ASC, e.id ASC");
 $stmt->execute([':tid' => $teacherId, ':od' => $dateYmd, ':ot_filter' => $timeHm, ':ot_match' => $timeHm]);

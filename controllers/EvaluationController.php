@@ -186,9 +186,10 @@ class EvaluationController {
                 }
             }
 
-            // Dean/Principal fallback:
-            // if no evaluator-specific pending slot, use closest pending slot in their department.
-            if ($row === null && in_array($evaluatorRole, ['dean', 'principal'], true) && trim($evaluatorDept) !== '') {
+            // Dean/Principal/Coordinator fallback:
+            // if no evaluator-specific pending slot, use closest pending slot in their
+            // department, or an active slot for a teacher explicitly assigned to them.
+            if ($row === null && in_array($evaluatorRole, ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'], true) && trim($evaluatorDept) !== '') {
                 $stmtAny = $this->db->prepare(
                     "SELECT e.observation_date, e.observation_time, e.observation_room, e.semester, e.academic_year, e.subject_observed, e.subject_area, e.evaluation_focus, e.department
                      FROM evaluations e
@@ -200,18 +201,25 @@ class EvaluationController {
                             OR e.status IS NULL
                             OR e.status = ''
                        )
-                       AND (
-                            t.department = :dept
-                            OR t.scheduled_department = :dept2
-                            OR e.department = :dept3
-                       )
-                     ORDER BY e.observation_date ASC, COALESCE(e.observation_time, '00:00:00') ASC, e.id ASC"
+                        AND (
+                             t.department = :dept
+                             OR t.scheduled_department = :dept2
+                             OR e.department = :dept3
+                             OR EXISTS (
+                                 SELECT 1
+                                 FROM teacher_assignments ta
+                                 WHERE ta.teacher_id = e.teacher_id
+                                   AND ta.evaluator_id = :assigned_evaluator_id
+                             )
+                        )
+                      ORDER BY e.observation_date ASC, COALESCE(e.observation_time, '00:00:00') ASC, e.id ASC"
                 );
                 $stmtAny->execute([
                     ':tid' => $teacherId,
                     ':dept' => $evaluatorDept,
                     ':dept2' => $evaluatorDept,
-                    ':dept3' => $evaluatorDept
+                    ':dept3' => $evaluatorDept,
+                    ':assigned_evaluator_id' => $evaluatorId
                 ]);
                 $rowsAny = $stmtAny->fetchAll(PDO::FETCH_ASSOC) ?: [];
                 $bestAnyDiff = null;
@@ -252,33 +260,95 @@ class EvaluationController {
         if ($observationDate === '') return;
         if ($observationTime === '') $observationTime = '00:00';
         $observationTime = substr($observationTime, 0, 5);
+        $department = trim($department);
 
         $balanceStmt = $this->db->prepare(
             "SELECT
-                COUNT(DISTINCT e.evaluator_id) AS observer_count,
-                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal') THEN 1 ELSE 0 END) AS has_head,
-                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('chairperson','subject_coordinator','grade_level_coordinator') THEN 1 ELSE 0 END) AS has_coordinator
+                COUNT(DISTINCT e.evaluator_id) AS observer_count
              FROM evaluations e
-             JOIN users u ON u.id = e.evaluator_id
              WHERE e.teacher_id = :teacher_id
                AND e.observation_date = :observation_date
-               AND COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :observation_time
+               AND (
+                    CASE
+                        WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                        ELSE LEFT(TRIM(e.observation_time), 5)
+                    END
+               ) = :observation_time
                AND (:department = '' OR e.department = :department_match)
-               AND (e.status IS NULL OR e.status <> 'completed')"
+               AND (e.status IS NULL OR e.status NOT IN ('cancelled','canceled','rescheduled'))"
         );
         $balanceStmt->execute([
             ':teacher_id' => $teacherId,
             ':observation_date' => $observationDate,
             ':observation_time' => $observationTime,
-            ':department' => trim($department),
-            ':department_match' => trim($department)
+            ':department' => $department,
+            ':department_match' => $department
         ]);
         $balance = $balanceStmt->fetch(PDO::FETCH_ASSOC) ?: [];
         $observerCount = (int)($balance['observer_count'] ?? 0);
-        $hasHead = (int)($balance['has_head'] ?? 0) === 1;
-        $hasCoordinator = (int)($balance['has_coordinator'] ?? 0) === 1;
-        if ($observerCount < 2 || !$hasHead || !$hasCoordinator) {
-            throw new Exception('Observer imbalance: evaluation cannot proceed until at least 2 observers are assigned, including a Dean/Principal and a Coordinator.');
+
+        try {
+            $activeScheduleStmt = $this->db->prepare(
+                "SELECT 1
+                 FROM teacher_schedules ts
+                 WHERE ts.teacher_id = :teacher_id
+                   AND DATE(ts.schedule_start) = :observation_date
+                   AND DATE_FORMAT(ts.schedule_start, '%H:%i') = :observation_time
+                   AND (:department = '' OR ts.scheduled_department = :department_match)
+                   AND ts.status = 'scheduled'
+                 LIMIT 1"
+            );
+            $activeScheduleStmt->execute([
+                ':teacher_id' => $teacherId,
+                ':observation_date' => $observationDate,
+                ':observation_time' => $observationTime,
+                ':department' => $department,
+                ':department_match' => $department
+            ]);
+
+            if ($activeScheduleStmt->fetchColumn()) {
+                $requiredObserverStmt = $this->db->prepare(
+                    "SELECT COUNT(DISTINCT observer_id)
+                     FROM (
+                         SELECT u.id AS observer_id
+                         FROM users u
+                         WHERE u.status = 'active'
+                           AND u.role IN ('dean','principal')
+                           AND (:department_dean = '' OR u.department = :department_match_dean)
+                         UNION
+                         SELECT u.id AS observer_id
+                         FROM teacher_assignments ta
+                         JOIN users u ON u.id = ta.evaluator_id
+                         WHERE ta.teacher_id = :teacher_id_coord
+                           AND u.status = 'active'
+                           AND u.role IN ('chairperson','subject_coordinator','grade_level_coordinator')
+                           AND (:department_coord = '' OR u.department = :department_match_coord)
+                         UNION
+                         SELECT u.id AS observer_id
+                         FROM teacher_assignments ta
+                         JOIN users u ON u.id = ta.evaluator_id
+                         WHERE ta.teacher_id = :teacher_id_pvp
+                           AND ta.eval_id IS NOT NULL
+                           AND u.status = 'active'
+                           AND u.role IN ('president','vice_president')
+                     ) required_observers"
+                );
+                $requiredObserverStmt->execute([
+                    ':department_dean' => $department,
+                    ':department_match_dean' => $department,
+                    ':teacher_id_coord' => $teacherId,
+                    ':department_coord' => $department,
+                    ':department_match_coord' => $department,
+                    ':teacher_id_pvp' => $teacherId
+                ]);
+                $observerCount = max($observerCount, (int)$requiredObserverStmt->fetchColumn());
+            }
+        } catch (Exception $e) {
+            // Keep evaluation-row count as fallback.
+        }
+
+        if ($observerCount < 2) {
+            throw new Exception('Observer imbalance: evaluation cannot proceed until at least 2 observers/evaluators are assigned.');
         }
     }
 
@@ -407,42 +477,6 @@ class EvaluationController {
                 } catch (Exception $e) {}
             }
             $this->assertObserverBalance((int)$teacherId, $balanceDate, $balanceTime, $balanceDepartment);
-
-            // Enforce teacher acknowledgment for the active schedule cycle.
-            // A teacher can only be evaluated after signing the observation plan
-            // for the same academic year + semester as the scheduled evaluation.
-            $scheduleSemester = (string)($postData['semester'] ?? '');
-            if (!in_array($scheduleSemester, ['1st', '2nd'], true)) {
-                $scheduleSemester = (string)($effectiveSchedule['semester'] ?? '');
-                if (!in_array($scheduleSemester, ['1st', '2nd'], true)) {
-                    $teacherSemStmt = $this->db->prepare("SELECT evaluation_semester FROM teachers WHERE id = :id LIMIT 1");
-                    $teacherSemStmt->bindValue(':id', $teacherId);
-                    $teacherSemStmt->execute();
-                    $scheduleSemester = (string)$teacherSemStmt->fetchColumn();
-                }
-            }
-            $scheduleAcademicYear = (string)($postData['academic_year'] ?? '');
-            if ($scheduleAcademicYear === '') {
-                $scheduleAcademicYear = (string)($effectiveSchedule['academic_year'] ?? '');
-            }
-
-            if ($scheduleAcademicYear !== '' && in_array($scheduleSemester, ['1st', '2nd'], true)) {
-                $ackStmt = $this->db->prepare(
-                    "SELECT id
-                     FROM observation_plan_acknowledgments
-                     WHERE teacher_id = :teacher_id
-                       AND academic_year = :academic_year
-                       AND semester = :semester
-                     LIMIT 1"
-                );
-                $ackStmt->bindValue(':teacher_id', $teacherId);
-                $ackStmt->bindValue(':academic_year', $scheduleAcademicYear);
-                $ackStmt->bindValue(':semester', $scheduleSemester);
-                $ackStmt->execute();
-                if (!$ackStmt->fetch(PDO::FETCH_ASSOC)) {
-                    throw new Exception('Cannot submit evaluation: teacher acknowledgment is required first.');
-                }
-            }
 
             // Enforce signatures for both ISO and PEAC submissions (server-side).
             $raterSig = trim((string)($postData['rater_signature'] ?? ''));

@@ -734,8 +734,13 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     if ($observer_count < 2) {
                                         $can_evaluate_now = false;
                                         $schedule_badge_class = 'bg-danger';
-                                        $schedule_badge_text = 'Evaluator imbalanced';
+<<<<<<< Updated upstream
+                                        $schedule_badge_text = 'Evaluator unbalanced';
                                         $schedule_block_message = 'Evaluation cannot proceed: this schedule needs at least 2 observers and balanced roles (Dean/Principal and Coordinator).';
+=======
+                                        $schedule_badge_text = 'Evaluator imbalanced';
+                                        $schedule_block_message = 'Evaluation cannot proceed: this schedule needs at least 2 observers/evaluators.';
+>>>>>>> Stashed changes
                                     }
                                 } catch (Exception $e) {
                                     // fail-open to avoid blocking all rows on query issues

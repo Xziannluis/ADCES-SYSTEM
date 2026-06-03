@@ -717,13 +717,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                                               AND observation_date = :od
                                                               AND COALESCE(observation_time, '') = COALESCE(:ot, '')
                                                               AND status <> 'completed'");
+<<<<<<< Updated upstream
+=======
             $balance_remaining_observers_stmt = $db->prepare(
                 "SELECT
-                    COUNT(DISTINCT e.evaluator_id) AS observer_count,
-                    MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal') THEN 1 ELSE 0 END) AS has_head,
-                    MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('chairperson','subject_coordinator','grade_level_coordinator') THEN 1 ELSE 0 END) AS has_coordinator
+                    COUNT(DISTINCT e.evaluator_id) AS observer_count
                  FROM evaluations e
-                 JOIN users u ON u.id = e.evaluator_id
                  WHERE e.teacher_id = :tid
                    AND e.academic_year = :ay
                    AND e.semester = :sem
@@ -732,6 +731,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                    AND (:dept = '' OR e.department = :dept_match)
                    AND e.status <> 'completed'"
             );
+>>>>>>> Stashed changes
             $mark_unbalanced_slot_stmt = $db->prepare("UPDATE evaluations
                                                        SET status = 'observer_unbalanced', updated_at = NOW()
                                                        WHERE teacher_id = :tid
@@ -811,6 +811,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $remaining_slot_rows = (int)$count_remaining_slot_stmt->fetchColumn();
                 $count_remaining_observers_stmt->execute($slotParams);
                 $remaining_observers = (int)$count_remaining_observers_stmt->fetchColumn();
+<<<<<<< Updated upstream
+=======
                 $balance_remaining_observers_stmt->execute([
                     ':tid' => $tid,
                     ':ay' => (string)($src['academic_year'] ?? ''),
@@ -821,8 +823,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     ':dept_match' => trim((string)($src['department'] ?? ''))
                 ]);
                 $balance_remaining = $balance_remaining_observers_stmt->fetch(PDO::FETCH_ASSOC) ?: [];
-                $has_required_head = (int)($balance_remaining['has_head'] ?? 0) === 1;
-                $has_required_coordinator = (int)($balance_remaining['has_coordinator'] ?? 0) === 1;
+>>>>>>> Stashed changes
                 $is_observer_unbalanced = false;
                 if ($remaining_slot_rows <= 0) {
                     $delete_remaining_slot_stmt->execute($slotParams);
