@@ -8,7 +8,6 @@ if(!in_array($_SESSION['role'], ['president', 'vice_president'])) {
 $qs = $_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : '';
 header("Location: ../evaluators/reports_print.php" . $qs);
 exit();
-}
 
 require_once '../config/database.php';
 require_once '../models/Evaluation.php';

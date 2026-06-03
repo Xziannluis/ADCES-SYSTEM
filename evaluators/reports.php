@@ -1085,6 +1085,8 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         let reportSigTouched = false;
         let currentPreviewData = null;
         let currentPreviewEvalId = 0;
+        let printEvaluationId = 0;
+        const shouldSkipPrintSignature = <?php echo json_encode(($_SESSION['role'] ?? '') === 'president'); ?>;
 
         function initReportSignaturePad() {
             reportSigCanvas = document.getElementById('reportSignatureCanvas');
@@ -1139,7 +1141,23 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             reportSigTouched = false;
         }
 
-        function openPrintReport() {
+        function openReportsPrintWindow() {
+            const params = new URLSearchParams(window.location.search);
+            params.set('auto_print', '1');
+            if (printEvaluationId > 0) {
+                params.set('evaluation_id', String(printEvaluationId));
+            } else {
+                params.delete('evaluation_id');
+            }
+            window.open('reports_print.php?' + params.toString(), '_blank');
+        }
+
+        function openPrintReport(scope) {
+            printEvaluationId = (scope === 'preview') ? currentPreviewEvalId : 0;
+            if (shouldSkipPrintSignature) {
+                openReportsPrintWindow();
+                return;
+            }
             if (!reportSignatureModal) {
                 const el = document.getElementById('printSignatureModal');
                 reportSignatureModal = new bootstrap.Modal(el);
@@ -1177,9 +1195,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                         throw new Error((res && res.message) ? res.message : 'Failed to save signature.');
                     }
                     if (reportSignatureModal) reportSignatureModal.hide();
-                    const params = new URLSearchParams(window.location.search);
-                    params.set('auto_print', '1');
-                    window.open('reports_print.php?' + params.toString(), '_blank');
+                    openReportsPrintWindow();
                 })
                 .catch(err => {
                     alert(err.message || 'Unable to continue printing.');
@@ -1475,7 +1491,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-primary" onclick="openPrintReport()">
+                    <button type="button" class="btn btn-primary" onclick="openPrintReport('preview')">
                         <i class="fas fa-print me-1"></i>Print Report
                     </button>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>

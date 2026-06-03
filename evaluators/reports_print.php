@@ -151,6 +151,7 @@ try {
 $academic_year = trim((string)($_GET['academic_year'] ?? ''));
 $semester = trim((string)($_GET['semester'] ?? ''));
 $teacher_id = trim((string)($_GET['teacher_id'] ?? ''));
+$selected_evaluation_id = (int)($_GET['evaluation_id'] ?? 0);
 
 $academic_year_label = ($academic_year !== '') ? $academic_year : 'All';
 $semester_label = ($semester !== '') ? $semester : 'All';
@@ -166,6 +167,41 @@ foreach ($available_teachers as $teacher_option) {
 $report_department = $raw_department;
 $evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', '', null, $report_scope_observer_id);
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+if ($selected_evaluation_id > 0 && !empty($evaluations)) {
+    $selectedEvaluation = null;
+    foreach ($evaluations as $evaluationRow) {
+        if ((int)($evaluationRow['id'] ?? 0) === $selected_evaluation_id) {
+            $selectedEvaluation = $evaluationRow;
+            break;
+        }
+    }
+
+    if ($selectedEvaluation === null) {
+        $evaluations = [];
+    } else {
+        $selectedTeacherId = (int)($selectedEvaluation['teacher_id'] ?? 0);
+        $selectedAcademicYear = trim((string)($selectedEvaluation['academic_year'] ?? ''));
+        $selectedSemester = trim((string)($selectedEvaluation['semester'] ?? ''));
+        $selectedDate = date('Y-m-d', strtotime((string)($selectedEvaluation['observation_date'] ?? '')));
+        $selectedTime = trim((string)($selectedEvaluation['observation_time'] ?? ''));
+
+        $evaluations = array_values(array_filter($evaluations, static function(array $evaluationRow) use (
+            $selectedTeacherId,
+            $selectedAcademicYear,
+            $selectedSemester,
+            $selectedDate,
+            $selectedTime
+        ): bool {
+            $rowDate = date('Y-m-d', strtotime((string)($evaluationRow['observation_date'] ?? '')));
+            return (int)($evaluationRow['teacher_id'] ?? 0) === $selectedTeacherId
+                && trim((string)($evaluationRow['academic_year'] ?? '')) === $selectedAcademicYear
+                && trim((string)($evaluationRow['semester'] ?? '')) === $selectedSemester
+                && $rowDate === $selectedDate
+                && trim((string)($evaluationRow['observation_time'] ?? '')) === $selectedTime;
+        }));
+    }
+}
 
 $format_day_time = static function(array $eval): string {
     $obsDate = trim((string)($eval['observation_date'] ?? ''));
