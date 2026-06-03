@@ -197,7 +197,7 @@ class EvaluationController {
                      WHERE e.teacher_id = :tid
                        AND e.observation_date IS NOT NULL
                        AND (
-                            e.status IN ('draft','pending','observer_unbalanced')
+                            e.status IN ('draft','pending','observer_unbalanced','completed')
                             OR e.status IS NULL
                             OR e.status = ''
                        )
@@ -659,7 +659,7 @@ class EvaluationController {
                    AND academic_year = :ay
                    AND semester = :sem
                    AND observation_date = :obs_date
-                   AND (status IN ('draft','pending') OR status IS NULL OR status = '')
+                   AND (status IN ('draft','pending','observer_unbalanced') OR status IS NULL OR status = '')
                  ORDER BY id DESC
                  LIMIT 1"
             );

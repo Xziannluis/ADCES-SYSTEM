@@ -81,9 +81,9 @@ try {
     // keep defaults
 }
 
-// Note: expired schedules are NOT auto-cleared here.
-// Once the scheduled time passes, the evaluator can proceed to evaluate.
-// Schedules are cleared only after an evaluation is submitted.
+// Expired schedules are not auto-cleared here, but the evaluation window is closed.
+// Evaluators can proceed only within a complete schedule start/end window.
+// Schedules are cleared only after an evaluation is submitted or manually rescheduled.
 
 $hasTeacherDepartments = false;
 try {
@@ -303,7 +303,7 @@ try {
           WHERE e.teacher_id = :tid
             AND e.observation_date IS NOT NULL
            AND (
-                e.status IN ('draft','pending','observer_unbalanced')
+                e.status IN ('draft','pending','observer_unbalanced','completed')
                 OR e.status IS NULL
                 OR e.status = ''
            )
@@ -609,6 +609,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                             $schedule_display = trim((string)$scheduleRaw);
                             $scheduleEndRawEffective = (string)($teacher_row['evaluation_schedule_end'] ?? '');
                             $schedule_block_message = 'No schedule is set. Please ask the dean/principal to set one first.';
+                            $schedule_is_complete = false;
+                            $schedule_window_closed = false;
 
                             if (!empty($scheduleRaw)) {
                                 try {
@@ -627,14 +629,21 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     if (!empty($scheduleEndRaw)) {
                                         $scheduleEnd = new DateTime($scheduleEndRaw, $timezone);
                                         $scheduleEnd->setTimezone($timezone);
+                                        $schedule_is_complete = true;
                                         if ($now > $scheduleEnd) {
                                             $schedule_ended = true;
                                         }
                                     }
                                     
-                                    if ($schedule_ended) {
+                                    if (!$schedule_is_complete) {
+                                        $can_evaluate_now = false;
+                                        $schedule_badge_class = 'bg-secondary';
+                                        $schedule_badge_text = 'Schedule required';
+                                        $schedule_block_message = 'A complete schedule with start and end time is required before evaluation can proceed.';
+                                    } elseif ($schedule_ended) {
                                         // Schedule end time has passed - evaluation window closed
                                         $can_evaluate_now = false;
+                                        $schedule_window_closed = true;
                                         $schedule_badge_class = 'bg-danger';
                                         $schedule_badge_text = 'Closed';
                                         $schedule_block_message = 'The evaluation deadline has passed. No further changes are allowed.';
@@ -709,7 +718,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                             // Guard: any scheduled slot with fewer than two observer rows
                             // is imbalanced, even before the scheduled time opens. Completed
                             // observers still count because they were part of this slot.
-                            if (!$all_done && $slot_date !== '') {
+                            if (!$all_done && $slot_date !== '' && $schedule_is_complete && !$schedule_window_closed) {
                                 try {
                                     $schedule_balance_stmt->execute([
                                         ':tid_eval' => (int)$teacher_row['id'],
@@ -749,7 +758,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 $can_evaluate_now = false;
                                 if (
                                     !$all_done &&
-                                    !empty($scheduleRaw)
+                                    !empty($scheduleRaw) &&
+                                    $schedule_is_complete &&
+                                    !$schedule_window_closed
                                 ) {
                                     $schedule_badge_class = 'bg-secondary';
                                     $schedule_badge_text = 'Accept as observer first';
@@ -1345,7 +1356,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                                 <span class="input-group-text" style="border-color: #ccc; background: #fff; font-weight: 600;">
                                                     AGREEMENT:
                                                 </span>
-                                            <textarea class="form-control" id="agreement" name="agreement" rows="3" placeholder="State agreement or additional notes"></textarea>
+                                            <textarea class="form-control" id="agreement" name="agreement" rows="3" placeholder="State agreement or additional notes" required></textarea>
                                             </div>
                                         </div>
                                     </div>

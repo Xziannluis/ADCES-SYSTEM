@@ -403,6 +403,7 @@ body {
 .evaluation-table td:nth-child(n+2):nth-child(-n+6) input[type="radio"] {
     margin: 0;
     transform: scale(1.15);
+    accent-color: #2f5d92;
 }
 
 .evaluation-table th:last-child,

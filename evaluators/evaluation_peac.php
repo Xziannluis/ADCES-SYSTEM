@@ -13,6 +13,52 @@ require_once '../controllers/EvaluationController.php';
 $database = new Database();
 $db = $database->getConnection();
 
+function defaultPeacIndicators(): array {
+    return [
+        'teacher_actions' => [
+            'The teacher communicates clear expectations of student performance in line with the unit standards and competencies.',
+            'The teacher utilizes various learning materials, resources and strategies to enable all students to learn and achieve the unit standards and competencies and learning goals.',
+            "The teacher monitors and checks on students' learning and attainment of the unit standards and competencies by conducting varied forms of assessments during class discussion.",
+            'The teacher provides appropriate feedback or interventions to enable students in attaining the unit standards and competencies.',
+            'The teacher manages the classroom environment and time in a way that supports student learning and the achievement of the unit standards and competencies.',
+            "The teacher processes students' understanding by asking clarifying or critical thinking questions related to the unit standards and competencies."
+        ],
+        'student_learning_actions' => [
+            'The students are active and engaged with the different learning tasks aimed at accomplishing the unit standards and competencies.',
+            'The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.',
+            'The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.',
+            'The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.',
+            'The students are able to explain how their ideas, outputs or performances accomplish the unit standards and competencies.',
+            'The students, when encouraged or on their own, ask questions to clarify or deepen their understanding of the unit standards and competencies.',
+            'The students are able to relate or transfer their learning to daily life and real world situations.',
+            'The students are able to integrate 21st century skills in their achievement of the unit standards and competencies.',
+            "The students are able to reflect on and connect their learning with the school's PVMGO."
+        ]
+    ];
+}
+
+$peacCriteria = defaultPeacIndicators();
+try {
+    $criteriaStmt = $db->prepare("SELECT category, criterion_text
+                                  FROM evaluation_criteria
+                                  WHERE category IN ('teacher_actions','student_learning_actions')
+                                  ORDER BY category, criterion_index ASC");
+    $criteriaStmt->execute();
+    $tmpCriteria = ['teacher_actions' => [], 'student_learning_actions' => []];
+    while ($row = $criteriaStmt->fetch(PDO::FETCH_ASSOC)) {
+        $category = trim((string)($row['category'] ?? ''));
+        $text = trim((string)($row['criterion_text'] ?? ''));
+        if (isset($tmpCriteria[$category]) && $text !== '') {
+            $tmpCriteria[$category][] = $text;
+        }
+    }
+    foreach ($tmpCriteria as $category => $items) {
+        if (!empty($items)) {
+            $peacCriteria[$category] = $items;
+        }
+    }
+} catch (PDOException $e) {}
+
 // Get teacher_id from URL
 $teacher_id = $_GET['teacher_id'] ?? null;
 if (empty($teacher_id)) {
@@ -575,7 +621,7 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
                                 <div class="border rounded">
                                     <div class="fw-bold p-2 border-bottom" style="background:#f8f9fa;">AGREEMENT:</div>
                                     <div class="p-2">
-                                        <textarea class="form-control border-0" name="agreement" rows="3" placeholder="State agreement or additional notes" style="resize:vertical;"></textarea>
+                                        <textarea class="form-control border-0" name="agreement" id="agreement" rows="3" placeholder="State agreement or additional notes" style="resize:vertical;" required></textarea>
                                     </div>
                                 </div>
                             </div>
@@ -662,36 +708,42 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
 
     <script>
     (function() {
-        // === PEAC Indicator texts (for AI payload) ===
-        const teacherActionTexts = [
-            "The teacher communicates clear expectations of student performance in line with the unit standards and competencies.",
-            "The teacher utilizes various learning materials, resources and strategies to enable all students to learn and achieve the unit standards and competencies and learning goals.",
-            "The teacher monitors and checks on students' learning and attainment of the unit standards and competencies by conducting varied forms of assessments during class discussion.",
-            "The teacher provides appropriate feedback or interventions to enable students in attaining the unit standards and competencies.",
-            "The teacher manages the classroom environment and time in a way that supports student learning and the achievement of the unit standards and competencies.",
-            "The teacher processes students' understanding by asking clarifying or critical thinking questions related to the unit standards and competencies."
-        ];
-        const studentActionTexts = [
-            "The students are active and engaged with the different learning tasks aimed at accomplishing the unit standards and competencies.",
-            "The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.",
-            "The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.",
-            "The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.",
-            "The students are able to explain how their ideas, outputs or performances accomplish the unit standards and competencies.",
-            "The students, when encouraged or on their own, ask questions to clarify or deepen their understanding of the unit standards and competencies.",
-            "The students are able to relate or transfer their learning to daily life and real world situations.",
-            "The students are able to integrate 21st century skills in their achievement of the unit standards and competencies.",
-            "The students are able to reflect on and connect their learning with the school's PVMGO."
-        ];
+        // === PEAC Indicator texts (dynamic from EDP settings) ===
+        const PEAC_CRITERIA = <?php echo json_encode($peacCriteria, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+        const teacherActionTexts = Array.isArray(PEAC_CRITERIA.teacher_actions) ? PEAC_CRITERIA.teacher_actions : [];
+        const studentActionTexts = Array.isArray(PEAC_CRITERIA.student_learning_actions) ? PEAC_CRITERIA.student_learning_actions : [];
+        const teacherActionCount = teacherActionTexts.length;
+        const studentActionCount = studentActionTexts.length;
+        const totalPeacCount = teacherActionCount + studentActionCount;
+
+        function renderPeacIndicators() {
+            const renderRows = (items, inputPrefix, startNumber) => items.map((text, i) => `
+                <tr>
+                    <td>${startNumber + i}.</td>
+                    <td>${escapeHtml(text)}</td>
+                    <td><input type="radio" name="${inputPrefix}${i}" value="4" required></td>
+                    <td><input type="radio" name="${inputPrefix}${i}" value="3"></td>
+                    <td><input type="radio" name="${inputPrefix}${i}" value="2"></td>
+                    <td><input type="radio" name="${inputPrefix}${i}" value="1"></td>
+                    <td><input type="radio" name="${inputPrefix}${i}" value="0"></td>
+                </tr>
+            `).join('');
+            const teacherBody = document.getElementById('teacherActions');
+            const studentBody = document.getElementById('studentActions');
+            if (teacherBody) teacherBody.innerHTML = renderRows(teacherActionTexts, 'teacher_action', 1);
+            if (studentBody) studentBody.innerHTML = renderRows(studentActionTexts, 'student_action', teacherActionCount + 1);
+        }
+        renderPeacIndicators();
 
         // === Average Calculation ===
         function calculateAverages() {
             let teacherTotal = 0, teacherCount = 0;
-            for (let i = 0; i < 6; i++) {
+            for (let i = 0; i < teacherActionCount; i++) {
                 const checked = document.querySelector('input[name="teacher_action' + i + '"]:checked');
                 if (checked) { teacherTotal += parseInt(checked.value); teacherCount++; }
             }
             let studentTotal = 0, studentCount = 0;
-            for (let i = 0; i < 9; i++) {
+            for (let i = 0; i < studentActionCount; i++) {
                 const checked = document.querySelector('input[name="student_action' + i + '"]:checked');
                 if (checked) { studentTotal += parseInt(checked.value); studentCount++; }
             }
@@ -814,13 +866,13 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
 
         function hasMeaningfulEvaluationInput() {
             let checked = 0;
-            for (let i = 0; i < 6; i++) {
+            for (let i = 0; i < teacherActionCount; i++) {
                 if (document.querySelector('input[name="teacher_action' + i + '"]:checked')) checked++;
             }
-            for (let i = 0; i < 9; i++) {
+            for (let i = 0; i < studentActionCount; i++) {
                 if (document.querySelector('input[name="student_action' + i + '"]:checked')) checked++;
             }
-            return checked >= 15; // all 15 indicators
+            return checked >= totalPeacCount;
         }
 
         function buildAIPayloadFromForm() {
@@ -828,7 +880,7 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
             const ratings = { teacher_actions: {}, student_learning_actions: {} };
             const indicatorComments = [];
 
-            for (let i = 0; i < 6; i++) {
+            for (let i = 0; i < teacherActionCount; i++) {
                 const radio = document.querySelector('input[name="teacher_action' + i + '"]:checked');
                 if (radio) {
                     ratings.teacher_actions[i] = {
@@ -838,7 +890,7 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
                     };
                 }
             }
-            for (let i = 0; i < 9; i++) {
+            for (let i = 0; i < studentActionCount; i++) {
                 const radio = document.querySelector('input[name="student_action' + i + '"]:checked');
                 if (radio) {
                     ratings.student_learning_actions[i] = {
@@ -919,9 +971,9 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
 
             if (!hasMeaningfulEvaluationInput()) {
                 let checked = 0;
-                for (let i = 0; i < 6; i++) { if (document.querySelector('input[name="teacher_action' + i + '"]:checked')) checked++; }
-                for (let i = 0; i < 9; i++) { if (document.querySelector('input[name="student_action' + i + '"]:checked')) checked++; }
-                const msg = 'Please complete all 15 rating indicators before generating AI recommendations (' + checked + '/15 completed).';
+                for (let i = 0; i < teacherActionCount; i++) { if (document.querySelector('input[name="teacher_action' + i + '"]:checked')) checked++; }
+                for (let i = 0; i < studentActionCount; i++) { if (document.querySelector('input[name="student_action' + i + '"]:checked')) checked++; }
+                const msg = 'Please complete all ' + totalPeacCount + ' rating indicators before generating AI recommendations (' + checked + '/' + totalPeacCount + ' completed).';
                 setAIDebugStatus(msg, true);
                 if (showAlerts) alert(msg);
                 return;
@@ -1025,6 +1077,13 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
                     }
                 }
 
+                const agreement = (document.getElementById('agreement')?.value || '').trim();
+                if (!agreement) {
+                    alert('Please fill in the Agreement before submitting.');
+                    document.getElementById('agreement')?.focus();
+                    return;
+                }
+
                 // Validate signatures
                 if (!document.getElementById('raterSignature').value) {
                     alert('Please provide the Rater/Observer signature.');
@@ -1043,12 +1102,12 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
                 if (glsVal) fd.set('subject_area', glsVal);
 
                 // Map teacher_action radios to teacher_actions category for the controller
-                for (let i = 0; i < 6; i++) {
+                for (let i = 0; i < teacherActionCount; i++) {
                     const val = fd.get('teacher_action' + i);
                     fd.set('teacher_actions' + i, val || '');
                 }
                 // Map student_action radios to student_learning_actions category
-                for (let i = 0; i < 9; i++) {
+                for (let i = 0; i < studentActionCount; i++) {
                     const val = fd.get('student_action' + i);
                     fd.set('student_learning_actions' + i, val || '');
                 }
