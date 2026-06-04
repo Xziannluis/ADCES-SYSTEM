@@ -3630,12 +3630,23 @@ try {
         .prepared-by p:first-child {
             margin-bottom: 0;
         }
+        .prepared-by .prepared-by-inner {
+            width: 220px;
+            text-align: left;
+        }
+        .prepared-by .prepared-by-inner p:first-child {
+            text-align: left;
+            margin-bottom: 2px;
+        }
+        .prepared-by .prepared-by-signature-stack {
+            display: inline-block;
+            text-align: center;
+        }
         .prepared-by .sig-img {
             display: block;
             max-height: 50px;
             max-width: 200px;
-            margin-top: 5px;
-            margin-bottom: -10px;
+            margin: 0 auto -8px;
         }
         .prepared-by .name-line {
             font-weight: 700;
@@ -4883,12 +4894,16 @@ try {
 
                 <!-- Prepared By (print only) -->
                 <div class="prepared-by print-only">
-                    <p><em>Prepared by:</em></p>
-                    <?php if (!empty($dean_signature)): ?>
-                    <img class="sig-img" src="<?php echo $dean_signature; ?>" alt="Signature">
-                    <?php endif; ?>
-                    <p class="name-line"><?php echo htmlspecialchars(strtoupper($dean_name)); ?></p>
-                    <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
+                    <div class="prepared-by-inner">
+                        <p><em>Prepared by:</em></p>
+                        <div class="prepared-by-signature-stack">
+                            <?php if (!empty($dean_signature)): ?>
+                            <img class="sig-img" src="<?php echo $dean_signature; ?>" alt="Signature">
+                            <?php endif; ?>
+                            <p class="name-line"><?php echo htmlspecialchars(strtoupper($dean_name)); ?></p>
+                            <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
+                        </div>
+                    </div>
                 </div>
             </div>
             <?php endif; ?>
@@ -5243,6 +5258,7 @@ function applyTeacherFilterByDepartment() {
 function openPrintPlan() {
     const modalId = 'preparedBySignaturePrintModal';
     let modalEl = document.getElementById(modalId);
+    const defaultPreparedByName = <?php echo json_encode((string)($_SESSION['name'] ?? '')); ?>;
     if (!modalEl) {
         modalEl = document.createElement('div');
         modalEl.className = 'modal fade';
@@ -5253,11 +5269,14 @@ function openPrintPlan() {
             + '<div class="modal-dialog modal-dialog-centered" style="max-width:500px;">'
             + '  <div class="modal-content">'
             + '    <div class="modal-header">'
-            + '      <h5 class="modal-title"><i class="fas fa-signature me-2"></i>Signature</h5>'
+            + '      <h5 class="modal-title"><i class="fas fa-signature me-2"></i>Sign Before Printing</h5>'
             + '      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>'
             + '    </div>'
             + '    <div class="modal-body">'
-            + '      <p class="text-muted small mb-2">Draw your signature before printing the observation plan.</p>'
+            + '      <p class="text-muted small mb-2">Prepared by</p>'
+            + '      <label for="preparedByPrintedName" class="form-label fw-bold">Printed Name</label>'
+            + '      <input type="text" id="preparedByPrintedName" class="form-control mb-3" value="">'
+            + '      <label class="form-label fw-bold">Signature</label>'
             + '      <div style="border:1px solid #ced4da;border-radius:8px;background:#fff;overflow:hidden;">'
             + '        <canvas id="preparedBySigCanvas" width="440" height="140" style="display:block;width:100%;height:140px;touch-action:none;cursor:crosshair;"></canvas>'
             + '      </div>'
@@ -5277,9 +5296,13 @@ function openPrintPlan() {
     const canvas = modalEl.querySelector('#preparedBySigCanvas');
     const clearBtn = modalEl.querySelector('#preparedBySigClearBtn');
     const printBtn = modalEl.querySelector('#preparedBySigPrintBtn');
+    const printedNameInput = modalEl.querySelector('#preparedByPrintedName');
     const ctx = canvas.getContext('2d');
     let drawing = false;
     canvas.dataset.hasStroke = "0";
+    if (printedNameInput && !printedNameInput.value.trim()) {
+        printedNameInput.value = defaultPreparedByName;
+    }
 
     function getPoint(evt) {
         const rect = canvas.getBoundingClientRect();
@@ -5331,11 +5354,17 @@ function openPrintPlan() {
         });
 
         printBtn.addEventListener('click', function() {
+            const printedName = printedNameInput ? printedNameInput.value.trim() : '';
             if (canvas.dataset.hasStroke !== "1") {
                 alert('Please draw your signature first.');
                 return;
             }
+            if (!printedName) {
+                alert('Please enter printed name.');
+                return;
+            }
             sessionStorage.setItem('prepared_by_signature_data', canvas.toDataURL('image/png'));
+            sessionStorage.setItem('prepared_by_printed_name', printedName);
             const params = new URLSearchParams(window.location.search);
             params.set('auto_print', '1');
             params.set('prepared_sig', '1');

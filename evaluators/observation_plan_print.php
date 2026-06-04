@@ -922,13 +922,24 @@ try {
             margin-top: 30px;
             font-size: 10px;
         }
-        .prepared-by .label { margin-bottom: 0; font-style: italic; }
+        .prepared-by-inner {
+            width: 180px;
+            text-align: left;
+        }
+        .prepared-by .label {
+            margin-bottom: 2px;
+            font-style: italic;
+            text-align: left;
+        }
+        .prepared-by-signature-stack {
+            display: inline-block;
+            text-align: center;
+        }
         .sig-img {
             display: block;
             max-height: 40px;
             max-width: 160px;
-            margin-top: 4px;
-            margin-bottom: -8px;
+            margin: 0 auto -6px;
         }
         .name-line {
             font-weight: 700;
@@ -1062,16 +1073,20 @@ try {
 
         <!-- Prepared By -->
         <div class="prepared-by">
-            <p class="label">Prepared by:</p>
-            <img
-                id="preparedBySignatureImage"
-                class="sig-img"
-                src="<?php echo !empty($dean_signature) ? htmlspecialchars($dean_signature) : ''; ?>"
-                alt="Signature"
-                style="<?php echo !empty($dean_signature) ? '' : 'display:none;'; ?>"
-            >
-            <p class="name-line"><?php echo htmlspecialchars(strtoupper($dean_name)); ?></p>
-            <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
+            <div class="prepared-by-inner">
+                <p class="label">Prepared by:</p>
+                <div class="prepared-by-signature-stack">
+                    <img
+                        id="preparedBySignatureImage"
+                        class="sig-img"
+                        src="<?php echo !empty($dean_signature) ? htmlspecialchars($dean_signature) : ''; ?>"
+                        alt="Signature"
+                        style="<?php echo !empty($dean_signature) ? '' : 'display:none;'; ?>"
+                    >
+                    <p class="name-line" id="preparedByPrintedNameLine"><?php echo htmlspecialchars(strtoupper($dean_name)); ?></p>
+                    <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1080,10 +1095,15 @@ try {
         const usePreparedSig = urlParams.get('prepared_sig') === '1';
         if (usePreparedSig) {
             const sig = sessionStorage.getItem('prepared_by_signature_data') || '';
+            const printedName = sessionStorage.getItem('prepared_by_printed_name') || '';
             const sigImg = document.getElementById('preparedBySignatureImage');
             if (sig && sigImg) {
                 sigImg.src = sig;
                 sigImg.style.display = 'block';
+            }
+            const printedNameLine = document.getElementById('preparedByPrintedNameLine');
+            if (printedName && printedNameLine) {
+                printedNameLine.textContent = printedName.toUpperCase();
             }
         }
         if (urlParams.get('auto_print') === '1') {

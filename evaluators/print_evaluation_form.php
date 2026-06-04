@@ -465,7 +465,6 @@ foreach ($domains as $domain):
         <td style="padding: 6px 10px; text-align: left;">Total Average:<span class="avg-line"><?php echo number_format($overallAvg, 1); ?></span></td>
     </tr>
 </table>
-<div style="font-weight: 700; font-size: 10px; margin: 2px 0 4px; padding-left: 20px;">Interpretation: <?php echo h($interpretationText); ?></div>
 <div class="interpretation-box">
     <strong>Interpretation of Over-all Rating</strong>
     <table>
