@@ -202,13 +202,31 @@ try {
         // Use the first evaluation as the base for the card
         $base = $evals_for_date[0];
         
-        // Check if any evaluation for this date is completed
+        // Check completion for this date. The expected observer count should
+        // include evaluator rows plus assigned observers that appear in the
+        // observation plan, even if they do not yet have an evaluation row.
         $has_completed = false;
         $has_observer_unbalanced = false;
         $completed_evals = [];
+        $completed_evaluator_ids = [];
+        $expected_observer_ids = [];
+        $expected_observer_names = [];
+        $group_eval_ids = [];
         $pending_count = 0;
         
         foreach ($evals_for_date as $eval) {
+            $eval_id = (int)($eval['id'] ?? 0);
+            if ($eval_id > 0) {
+                $group_eval_ids[] = $eval_id;
+            }
+            $eval_evaluator_id = (int)($eval['evaluator_id'] ?? 0);
+            if ($eval_evaluator_id > 0) {
+                $expected_observer_ids[$eval_evaluator_id] = true;
+                $eval_name = trim((string)($eval['evaluator_name'] ?? ''));
+                if ($eval_name !== '') {
+                    $expected_observer_names[$eval_evaluator_id] = $eval_name;
+                }
+            }
             $eval_status = strtolower(trim((string)($eval['status'] ?? '')));
             if ($eval_status === 'observer_unbalanced') {
                 $has_observer_unbalanced = true;
@@ -216,24 +234,63 @@ try {
             if ($eval_status === 'completed') {
                 $has_completed = true;
                 $completed_evals[] = $eval;
+                if ($eval_evaluator_id > 0) {
+                    $completed_evaluator_ids[$eval_evaluator_id] = true;
+                }
             } else {
                 $pending_count++;
             }
         }
+
+        try {
+            $assignment_params = [':teacher_id' => (int)$_SESSION['teacher_id']];
+            $assignment_sql = "SELECT DISTINCT ta.evaluator_id, u.name
+                               FROM teacher_assignments ta
+                               INNER JOIN users u ON u.id = ta.evaluator_id
+                               WHERE ta.teacher_id = :teacher_id
+                                 AND u.status = 'active'
+                                 AND (ta.eval_id IS NULL";
+            if (!empty($group_eval_ids)) {
+                $eval_placeholders = [];
+                foreach (array_values(array_unique($group_eval_ids)) as $idx => $group_eval_id) {
+                    $ph = ':eval_id_' . $idx;
+                    $eval_placeholders[] = $ph;
+                    $assignment_params[$ph] = $group_eval_id;
+                }
+                $assignment_sql .= " OR ta.eval_id IN (" . implode(',', $eval_placeholders) . ")";
+            }
+            $assignment_sql .= ")";
+            $assignment_stmt = $db->prepare($assignment_sql);
+            $assignment_stmt->execute($assignment_params);
+            while ($observer_row = $assignment_stmt->fetch(PDO::FETCH_ASSOC)) {
+                $observer_id = (int)($observer_row['evaluator_id'] ?? 0);
+                if ($observer_id <= 0) continue;
+                $expected_observer_ids[$observer_id] = true;
+                $observer_name = trim((string)($observer_row['name'] ?? ''));
+                if ($observer_name !== '') {
+                    $expected_observer_names[$observer_id] = $observer_name;
+                }
+            }
+        } catch (Exception $e) {
+            // Keep the dashboard usable even if assignment lookup fails.
+        }
+
+        $expected_count = max(count($expected_observer_ids), count($evals_for_date));
+        $completed_count = count($completed_evaluator_ids);
         
         // Create merged card that shows date and observer count
         $merged_eval = $base;
         $merged_eval['observation_date'] = $dateKey;
-        $merged_eval['status'] = $has_observer_unbalanced ? 'observer_unbalanced' : ($has_completed ? 'completed' : 'pending');
+        $merged_eval['status'] = $has_observer_unbalanced ? 'observer_unbalanced' : (($expected_count > 0 && $completed_count >= $expected_count) ? 'completed' : ($has_completed ? 'completed' : 'pending'));
         $merged_eval['evaluator_names'] = [];
-        $merged_eval['evaluator_count'] = count($evals_for_date);
-        $merged_eval['completed_count'] = count($completed_evals);
+        $merged_eval['evaluator_count'] = $expected_count;
+        $merged_eval['completed_count'] = $completed_count;
         
-        // Collect all evaluator names
-        foreach ($evals_for_date as $eval) {
-            $name = htmlspecialchars($eval['evaluator_name']);
-            if (!in_array($name, $merged_eval['evaluator_names'])) {
-                $merged_eval['evaluator_names'][] = $name;
+        // Collect all expected observer names
+        foreach ($expected_observer_names as $name) {
+            $safe_name = htmlspecialchars($name);
+            if (!in_array($safe_name, $merged_eval['evaluator_names'], true)) {
+                $merged_eval['evaluator_names'][] = $safe_name;
             }
         }
         

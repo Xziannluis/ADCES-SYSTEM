@@ -31,6 +31,33 @@ function normalizeSubjectDisplay($subject) {
     return trim((string)$s);
 }
 
+function formatFocusDisplay($focusRaw, array $labels) {
+    $focusRaw = trim((string)$focusRaw);
+    if ($focusRaw === '') return '';
+
+    $decoded = json_decode($focusRaw, true);
+    if (is_string($decoded)) {
+        $decodedAgain = json_decode($decoded, true);
+        $decoded = is_array($decodedAgain) ? $decodedAgain : $decoded;
+    }
+
+    if (is_array($decoded)) {
+        $items = $decoded;
+    } else {
+        $clean = str_replace(['[', ']', '"', "'"], '', $focusRaw);
+        $items = preg_split('/\s*,\s*|\r\n|\r|\n/', $clean);
+    }
+
+    $display = [];
+    foreach ($items as $item) {
+        $key = trim((string)$item);
+        if ($key === '') continue;
+        $display[] = $labels[$key] ?? $key;
+    }
+
+    return implode(', ', array_values(array_unique($display)));
+}
+
 // Ensure evaluation status supports "rescheduled" for remarks workflow.
 // This keeps behavior consistent across Dean/Coordinator/President/VP views.
 try {
@@ -59,22 +86,6 @@ try {
                 INDEX idx_teacher_schedules_eval (evaluation_id),
                 INDEX idx_teacher_schedules_slot (teacher_id, schedule_start),
                 UNIQUE KEY uniq_teacher_schedule_slot (teacher_id, schedule_start)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        ");
-        $db->exec("
-            CREATE TABLE IF NOT EXISTS observation_observer_unavailability (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id INT NOT NULL,
-                teacher_id INT NOT NULL,
-                eval_id INT NULL,
-                academic_year VARCHAR(20) NOT NULL,
-                semester VARCHAR(20) NOT NULL,
-                schedule_start DATETIME NULL,
-                reason TEXT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_observer_unavailable_user (user_id),
-                INDEX idx_observer_unavailable_eval (eval_id),
-                INDEX idx_observer_unavailable_slot (teacher_id, academic_year, semester, schedule_start)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         ");
 
@@ -663,11 +674,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit();
 }
 
-// Handle observer/evaluator unable-to-attend removal.
+// Handle observer cancel/removal for President/VP
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'leave_observer') {
-    $allowed_unable_roles = ['president', 'vice_president', 'dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'];
-    if (!in_array($_SESSION['role'] ?? '', $allowed_unable_roles, true)) {
-        $_SESSION['error'] = 'Only observers/evaluators assigned to the schedule can mark themselves unable to observe/evaluate.';
+    $is_leader_role = in_array($_SESSION['role'] ?? '', ['president', 'vice_president'], true);
+    if (!$is_leader_role) {
+        $_SESSION['error'] = 'Only president/vice president can cancel as observer.';
     } else {
         $observer_reason = trim((string)($_POST['observer_reason'] ?? ''));
         if ($observer_reason === '') {
@@ -679,8 +690,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             header("Location: $redirect");
             exit();
         }
-        $unable_semester = trim((string)($_POST['semester'] ?? ($_POST['filter_semester'] ?? ($_GET['semester'] ?? '1st'))));
-        $unable_academic_year = trim((string)($_POST['academic_year'] ?? ($_POST['filter_academic_year'] ?? ($_GET['academic_year'] ?? ''))));
         $raw_ids = $_POST['eval_ids'] ?? '[]';
         $eval_ids = [];
         if (is_string($raw_ids)) {
@@ -692,34 +701,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $eval_ids = array_values(array_unique(array_filter(array_map('intval', $eval_ids), function($id) {
             return $id > 0;
         })));
-        $raw_unavailable_items = $_POST['unavailable_items'] ?? '[]';
-        $unavailable_items = [];
-        if (is_string($raw_unavailable_items)) {
-            $decoded_items = json_decode($raw_unavailable_items, true);
-            if (is_array($decoded_items)) $unavailable_items = $decoded_items;
-        } elseif (is_array($raw_unavailable_items)) {
-            $unavailable_items = $raw_unavailable_items;
-        }
-        $normalized_unavailable_items = [];
-        foreach ($unavailable_items as $item) {
-            if (!is_array($item)) continue;
-            $item_tid = (int)($item['teacher_id'] ?? 0);
-            $item_eval_id = (int)($item['eval_id'] ?? 0);
-            $item_schedule_start = trim((string)($item['schedule_start'] ?? ''));
-            if ($item_tid <= 0) continue;
-            if ($item_eval_id <= 0 && $item_schedule_start === '') continue;
-            $normalized_unavailable_items[] = [
-                'teacher_id' => $item_tid,
-                'eval_id' => $item_eval_id,
-                'schedule_start' => $item_schedule_start
-            ];
-        }
 
-        if (empty($eval_ids) && empty($normalized_unavailable_items)) {
+        if (empty($eval_ids)) {
             $_SESSION['error'] = 'No valid schedule selected.';
         } else {
             $removed_count = 0;
-            $src_stmt = $db->prepare("SELECT id, teacher_id, department, academic_year, semester, observation_date, observation_time, evaluation_form_type
+            $src_stmt = $db->prepare("SELECT id, teacher_id, academic_year, semester, observation_date, observation_time, evaluation_form_type
                                       FROM evaluations
                                       WHERE id = :eid
                                       LIMIT 1");
@@ -728,34 +715,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                                LEFT JOIN users u ON u.id = t.user_id
                                                WHERE t.id = :tid
                                                LIMIT 1");
-            $insert_unavailable_stmt = $db->prepare(
-                "INSERT INTO observation_observer_unavailability
-                    (user_id, teacher_id, eval_id, academic_year, semester, schedule_start, reason)
-                 VALUES
-                    (:user_id, :teacher_id, :eval_id, :academic_year, :semester, :schedule_start, :reason)"
-            );
-            $teacher_schedule_stmt = $db->prepare(
-                "SELECT t.id, t.name, t.user_id, t.evaluation_schedule, t.evaluation_semester, u.email
-                 FROM teachers t
-                 LEFT JOIN users u ON u.id = t.user_id
-                 WHERE t.id = :tid
-                 LIMIT 1"
-            );
             $del_assign_stmt = $db->prepare("DELETE FROM teacher_assignments
                                              WHERE evaluator_id = :uid
                                                AND teacher_id = :tid
                                                AND eval_id = :eid");
-            $del_slot_assign_stmt = $db->prepare("DELETE ta
-                                                  FROM teacher_assignments ta
-                                                  JOIN evaluations e ON e.id = ta.eval_id
-                                                  WHERE ta.evaluator_id = :uid
-                                                    AND ta.teacher_id = :tid
-                                                    AND e.teacher_id = :tid_eval
-                                                    AND e.academic_year = :ay
-                                                    AND e.semester = :sem
-                                                    AND e.observation_date = :od
-                                                    AND COALESCE(e.observation_time, '') = COALESCE(:ot, '')
-                                                    AND e.status <> 'completed'");
             $del_pending_slot_stmt = $db->prepare("DELETE FROM evaluations
                                                    WHERE evaluator_id = :uid
                                                      AND teacher_id = :tid
@@ -840,37 +803,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                 $tid = (int)($src['teacher_id'] ?? 0);
                 if ($tid <= 0) continue;
-                $slot_start_raw = trim((string)($src['observation_date'] ?? ''));
-                $slot_time_raw = trim((string)($src['observation_time'] ?? ''));
-                $slot_start = $slot_start_raw !== ''
-                    ? date('Y-m-d H:i:s', strtotime($slot_start_raw . ' ' . ($slot_time_raw !== '' ? $slot_time_raw : '00:00:00')))
-                    : null;
-
-                try {
-                    $insert_unavailable_stmt->execute([
-                        ':user_id' => (int)($_SESSION['user_id'] ?? 0),
-                        ':teacher_id' => $tid,
-                        ':eval_id' => $eid,
-                        ':academic_year' => (string)($src['academic_year'] ?? $unable_academic_year),
-                        ':semester' => (string)($src['semester'] ?? $unable_semester),
-                        ':schedule_start' => $slot_start,
-                        ':reason' => $observer_reason
-                    ]);
-                } catch (Exception $e) {}
 
                 $del_assign_stmt->execute([
                     ':uid' => (int)($_SESSION['user_id'] ?? 0),
                     ':tid' => $tid,
                     ':eid' => $eid
-                ]);
-                $del_slot_assign_stmt->execute([
-                    ':uid' => (int)($_SESSION['user_id'] ?? 0),
-                    ':tid' => $tid,
-                    ':tid_eval' => $tid,
-                    ':ay' => (string)($src['academic_year'] ?? ''),
-                    ':sem' => (string)($src['semester'] ?? ''),
-                    ':od' => (string)($src['observation_date'] ?? ''),
-                    ':ot' => (string)($src['observation_time'] ?? '')
                 ]);
 
                 $raw_ft = strtolower(trim((string)($src['evaluation_form_type'] ?? 'iso')));
@@ -917,7 +854,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 if ($remaining_slot_rows <= 0) {
                     $delete_remaining_slot_stmt->execute($slotParams);
                     $clear_teacher_slot_stmt->execute([':tid' => $tid]);
-                } elseif ($remaining_observers < 2 || !$has_required_head || !$has_required_coordinator) {
+                } elseif ($remaining_observers < 2) {
                     $mark_unbalanced_slot_stmt->execute($slotParams);
                     $mark_unbalanced_schedule_stmt->execute([
                         ':tid' => $tid,
@@ -939,7 +876,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         $message = "{$obs_role} {$obs_name} will not be able to observe/evaluate your schedule. Reason: {$observer_reason}";
                         if ($is_observer_unbalanced) {
                             $title = 'Observer Imbalance';
-                            $message .= ' The observer set is now incomplete or role-unbalanced, so the evaluation cannot proceed until another observer is assigned.';
+                            $message .= ' Only one observer remains, so the evaluation cannot proceed until another observer is assigned.';
                         }
                         $teacher_link = 'observation_plan.php?view=my_observation&eval_id=' . urlencode((string)$eid);
 
@@ -968,80 +905,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $removed_count++;
             }
 
-            foreach ($normalized_unavailable_items as $item) {
-                $item_eval_id = (int)($item['eval_id'] ?? 0);
-                if ($item_eval_id > 0) {
-                    continue;
-                }
-
-                $tid = (int)($item['teacher_id'] ?? 0);
-                $schedule_start_raw = trim((string)($item['schedule_start'] ?? ''));
-                if ($tid <= 0 || $schedule_start_raw === '') {
-                    continue;
-                }
-
-                $schedule_start = date('Y-m-d H:i:s', strtotime($schedule_start_raw));
-                try {
-                    $insert_unavailable_stmt->execute([
-                        ':user_id' => (int)($_SESSION['user_id'] ?? 0),
-                        ':teacher_id' => $tid,
-                        ':eval_id' => null,
-                        ':academic_year' => (string)$unable_academic_year,
-                        ':semester' => (string)$unable_semester,
-                        ':schedule_start' => $schedule_start,
-                        ':reason' => $observer_reason
-                    ]);
-                } catch (Exception $e) {}
-
-                try {
-                    $mark_unbalanced_schedule_stmt->execute([
-                        ':tid' => $tid,
-                        ':ay' => (string)$unable_academic_year,
-                        ':sem' => (string)$unable_semester,
-                        ':od' => date('Y-m-d', strtotime($schedule_start)),
-                        ':ot_min' => date('H:i', strtotime($schedule_start))
-                    ]);
-                } catch (Exception $e) {}
-
-                try {
-                    $teacher_schedule_stmt->execute([':tid' => $tid]);
-                    $teacher_user = $teacher_schedule_stmt->fetch(PDO::FETCH_ASSOC);
-                    if ($teacher_user && !empty($teacher_user['user_id'])) {
-                        $obs_name = trim((string)($_SESSION['name'] ?? 'Observer'));
-                        $obs_role = ucfirst(str_replace('_', ' ', (string)($_SESSION['role'] ?? 'evaluator')));
-                        $title = 'Observer Unable to Attend';
-                        $message = "{$obs_role} {$obs_name} will not be able to observe/evaluate your schedule. Reason: {$observer_reason}";
-                        $message .= ' The observer set is now incomplete or role-unbalanced, so the evaluation cannot proceed until another observer is assigned.';
-
-                        $ins_notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, is_read)
-                                                   VALUES (:uid, :tid, 'observer_unavailable', :title, :msg, :lnk, 0)");
-                        $ins_notif->execute([
-                            ':uid' => (int)$teacher_user['user_id'],
-                            ':tid' => $tid,
-                            ':title' => $title,
-                            ':msg' => $message,
-                            ':lnk' => 'observation_plan.php?view=my_observation'
-                        ]);
-
-                        $teacher_email = trim((string)($teacher_user['email'] ?? ''));
-                        if ($teacher_email !== '') {
-                            sendGenericNotificationEmail(
-                                $teacher_email,
-                                trim((string)($teacher_user['name'] ?? 'Teacher')),
-                                $title,
-                                $message
-                            );
-                        }
-                    }
-                } catch (Exception $e) {}
-
-                $removed_count++;
-            }
-
             if ($removed_count > 0) {
-                $_SESSION['success'] = $removed_count . ' schedule(s) marked as unable to observe/evaluate.';
+                $_SESSION['success'] = $removed_count . ' teacher(s) cancelled as observer.';
             } else {
-                $_SESSION['info'] = 'No observer/evaluator assignment was removed.';
+                $_SESSION['info'] = 'No observer assignment was removed.';
             }
         }
     }
@@ -1696,9 +1563,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $clr_pvp->execute([':tid' => $teacher_id]);
         } catch (Exception $e) {}
 
-        // Keep previous acknowledgments intact.
-        // New schedules should require their own eval_id signature rows, while
-        // past eval_id signatures remain attached to their original schedules.
+        // Rescheduled rows need a fresh teacher signature for the new slot.
+        // Do not carry an old acknowledgment forward on the same evaluation_id.
+        if ($is_reschedule && (int)$eval_id > 0) {
+            try {
+                $clear_ack = $db->prepare("DELETE FROM observation_plan_acknowledgments WHERE evaluation_id = :eval_id");
+                $clear_ack->execute([':eval_id' => (int)$eval_id]);
+            } catch (Exception $e) {}
+        }
 
         $success_message = $is_reschedule ? "Schedule updated. Teacher will need to sign again." : "Evaluation schedule set successfully!";
         if ($is_reschedule && isset($_SESSION['reschedule_once'])) {
@@ -2213,7 +2085,6 @@ $department_map = [
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
 $is_observer_only = (($_SESSION['role'] ?? '') === 'president');
 $is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
-$can_mark_unable_observer = in_array($_SESSION['role'] ?? '', ['president', 'vice_president', 'dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'], true);
 
 $all_departments = ['ELEM', 'JHS', 'SHS', 'CCIS', 'CAS', 'CTEAS', 'CBM', 'CTHM', 'CCJE'];
 $session_department = trim((string)($_SESSION['department'] ?? ''));
@@ -2389,31 +2260,34 @@ if ($is_leader) {
                   LEFT JOIN teacher_departments td ON td.teacher_id = t.id
                   WHERE (
                         (
+                            e.department = :dept1
+                        )
+                        OR
+                        (
+                            (e.department IS NULL OR e.department = '')
+                            AND
                             t.scheduled_department IS NOT NULL
                             AND t.scheduled_department <> ''
                             AND t.scheduled_department = :dept3
                         )
                         OR
                         (
+                            (e.department IS NULL OR e.department = '')
+                            AND
                             (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                            AND (
-                                eu.department = :dept1
-                                OR (
-                                    (eu.department IS NULL OR eu.department = '')
-                                    AND (t.department = :dept2 OR td.department = :dept3)
-                                )
-                            )
+                            AND eu.department = :dept1
                         )
                   )
                   AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                   AND e.academic_year = :academic_year
                   AND e.semester = :semester
+                  AND (e.status IS NULL OR e.status <> 'completed' OR e.evaluator_id = :current_user_id_completed)
                   ORDER BY t.name ASC";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':dept1', $raw_department);
-        $stmt->bindParam(':dept2', $raw_department);
         $stmt->bindParam(':dept3', $raw_department);
         $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
+        $stmt->bindParam(':current_user_id_completed', $_SESSION['user_id']);
         $stmt->bindParam(':academic_year', $academic_year);
         $stmt->bindParam(':semester', $semester);
     } else {
@@ -2430,15 +2304,18 @@ if ($is_leader) {
                   WHERE (t.user_id IS NULL OR t.user_id != :current_user_id)
                   AND e.academic_year = :academic_year
                   AND e.semester = :semester
+                  AND (e.status IS NULL OR e.status <> 'completed' OR e.evaluator_id = :current_user_id_completed)
                   ORDER BY t.name ASC";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
+        $stmt->bindParam(':current_user_id_completed', $_SESSION['user_id']);
         $stmt->bindParam(':academic_year', $academic_year);
         $stmt->bindParam(':semester', $semester);
     }
 } elseif ($is_coordinator) {
-    // 1) Coordinators: show ONLY specifically assigned teachers with evaluations.
-    // Access is now restricted to teachers the coordinator is explicitly assigned to.
+    // 1) Coordinators: show schedules owned by the selected department.
+    // This allows department coordinators to see schedules set by that
+    // department's dean/principal even when not explicitly assigned yet.
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester, t.evaluation_form_type,
@@ -2449,22 +2326,36 @@ if ($is_leader) {
                      e.semester as eval_semester, e.department as eval_department
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
-              JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id
               LEFT JOIN users tu ON tu.id = t.user_id
-              WHERE (t.user_id IS NULL OR t.user_id != :current_user_id)
+              LEFT JOIN users eu ON eu.id = e.evaluator_id
+              WHERE (
+                    e.department = :department_match1
+                    OR (
+                        (e.department IS NULL OR e.department = '')
+                        AND t.scheduled_department = :department_match2
+                    )
+                    OR (
+                        (e.department IS NULL OR e.department = '')
+                        AND (t.scheduled_department IS NULL OR t.scheduled_department = '')
+                        AND eu.department = :department_match3
+                    )
+              )
+              AND (t.user_id IS NULL OR t.user_id != :current_user_id)
               AND (tu.id IS NULL OR LOWER(REPLACE(TRIM(tu.role), ' ', '_')) NOT IN ('dean','principal','president','vice_president'))
               AND e.academic_year = :academic_year
               AND e.semester = :semester
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':evaluator_id', $_SESSION['user_id']);
+    $stmt->bindParam(':department_match1', $raw_department);
+    $stmt->bindParam(':department_match2', $raw_department);
+    $stmt->bindParam(':department_match3', $raw_department);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
 } else {
 // Dean/principal query — show evaluations only when the row belongs to this
-// department via scheduled_department, or (legacy) primary teacher department.
-// Do not include rows just because evaluator department matches; ownership is schedule-based.
+// department via scheduled_department, or evaluator_id (they did the evaluation themselves).
+// Do not include rows just because teacher's primary department matches.
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester, t.evaluation_form_type,
@@ -2476,9 +2367,14 @@ if ($is_leader) {
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
               WHERE (
-                    (t.scheduled_department IS NOT NULL AND t.scheduled_department <> '' AND t.scheduled_department = :dept2)
+                    e.department = :dept2
                     OR
-                    ((t.scheduled_department IS NULL OR t.scheduled_department = '') AND t.department = :dept3)
+                    (
+                        (e.department IS NULL OR e.department = '')
+                        AND t.scheduled_department IS NOT NULL
+                        AND t.scheduled_department <> ''
+                        AND t.scheduled_department = :dept2
+                    )
                     OR
                     (
                         e.evaluator_id = :self_eval_id
@@ -2491,7 +2387,6 @@ if ($is_leader) {
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':dept2', $raw_department);
-    $stmt->bindParam(':dept3', $raw_department);
     $stmt->bindParam(':self_eval_id', $_SESSION['user_id']);
     $stmt->bindParam(':self_eval_dept', $raw_department);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
@@ -2526,22 +2421,12 @@ if ($is_leader) {
                               )
                           AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                           AND (t.user_id IS NULL OR t.user_id != :current_user_id)
-                          AND NOT EXISTS (
-                              SELECT 1 FROM evaluations e2
-                              WHERE e2.teacher_id = t.id
-                                AND e2.academic_year = :academic_year
-                                AND e2.semester = :semester
-                                AND e2.status = 'completed'
-                                AND DATE_FORMAT(e2.observation_date, '%Y-%m-%d %H:%i') = DATE_FORMAT(t.evaluation_schedule, '%Y-%m-%d %H:%i')
-                          )
                         ORDER BY t.name ASC";
         $sched_stmt = $db->prepare($sched_query);
         $sched_stmt->bindParam(':filter_dept', $raw_department);
         $sched_stmt->bindParam(':filter_dept3', $raw_department);
         $sched_stmt->bindParam(':filter_semester', $semester);
         $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
-        $sched_stmt->bindParam(':academic_year', $academic_year);
-        $sched_stmt->bindParam(':semester', $semester);
     } else {
         $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                                t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
@@ -2552,20 +2437,10 @@ if ($is_leader) {
                           AND t.evaluation_schedule IS NOT NULL
                           AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                           AND (t.user_id IS NULL OR t.user_id != :current_user_id)
-                          AND NOT EXISTS (
-                              SELECT 1 FROM evaluations e2
-                              WHERE e2.teacher_id = t.id
-                                AND e2.academic_year = :academic_year
-                                AND e2.semester = :semester
-                                AND e2.status = 'completed'
-                                AND DATE_FORMAT(e2.observation_date, '%Y-%m-%d %H:%i') = DATE_FORMAT(t.evaluation_schedule, '%Y-%m-%d %H:%i')
-                          )
                         ORDER BY t.name ASC";
         $sched_stmt = $db->prepare($sched_query);
         $sched_stmt->bindParam(':filter_semester', $semester);
         $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
-        $sched_stmt->bindParam(':academic_year', $academic_year);
-        $sched_stmt->bindParam(':semester', $semester);
     }
 } elseif ($is_coordinator) {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
@@ -2573,10 +2448,12 @@ if ($is_leader) {
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester, t.evaluation_form_type,
                            t.scheduled_by, t.scheduled_department
                     FROM teachers t
-                    JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :coord_evaluator_id
                     LEFT JOIN users tu ON tu.id = t.user_id
                     WHERE t.status = 'active'
                       AND t.evaluation_schedule IS NOT NULL
+                      AND t.scheduled_department IS NOT NULL
+                      AND t.scheduled_department <> ''
+                      AND t.scheduled_department = :department_match_sched
                       AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                       AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                       AND (tu.id IS NULL OR LOWER(REPLACE(TRIM(tu.role), ' ', '_')) NOT IN ('dean','principal','president','vice_president'))
@@ -2590,33 +2467,24 @@ if ($is_leader) {
                       )
                     ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
-    $sched_stmt->bindParam(':coord_evaluator_id', $_SESSION['user_id']);
+    $sched_stmt->bindParam(':department_match_sched', $raw_department);
     $sched_stmt->bindParam(':filter_semester', $semester);
     $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $sched_stmt->bindParam(':academic_year', $academic_year);
     $sched_stmt->bindParam(':semester', $semester);
 } else {
     // Dean/principal: show scheduled teachers only when schedule is set for this
-    // department, or (legacy) teacher primary department matches this department.
+    // department explicitly via scheduled_department field.
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                            t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
                            t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester, t.evaluation_form_type,
                            t.scheduled_by, t.scheduled_department
                     FROM teachers t
-                    WHERE (
-                          (
-                            t.scheduled_department IS NOT NULL
-                            AND t.scheduled_department <> ''
-                            AND t.scheduled_department = :department_sched
-                          )
-                          OR
-                          (
-                            (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                            AND t.department = :department_primary
-                          )
-                    )
-                      AND t.status = 'active'
+                    WHERE t.status = 'active'
                       AND t.evaluation_schedule IS NOT NULL
+                      AND t.scheduled_department IS NOT NULL
+                      AND t.scheduled_department <> ''
+                      AND t.scheduled_department = :department_sched
                       AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                       AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                       AND NOT EXISTS (
@@ -2630,7 +2498,6 @@ if ($is_leader) {
                     ORDER BY t.name ASC";
     $sched_stmt = $db->prepare($sched_query);
     $sched_stmt->bindParam(':department_sched', $raw_department);
-    $sched_stmt->bindParam(':department_primary', $raw_department);
     $sched_stmt->bindParam(':filter_semester', $semester);
     $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $sched_stmt->bindParam(':academic_year', $academic_year);
@@ -2638,6 +2505,72 @@ if ($is_leader) {
 }
 $sched_stmt->execute();
 $scheduled_teachers = $sched_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Use teacher_schedules as the authoritative source for scheduled-only rows.
+// teachers.evaluation_schedule stores only the latest schedule and has no
+// academic year, so it can leak rows into the wrong Academic Year filter.
+try {
+    $scheduled_params = [
+        ':ay' => (string)$academic_year,
+        ':sem' => (string)$semester,
+        ':current_user_id' => (int)($_SESSION['user_id'] ?? 0),
+    ];
+    $scheduled_where = [
+        "t.status = 'active'",
+        "ts.academic_year = :ay",
+        "ts.semester = :sem",
+        "ts.status <> 'cancelled'",
+        "(t.user_id IS NULL OR t.user_id != :current_user_id)",
+    ];
+    $scheduled_joins = "";
+
+    if ($is_leader) {
+        if ($raw_department !== '') {
+            $scheduled_where[] = "(
+                (ts.scheduled_department IS NOT NULL AND ts.scheduled_department <> '' AND ts.scheduled_department = :schedule_dept)
+                OR
+                ((ts.scheduled_department IS NULL OR ts.scheduled_department = '') AND t.department = :teacher_dept)
+            )";
+            $scheduled_params[':schedule_dept'] = $raw_department;
+            $scheduled_params[':teacher_dept'] = $raw_department;
+        }
+    } elseif ($is_coordinator) {
+        $scheduled_joins = "LEFT JOIN users tu ON tu.id = t.user_id";
+        $scheduled_where[] = "ts.scheduled_department = :schedule_dept";
+        $scheduled_where[] = "(tu.id IS NULL OR LOWER(REPLACE(TRIM(tu.role), ' ', '_')) NOT IN ('dean','principal','president','vice_president'))";
+        $scheduled_params[':schedule_dept'] = $raw_department;
+    } else {
+        $scheduled_where[] = "ts.scheduled_department = :schedule_dept";
+        $scheduled_params[':schedule_dept'] = $raw_department;
+    }
+
+    $scheduled_query = "SELECT DISTINCT
+                           t.id,
+                           t.name,
+                           t.department as teacher_department,
+                           ts.schedule_start as evaluation_schedule,
+                           ts.schedule_end as evaluation_schedule_end,
+                           ts.room as evaluation_room,
+                           ts.focus_json as evaluation_focus,
+                           ts.subject_area as evaluation_subject_area,
+                           ts.subject as evaluation_subject,
+                           ts.semester as evaluation_semester,
+                           ts.form_type as evaluation_form_type,
+                           ts.scheduled_by,
+                           ts.scheduled_department,
+                           ts.evaluation_id as schedule_eval_id,
+                           ts.status as schedule_status
+                        FROM teacher_schedules ts
+                        JOIN teachers t ON t.id = ts.teacher_id
+                        $scheduled_joins
+                        WHERE " . implode("\n                          AND ", $scheduled_where) . "
+                        ORDER BY t.name ASC, ts.schedule_start ASC";
+    $scheduled_stmt = $db->prepare($scheduled_query);
+    $scheduled_stmt->execute($scheduled_params);
+    $scheduled_teachers = $scheduled_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    // Keep the legacy result if the schedule table is unavailable.
+}
 
 // Build completion map for CURRENT evaluator per schedule slot.
 // This is used for remarks logic:
@@ -2824,59 +2757,6 @@ $get_required_observers = function(int $teacher_id, int $eval_id, string $dept, 
         return true;
     }));
 };
-$filter_unavailable_observers = function(array $observer_list, int $teacher_id, int $eval_id, string $schedule_start, string $academic_year, string $semester) use ($db): array {
-    if (empty($observer_list) || $teacher_id <= 0) {
-        return $observer_list;
-    }
-
-    $schedule_start_norm = '';
-    if (trim($schedule_start) !== '') {
-        $schedule_start_norm = date('Y-m-d H:i:s', strtotime($schedule_start));
-    }
-
-    $unavailable_names = [];
-    try {
-        $stmt = $db->prepare(
-            "SELECT DISTINCT u.name
-             FROM observation_observer_unavailability ou
-             JOIN users u ON u.id = ou.user_id
-             WHERE ou.teacher_id = :teacher_id
-               AND (ou.academic_year = :academic_year OR ou.academic_year = '' OR ou.academic_year IS NULL)
-               AND (ou.semester = :semester OR ou.semester = '' OR ou.semester IS NULL)
-               AND (
-                    (:eval_id > 0 AND ou.eval_id = :eval_id_match)
-                    OR (:schedule_start <> '' AND DATE_FORMAT(ou.schedule_start, '%Y-%m-%d %H:%i') = DATE_FORMAT(:schedule_start_match, '%Y-%m-%d %H:%i'))
-                    OR (:schedule_start_date <> '' AND DATE(ou.schedule_start) = :schedule_start_date_match)
-               )"
-        );
-        $schedule_start_date = $schedule_start_norm !== '' ? date('Y-m-d', strtotime($schedule_start_norm)) : '';
-        $stmt->execute([
-            ':teacher_id' => $teacher_id,
-            ':academic_year' => $academic_year,
-            ':semester' => $semester,
-            ':eval_id' => $eval_id,
-            ':eval_id_match' => $eval_id,
-            ':schedule_start' => $schedule_start_norm,
-            ':schedule_start_match' => $schedule_start_norm,
-            ':schedule_start_date' => $schedule_start_date,
-            ':schedule_start_date_match' => $schedule_start_date
-        ]);
-        while ($name = $stmt->fetchColumn()) {
-            $name = trim((string)$name);
-            if ($name !== '') {
-                $unavailable_names[] = strtolower($name);
-            }
-        }
-    } catch (Exception $e) {}
-
-    if (empty($unavailable_names)) {
-        return $observer_list;
-    }
-
-    return array_values(array_filter($observer_list, function($name) use ($unavailable_names) {
-        return !in_array(strtolower(trim((string)$name)), $unavailable_names, true);
-    }));
-};
 // For dean/principal: use their own name. For president/VP: don't auto-add (they must "Accept as Observer"). For coordinators: look up the dean/principal who supervises them.
 if (in_array($_SESSION['role'], ['dean', 'principal'])) {
     $dean_name = $_SESSION['name'] ?? '';
@@ -2894,7 +2774,6 @@ $teachers_list = [];
 $exclude_current_user_from_observers = false;
 $slot_end_by_eval_id = [];
 $slot_end_by_teacher_start = [];
-$slot_status_by_teacher_start = [];
 
 // Build teacher role map: teacher_id → user role (for filtering observers)
 $teacher_role_map = [];
@@ -2927,7 +2806,7 @@ $focus_labels = [
 // latest schedule fields point to a different row).
 try {
     $slotStmt = $db->prepare(
-        "SELECT evaluation_id, teacher_id, schedule_start, schedule_end, status
+        "SELECT evaluation_id, teacher_id, schedule_start, schedule_end
          FROM teacher_schedules
          WHERE academic_year = :ay
            AND semester = :sem"
@@ -2941,17 +2820,13 @@ try {
         $tid = (int)($sr['teacher_id'] ?? 0);
         $sstart = trim((string)($sr['schedule_start'] ?? ''));
         $send = trim((string)($sr['schedule_end'] ?? ''));
-        $slot_status = strtolower(trim((string)($sr['status'] ?? '')));
         if ($eid > 0 && $send !== '' && !isset($slot_end_by_eval_id[$eid])) {
             $slot_end_by_eval_id[$eid] = $send;
         }
-        if ($tid > 0 && $sstart !== '') {
+        if ($tid > 0 && $sstart !== '' && $send !== '') {
             $key = $tid . '|' . date('Y-m-d H:i', strtotime($sstart));
-            if ($send !== '' && !isset($slot_end_by_teacher_start[$key])) {
+            if (!isset($slot_end_by_teacher_start[$key])) {
                 $slot_end_by_teacher_start[$key] = $send;
-            }
-            if ($slot_status !== '' && !isset($slot_status_by_teacher_start[$key])) {
-                $slot_status_by_teacher_start[$key] = $slot_status;
             }
         }
     }
@@ -3013,13 +2888,10 @@ foreach ($eval_teachers as $t) {
     // Any row tied to an evaluation record must use row-level evaluation data,
     // not the teacher's latest schedule fields (which can be overwritten by newer schedules).
     $focus_raw = $is_eval_row ? ($t['eval_focus'] ?? $t['evaluation_focus'] ?? '') : ($t['evaluation_focus'] ?? $t['eval_focus'] ?? '');
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
 
     $schedule_data[$row_key] = [
         'semester' => $is_eval_row ? ($t['eval_semester'] ?? $t['evaluation_semester'] ?? '') : ($t['evaluation_semester'] ?? $t['eval_semester'] ?? ''),
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => '',
         'subject_area' => $is_eval_row ? ($t['eval_subject_area'] ?? $t['evaluation_subject_area'] ?? '') : ($t['evaluation_subject_area'] ?? $t['eval_subject_area'] ?? ''),
         'subject' => normalizeSubjectDisplay($is_eval_row ? ($t['subject_observed'] ?? $t['evaluation_subject'] ?? '') : ($t['evaluation_subject'] ?? $t['subject_observed'] ?? '')),
@@ -3103,7 +2975,6 @@ foreach ($eval_teachers as $t) {
     $teacher_name = $t['name'] ?? '';
     $current_user_name = trim((string)($_SESSION['name'] ?? ''));
     $all_observers = $get_required_observers($tid, $row_eval_id, $dept_for_observers, $scheduled_by_id, $teacher_name, $current_user_name, $exclude_current_user_from_observers);
-    $all_observers = $filter_unavailable_observers($all_observers, (int)$tid, (int)$row_eval_id, (string)$sched_dt, (string)$academic_year, (string)$semester);
     $observer_map[$row_key] = $all_observers;
 }
 
@@ -3128,9 +2999,6 @@ foreach ([] as $t) {
         ];
         // Rebuild schedule_data from teacher's current schedule columns
         $focus_raw = $t['evaluation_focus'] ?? '';
-        $focus_arr = [];
-        if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-        $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
         $ts = strtotime($sched_dt);
         $day_str = date('l', $ts);
         $start_time = date('g:i A', $ts);
@@ -3145,7 +3013,7 @@ foreach ([] as $t) {
         }
         $schedule_data[$tid] = [
             'semester' => $t['evaluation_semester'] ?? '',
-            'focus' => implode(', ', $focus_display),
+            'focus' => formatFocusDisplay($focus_raw, $focus_labels),
             'day_time' => $day_time_str,
             'subject_area' => $t['evaluation_subject_area'] ?? '',
             'subject' => normalizeSubjectDisplay($t['evaluation_subject'] ?? ''),
@@ -3176,26 +3044,21 @@ foreach ($scheduled_teachers as $t) {
     $seen_ids[$tid] = true;
     $t['_row_key'] = $row_key;
     $teachers_list[] = $t;
-    $sched_slot_key = ($sched_date !== '') ? ((int)$tid . '|' . $sched_date) : '';
-    $sched_status = ($sched_slot_key !== '') ? ($slot_status_by_teacher_start[$sched_slot_key] ?? 'scheduled') : 'scheduled';
 
     $eval_data[$row_key] = [
         'date' => $sched_date,
         'done' => false,
         'faculty_signature' => '',
-        'eval_id' => null,
-        'status' => $sched_status,
+        'eval_id' => !empty($t['schedule_eval_id']) ? (int)$t['schedule_eval_id'] : null,
+        'status' => strtolower(trim((string)($t['schedule_status'] ?? 'scheduled'))),
         'cutoff' => trim((string)($t['evaluation_schedule_end'] ?? '')) !== '' ? $t['evaluation_schedule_end'] : $sched_dt,
     ];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
 
     $schedule_data[$row_key] = [
         'semester' => $t['evaluation_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => '',
         'subject_area' => $t['evaluation_subject_area'] ?? '',
         'subject' => normalizeSubjectDisplay($t['evaluation_subject'] ?? ''),
@@ -3225,6 +3088,9 @@ foreach ($scheduled_teachers as $t) {
     $active_eval_id_for_schedule = 0;
     try {
         if (!empty($sched_dt)) {
+            $active_eval_id_for_schedule = (int)($t['schedule_eval_id'] ?? 0);
+        }
+        if (!empty($sched_dt) && $active_eval_id_for_schedule <= 0) {
             $activeEvalStmt = $db->prepare(
                 "SELECT id
                  FROM evaluations
@@ -3246,8 +3112,60 @@ foreach ($scheduled_teachers as $t) {
                 ':sched_dt' => $sched_dt
             ]);
             $active_eval_id_for_schedule = (int)($activeEvalStmt->fetchColumn() ?: 0);
+
+            if ($active_eval_id_for_schedule <= 0) {
+                $activeScheduleStmt = $db->prepare(
+                    "SELECT evaluation_id
+                     FROM teacher_schedules
+                     WHERE teacher_id = :tid
+                       AND academic_year = :ay
+                       AND semester = :sem
+                       AND schedule_start = :sched_dt
+                       AND (:owning_dept = '' OR scheduled_department = :owning_dept_match)
+                       AND evaluation_id IS NOT NULL
+                     ORDER BY id DESC
+                     LIMIT 1"
+                );
+                $activeScheduleStmt->execute([
+                    ':tid' => $tid,
+                    ':ay' => $academic_year,
+                    ':sem' => $semester,
+                    ':sched_dt' => $sched_dt,
+                    ':owning_dept' => (string)$owning_dept,
+                    ':owning_dept_match' => (string)$owning_dept
+                ]);
+                $active_eval_id_for_schedule = (int)($activeScheduleStmt->fetchColumn() ?: 0);
+            }
+
+            if ($active_eval_id_for_schedule <= 0) {
+                $activeEvalLooseStmt = $db->prepare(
+                    "SELECT id
+                     FROM evaluations
+                     WHERE teacher_id = :tid
+                       AND academic_year = :ay
+                       AND semester = :sem
+                       AND (:owning_dept = '' OR department = :owning_dept_match)
+                       AND status <> 'completed'
+                       AND DATE_FORMAT(CONCAT(observation_date, ' ', COALESCE(observation_time, '00:00:00')), '%Y-%m-%d %H:%i') = DATE_FORMAT(:sched_dt, '%Y-%m-%d %H:%i')
+                     ORDER BY id DESC
+                     LIMIT 1"
+                );
+                $activeEvalLooseStmt->execute([
+                    ':tid' => $tid,
+                    ':ay' => $academic_year,
+                    ':sem' => $semester,
+                    ':owning_dept' => (string)$owning_dept,
+                    ':owning_dept_match' => (string)$owning_dept,
+                    ':sched_dt' => $sched_dt
+                ]);
+                $active_eval_id_for_schedule = (int)($activeEvalLooseStmt->fetchColumn() ?: 0);
+            }
         }
     } catch (Exception $e) {}
+
+    if ($active_eval_id_for_schedule > 0) {
+        $eval_data[$row_key]['eval_id'] = $active_eval_id_for_schedule;
+    }
 
     // Observers are department dean/principal + coordinator who set the schedule.
     $scheduled_by_id = (int)($t['scheduled_by'] ?? 0);
@@ -3255,7 +3173,6 @@ foreach ($scheduled_teachers as $t) {
     $current_user_name = trim((string)($_SESSION['name'] ?? ''));
     $dept_for_observers = !empty($owning_dept) ? $owning_dept : $raw_department;
     $all_observers = $get_required_observers($tid, $active_eval_id_for_schedule, $dept_for_observers, $scheduled_by_id, $teacher_name, $current_user_name, $exclude_current_user_from_observers);
-    $all_observers = $filter_unavailable_observers($all_observers, (int)$tid, (int)$active_eval_id_for_schedule, (string)$sched_dt, (string)$academic_year, (string)$semester);
     $observer_map[$row_key] = $all_observers;
 }
 
@@ -3389,30 +3306,6 @@ if (!empty($filter_status)) {
     $teachers_list = array_values($teachers_list);
 }
 
-// For President/Vice President Observation Plan:
-// hide rows that are already in "Did Not Evaluate" state.
-if ($is_leader) {
-    $teachers_list = array_values(array_filter($teachers_list, function($t) use ($eval_data) {
-        $row_key = $t['_row_key'] ?? $t['id'];
-        $is_done = !empty($eval_data[$row_key]['done']);
-        if ($is_done) return true;
-
-        $row_sched_end_raw = trim((string)($eval_data[$row_key]['cutoff'] ?? ''));
-        $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
-        $cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
-        if ($cutoff_raw === '') return true;
-
-        try {
-            $tz = new DateTimeZone('Asia/Manila');
-            $cutoff_at = new DateTime($cutoff_raw, $tz);
-            $now_at = new DateTime('now', $tz);
-            // Exclude overdue + not done rows ("Did Not Evaluate")
-            return !($now_at > $cutoff_at);
-        } catch (Exception $e) {
-            return true;
-        }
-    }));
-}
 $dean_role_display = ucfirst(str_replace('_', ' ', $_SESSION['role']));
 
 // Pending reschedule requests (shared across recipients) for Observation Plan UI.
@@ -3605,7 +3498,6 @@ if (empty($schedule_available_departments)) {
 // Unscheduled teachers are only shown in the modal dropdown, not in the table
 
 // Load acknowledgment data for current semester/year
-$ack_map = [];
 $ack_eval_map = [];
 $ack_upcoming_map = [];
 try {
@@ -3645,17 +3537,6 @@ try {
                     }
                 }
             }
-            if (!isset($ack_map[$tid])) {
-                $ack_map[$tid] = $ack_row;
-            } else {
-                // Prefer a row with an actual drawn signature if available.
-                $currentHasSig = !empty($ack_map[$tid]['signature']);
-                $newHasSig = !empty($ack_row['signature']);
-                if (!$currentHasSig && $newHasSig) {
-                    $ack_map[$tid] = $ack_row;
-                }
-            }
-
             // Keep schedule-only ("upcoming") signature separately for rows
             // that do not yet have a concrete evaluation_id.
             if (($ack_row['evaluation_id'] === null || $ack_row['evaluation_id'] === '') && !isset($ack_upcoming_map[$tid])) {
@@ -3917,7 +3798,7 @@ try {
             margin: 0.75rem auto;
         }
         #unableObserveCommentsWrap {
-            display: none;
+            display: block;
         }
 
         @media print {
@@ -4410,9 +4291,7 @@ try {
                             <?php if ($my_show_upcoming): ?>
                             <?php
                                 $focus_raw = $my_teacher_data['evaluation_focus'] ?? '';
-                                $focus_arr = [];
-                                if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-                                $focus_display = array_map(function($f) use ($focus_labels_my) { return $focus_labels_my[$f] ?? $f; }, $focus_arr);
+                                $focus_display = formatFocusDisplay($focus_raw, $focus_labels_my);
                                 $ts = strtotime($my_teacher_data['evaluation_schedule']);
                                 $my_day_time = date('l', $ts) . '<br>' . date('g:i A', $ts);
                                 $my_sched_end = $my_teacher_data['evaluation_schedule_end'] ?? '';
@@ -4430,7 +4309,7 @@ try {
                                     <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars(date('M d, Y g:i A', $ts)); ?>" style="width:20px;height:20px;" title="<?php echo $upcoming_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($my_teacher_data['evaluation_semester'] ?? '') . ' Semester'); ?></td>
-                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
+                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars($focus_display); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo date('M d, Y', $ts); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $my_day_time; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_subject_area'] ?? ''); ?></td>
@@ -4453,9 +4332,7 @@ try {
                             <?php foreach ($my_unique_evaluations as $ev): ?>
                             <?php
                                 $ev_focus_raw = $ev['evaluation_focus'] ?? '';
-                                $ev_focus_arr = [];
-                                if ($ev_focus_raw) { try { $ev_focus_arr = json_decode($ev_focus_raw, true) ?: []; } catch (\Exception $e) {} }
-                                $ev_focus_display = array_map(function($f) use ($focus_labels_my) { return $focus_labels_my[$f] ?? $f; }, $ev_focus_arr);
+                                $ev_focus_display = formatFocusDisplay($ev_focus_raw, $focus_labels_my);
                                 $ev_signed = isset($my_signed_map[(int)$ev['id']]);
                                 $ev_signature = $my_signed_map[(int)$ev['id']]['signature'] ?? '';
                                 $ev_status = strtolower(trim((string)($ev['status'] ?? '')));
@@ -4569,7 +4446,7 @@ try {
                                     <input type="checkbox" class="form-check-input sign-item-check" value="<?php echo (int)$ev['id']; ?>" data-schedule-label="Schedule: <?php echo htmlspecialchars(!empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''); ?>" style="width:20px;height:20px;" title="<?php echo $ev_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($ev['semester'] ?? '') . ' Semester'); ?></td>
-                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $ev_focus_display)); ?></td>
+                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars($ev_focus_display); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo !empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $ev_day_time; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($ev['subject_area'] ?? ''); ?></td>
@@ -4732,8 +4609,6 @@ try {
                     <button class="btn btn-success" id="joinObserverBtn" disabled onclick="joinAsObserver()">
                         <i class="fas fa-user-plus me-1"></i>Observe
                     </button>
-                    <?php endif; ?>
-                    <?php if ($can_mark_unable_observer): ?>
                     <button class="btn btn-danger" id="unableObserveBtn" disabled onclick="openUnableObserveModal()">
                         <i class="fas fa-envelope-open-text me-1"></i>Unable to Observe/Evaluate
                     </button>
@@ -4745,16 +4620,17 @@ try {
                     <table class="plan-table">
                         <thead>
                             <tr>
-                                <th style="width: 14%;">Teacher</th>
+                                <th style="width: 12%;">Teacher</th>
                                 <th style="width: 6%;">Semester</th>
                                 <th style="width: 12%;">Focus of Observation</th>
                                 <th style="width: 8%;">Date</th>
                                 <th style="width: 7%;">Day &amp; Time</th>
                                 <th style="width: 8%;" id="th_subject_area"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Grade Level/Section' : 'Subject Area'; ?></th>
-                                <th style="width: 9%;" id="th_subject"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
+                                <th style="width: 8%;" id="th_subject"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
                                 <th style="width: 5%;">Room</th>
                                 <th style="width: 12%;">Name of Observers</th>
-                                <th style="width: 9%; min-width: 70px;">Remarks</th>
+                                <th style="width: 10%; min-width: 90px;">Teacher's Signature</th>
+                                <th style="width: 12%; min-width: 70px;">Remarks</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -4845,15 +4721,6 @@ try {
                                     $is_schedule_past_for_observer = false;
                                     $row_sched_end_raw = trim((string)($eval_data[$row_key]['cutoff'] ?? ''));
                                     $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
-                                    $row_unable_schedule_start = trim((string)($eval_data[$row_key]['date'] ?? ''));
-                                    if ($row_unable_schedule_start !== '') {
-                                        $row_unable_time = trim((string)($t['observation_time'] ?? ''));
-                                        if ($row_unable_time !== '' && $row_unable_time !== '00:00:00' && $row_unable_time !== '00:00') {
-                                            $row_unable_schedule_start = date('Y-m-d H:i:s', strtotime($row_unable_schedule_start . ' ' . $row_unable_time));
-                                        }
-                                    } else {
-                                        $row_unable_schedule_start = $row_sched_start_raw;
-                                    }
                                     $observer_cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
                                     if ($observer_cutoff_raw !== '') {
                                         try {
@@ -4866,41 +4733,6 @@ try {
                                         } catch (Exception $e) {}
                                     }
 
-                                    // For President/Vice President view, hide rows that would show
-                                    // "Did Not Evaluate" in remarks.
-                                    $hide_for_leader_dne = false;
-                                    if ($is_leader) {
-                                        $row_required_form_type_hide = strtolower(trim((string)($t['evaluation_form_type'] ?? 'iso')));
-                                        if (!in_array($row_required_form_type_hide, ['iso', 'peac', 'both'], true)) {
-                                            $row_required_form_type_hide = 'iso';
-                                        }
-                                        $slot_date_hide = $eval_data[$row_key]['date'] ?? '';
-                                        if (!empty($slot_date_hide)) {
-                                            $slot_date_hide = date('Y-m-d', strtotime((string)$slot_date_hide));
-                                        }
-                                        $slot_key_hide = implode('|', [
-                                            (string)$tid,
-                                            (string)$slot_date_hide,
-                                            strtolower(trim((string)($sd['room'] ?? ''))),
-                                            strtolower(trim((string)($sd['subject_area'] ?? ''))),
-                                            strtolower(trim((string)normalizeSubjectDisplay((string)($sd['subject'] ?? '')))),
-                                        ]);
-                                        $slot_done_hide = $completed_forms_by_slot[$slot_key_hide] ?? [];
-                                        $is_done_required_hide = false;
-                                        if ($row_required_form_type_hide === 'both') {
-                                            $is_done_required_hide = !empty($slot_done_hide['iso']) && !empty($slot_done_hide['peac']);
-                                        } elseif ($row_required_form_type_hide === 'peac') {
-                                            $is_done_required_hide = !empty($slot_done_hide['peac']);
-                                        } else {
-                                            $is_done_required_hide = !empty($slot_done_hide['iso']);
-                                        }
-                                        if (!$is_done_required_hide && $observer_cutoff_raw !== '' && $is_schedule_past_for_observer) {
-                                            $hide_for_leader_dne = true;
-                                        }
-                                    }
-                                    if ($hide_for_leader_dne) {
-                                        continue;
-                                    }
                                 ?>
                                 <tr>
                                     <td>
@@ -4911,13 +4743,13 @@ try {
                                                     $scheduled_by_me = ((int)($t['scheduled_by'] ?? 0) === (int)($_SESSION['user_id'] ?? 0));
                                                 ?>
                                                 <?php if (!$is_observer_only && $scheduled_by_me): ?>
-                                                    <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-schedule-start="<?php echo htmlspecialchars($row_unable_schedule_start, ENT_QUOTES); ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;" title="Scheduled by you">
+                                                    <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;" title="Scheduled by you">
                                                 <?php else: ?>
                                                     <?php $disable_observer_opt = $is_schedule_past_for_observer && !$is_opted; ?>
-                                                    <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo $eval_id; ?>" data-schedule-start="<?php echo htmlspecialchars($row_unable_schedule_start, ENT_QUOTES); ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $disable_observer_opt ? 'Schedule already passed; cannot accept as observer.' : ($is_opted ? 'You are an observer' : 'Check to join as observer'); ?>" <?php echo $disable_observer_opt ? 'disabled' : ''; ?>>
+                                                    <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo $eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $disable_observer_opt ? 'Schedule already passed; cannot accept as observer.' : ($is_opted ? 'You are an observer' : 'Check to join as observer'); ?>" <?php echo $disable_observer_opt ? 'disabled' : ''; ?>>
                                                 <?php endif; ?>
                                             <?php else: ?>
-                                                <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-schedule-start="<?php echo htmlspecialchars($row_unable_schedule_start, ENT_QUOTES); ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
+                                                <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
                                             <?php endif; ?>
                                         <?php endif; ?>
                                         <?php echo $counter++ . '. ' . htmlspecialchars($t['name']); ?>
@@ -4963,6 +4795,18 @@ try {
                                         $observers = $observer_map[$row_key] ?? [];
                                         echo htmlspecialchars(implode(', ', $observers));
                                         ?>
+                                    </td>
+                                    <td class="text-center" style="font-size:0.8rem;">
+                                        <?php
+                                        $teacher_signature_display = trim((string)($ack_eval['signature'] ?? ''));
+                                        ?>
+                                        <?php if ($teacher_signature_display !== ''): ?>
+                                            <img src="<?php echo htmlspecialchars($teacher_signature_display); ?>" alt="Teacher Signature" style="max-height:34px;max-width:96px;">
+                                        <?php else: ?>
+                                            <div style="height:34px;display:flex;align-items:flex-end;justify-content:center;">
+                                                <span style="display:inline-block;width:86px;border-bottom:1px solid #777;"></span>
+                                            </div>
+                                        <?php endif; ?>
                                     </td>
                                     <td class="text-center" style="font-size:0.8rem;">
                                         <?php 
@@ -5011,14 +4855,14 @@ try {
                                         $row_eval_status = strtolower(trim((string)($eval_data[$row_key]['status'] ?? '')));
                                         if ($is_done_by_requirement) {
                                             echo '<span class="badge bg-success">Conducted</span>';
+                                        } elseif (count($observers) < 2) {
+                                            echo '<span class="badge bg-danger">Observer Imbalance</span>';
                                         } elseif ($is_overdue_not_evaluated) {
-                                            echo '<span class="badge bg-danger">Did Not Evaluate</span>';
+                                            echo '<span class="badge bg-danger">Closed</span>';
                                         } elseif ($row_eval_status === 'rescheduled') {
                                             echo '<span class="badge bg-warning text-dark">Rescheduled</span>';
                                         } elseif ($row_eval_status === 'observer_unbalanced') {
                                             echo '<span class="badge bg-danger">Observer Imbalance</span>';
-                                        } elseif ($is_schedule_signed) {
-                                            echo '<span class="badge bg-success">Signed</span>';
                                         } elseif ($has_schedule) {
                                             echo '<span class="badge bg-info">Scheduled</span>';
                                         } else {
@@ -5254,7 +5098,7 @@ try {
         </div>
     </div>
 
-    <?php if ($can_mark_unable_observer): ?>
+    <?php if ($is_leader): ?>
     <div class="modal fade" id="unableObserveModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
             <div class="modal-content">
@@ -5275,16 +5119,16 @@ try {
                             <option value="Other">Other</option>
                         </select>
                     </div>
-                    <div class="mb-2" id="unableObserveCommentsWrap" style="display:none;">
+                    <div class="mb-2" id="unableObserveCommentsWrap">
                         <label for="unableObserveComments" class="form-label fw-bold">Comments <span id="unableObserveCommentsRequiredText">(required for Other)</span></label>
                         <textarea id="unableObserveComments" class="form-control" rows="3" placeholder="Enter details/comments..."></textarea>
                     </div>
-                    <small class="text-muted d-block mt-2">Reason will be sent automatically to the teacher via notification and email. If the schedule no longer has enough observers, it will be marked as Observer Imbalance.</small>
+                    <small class="text-muted d-block mt-2">Reason will be sent automatically to the teacher via notification and email.</small>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     <button type="button" class="btn btn-danger" onclick="submitUnableObserveReason()">
-                        <i class="fas fa-paper-plane me-1"></i>Send Reason
+                        <i class="fas fa-paper-plane me-1"></i>Send Reason & Cancel
                     </button>
                 </div>
             </div>
@@ -6162,8 +6006,8 @@ document.addEventListener('DOMContentLoaded', () => {
     updateRescheduleState();
 })();
 
-<?php if ($can_mark_unable_observer): ?>
-// Observer/evaluator checkbox actions.
+<?php if ($is_leader): ?>
+// Observer opt-in checkboxes for President/VP
 (function() {
     var joinBtn = document.getElementById('joinObserverBtn');
     var leaveBtn = document.getElementById('leaveObserverBtn');
@@ -6181,8 +6025,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         document.querySelectorAll('.reschedule-check').forEach(function(cb) {
             var eid = parseInt(cb.dataset.evalId || '0', 10);
-            var scheduleStart = (cb.dataset.scheduleStart || '').trim();
-            if (cb.checked && (eid > 0 || scheduleStart !== '')) selectedSched++;
+            if (cb.checked && eid > 0) selectedSched++;
         });
         if (joinBtn) joinBtn.disabled = (toJoin === 0);
         if (leaveBtn) leaveBtn.disabled = (toLeave === 0);
@@ -6198,7 +6041,6 @@ document.addEventListener('DOMContentLoaded', () => {
     updateObserverBtnState();
 })();
 
-<?php if ($is_leader): ?>
 function joinAsObserver() {
     var evalIds = [];
     var teacherIds = [];
@@ -6229,16 +6071,14 @@ function joinAsObserver() {
 function leaveAsObserver() {
     openUnableObserveModal();
 }
-<?php endif; ?>
 
 function openUnableObserveModal() {
-    var selectedRows = 0;
+    var evalIds = [];
     document.querySelectorAll('.reschedule-check').forEach(function(cb) {
         var eid = parseInt(cb.dataset.evalId || '0', 10);
-        var scheduleStart = (cb.dataset.scheduleStart || '').trim();
-        if (cb.checked && (eid > 0 || scheduleStart !== '')) selectedRows++;
+        if (cb.checked && eid > 0) evalIds.push(eid);
     });
-    if (selectedRows === 0) {
+    if (evalIds.length === 0) {
         alert('Please select at least one schedule.');
         return;
     }
@@ -6266,22 +6106,9 @@ function toggleUnableObserveComments(reasonValue) {
     var comments = document.getElementById('unableObserveComments');
     var requiredText = document.getElementById('unableObserveCommentsRequiredText');
     var isOther = String(reasonValue || '').trim() === 'Other';
-    if (wrap) wrap.style.display = isOther ? 'block' : 'none';
+    if (wrap) wrap.style.display = '';
     if (comments) comments.required = isOther;
     if (requiredText) requiredText.style.display = isOther ? '' : 'none';
-    if (!isOther && comments) comments.value = '';
-}
-
-function getCurrentFilterValue(name, fallback) {
-    var el = document.querySelector('select[name="' + name + '"], input[name="' + name + '"]');
-    if (el && String(el.value || '').trim() !== '') {
-        return String(el.value || '').trim();
-    }
-    try {
-        return (new URLSearchParams(window.location.search).get(name) || fallback || '').trim();
-    } catch (e) {
-        return fallback || '';
-    }
 }
 
 function submitUnableObserveReason(reasonArg) {
@@ -6309,36 +6136,24 @@ function submitUnableObserveReason(reasonArg) {
     }
 
     var evalIds = [];
-    var unavailableItems = [];
     document.querySelectorAll('.reschedule-check').forEach(function(cb) {
         var eid = parseInt(cb.dataset.evalId || '0', 10);
-        var tid = parseInt(cb.value || '0', 10);
-        var scheduleStart = (cb.dataset.scheduleStart || '').trim();
-        if (cb.checked && tid > 0 && (eid > 0 || scheduleStart !== '')) {
-            if (eid > 0) {
-                evalIds.push(eid);
-            }
-            unavailableItems.push({
-                teacher_id: tid,
-                eval_id: eid,
-                schedule_start: scheduleStart
-            });
+        if (cb.checked && eid > 0) {
+            evalIds.push(eid);
         }
     });
-    if (unavailableItems.length === 0) {
-        alert('Please select a valid schedule row before sending.');
-        return;
-    }
-    if (!confirm('Mark yourself unable to observe/evaluate for ' + unavailableItems.length + ' schedule(s) and notify the teacher?')) return;
+    if (evalIds.length === 0) return;
+    if (!confirm('Cancel as observer for ' + evalIds.length + ' schedule(s) and notify the teacher?')) return;
     var form = document.createElement('form');
     form.method = 'POST';
     form.action = window.location.href;
     var a = document.createElement('input'); a.type = 'hidden'; a.name = 'action'; a.value = 'leave_observer'; form.appendChild(a);
     var t = document.createElement('input'); t.type = 'hidden'; t.name = 'eval_ids'; t.value = JSON.stringify(evalIds); form.appendChild(t);
-    var itemsInput = document.createElement('input'); itemsInput.type = 'hidden'; itemsInput.name = 'unavailable_items'; itemsInput.value = JSON.stringify(unavailableItems); form.appendChild(itemsInput);
     var r = document.createElement('input'); r.type = 'hidden'; r.name = 'observer_reason'; r.value = reason; form.appendChild(r);
-    var semIn = document.createElement('input'); semIn.type = 'hidden'; semIn.name = 'semester'; semIn.value = getCurrentFilterValue('semester', '1st'); form.appendChild(semIn);
-    var ayIn = document.createElement('input'); ayIn.type = 'hidden'; ayIn.name = 'academic_year'; ayIn.value = getCurrentFilterValue('academic_year', ''); form.appendChild(ayIn);
+    var semEl = document.querySelector('select[name=\"semester\"]');
+    var ayEl = document.querySelector('select[name=\"academic_year\"]');
+    var semIn = document.createElement('input'); semIn.type = 'hidden'; semIn.name = 'semester'; semIn.value = semEl ? semEl.value : ''; form.appendChild(semIn);
+    var ayIn = document.createElement('input'); ayIn.type = 'hidden'; ayIn.name = 'academic_year'; ayIn.value = ayEl ? ayEl.value : ''; form.appendChild(ayIn);
     document.body.appendChild(form);
     form.submit();
 }
@@ -6347,10 +6162,6 @@ document.addEventListener('change', function(e) {
     if (!e.target || e.target.id !== 'unableObserveReasonSelect') return;
     toggleUnableObserveComments(e.target.value || '');
 });
-
-window.toggleUnableObserveComments = toggleUnableObserveComments;
-window.submitUnableObserveReason = submitUnableObserveReason;
-window.openUnableObserveModal = openUnableObserveModal;
 
 <?php endif; ?>
 

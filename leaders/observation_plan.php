@@ -5,6 +5,34 @@ if(!in_array($_SESSION['role'], ['president', 'vice_president'])) {
     header("Location: ../login.php");
     exit();
 }
+
+function formatFocusDisplay($focusRaw, array $labels) {
+    $focusRaw = trim((string)$focusRaw);
+    if ($focusRaw === '') return '';
+
+    $decoded = json_decode($focusRaw, true);
+    if (is_string($decoded)) {
+        $decodedAgain = json_decode($decoded, true);
+        $decoded = is_array($decodedAgain) ? $decodedAgain : $decoded;
+    }
+
+    if (is_array($decoded)) {
+        $items = $decoded;
+    } else {
+        $clean = str_replace(['[', ']', '"', "'"], '', $focusRaw);
+        $items = preg_split('/\s*,\s*|\r\n|\r|\n/', $clean);
+    }
+
+    $display = [];
+    foreach ($items as $item) {
+        $key = trim((string)$item);
+        if ($key === '') continue;
+        $display[] = $labels[$key] ?? $key;
+    }
+
+    return implode(', ', array_values(array_unique($display)));
+}
+
 // Preserve any query string
 $qs = $_SERVER['QUERY_STRING'] ? '?' . $_SERVER['QUERY_STRING'] : '';
 header("Location: ../evaluators/observation_plan.php" . $qs);
@@ -217,13 +245,10 @@ foreach ($eval_teachers as $t) {
 
     // Schedule details
     $focus_raw = $t['evaluation_focus'] ?? $t['eval_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
 
     $schedule_data[$tid] = [
         'semester' => $t['evaluation_semester'] ?? $t['eval_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => '',
         'subject_area' => $t['evaluation_subject_area'] ?? $t['eval_subject_area'] ?? '',
         'subject' => $t['evaluation_subject'] ?? $t['subject_observed'] ?? '',
@@ -325,13 +350,10 @@ foreach ($scheduled_teachers as $t) {
     $eval_data[$tid] = ['date' => $sched_date, 'done' => false, 'faculty_signature' => '', 'eval_id' => null];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
 
     $schedule_data[$tid] = [
         'semester' => $t['evaluation_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => '',
         'subject_area' => $t['evaluation_subject_area'] ?? '',
         'subject' => $t['evaluation_subject'] ?? '',

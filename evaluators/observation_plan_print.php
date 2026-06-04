@@ -20,6 +20,33 @@ function normalizeSubjectDisplay($subject) {
     return trim((string)$s);
 }
 
+function formatFocusDisplay($focusRaw, array $labels) {
+    $focusRaw = trim((string)$focusRaw);
+    if ($focusRaw === '') return '';
+
+    $decoded = json_decode($focusRaw, true);
+    if (is_string($decoded)) {
+        $decodedAgain = json_decode($decoded, true);
+        $decoded = is_array($decodedAgain) ? $decodedAgain : $decoded;
+    }
+
+    if (is_array($decoded)) {
+        $items = $decoded;
+    } else {
+        $clean = str_replace(['[', ']', '"', "'"], '', $focusRaw);
+        $items = preg_split('/\s*,\s*|\r\n|\r|\n/', $clean);
+    }
+
+    $display = [];
+    foreach ($items as $item) {
+        $key = trim((string)$item);
+        if ($key === '') continue;
+        $display[] = $labels[$key] ?? $key;
+    }
+
+    return implode(', ', array_values(array_unique($display)));
+}
+
 $database = new Database();
 $db = $database->getConnection();
 $teacher = new Teacher($db);
@@ -84,7 +111,7 @@ if ($is_leader) {
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
-                     e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
+                     e.id as eval_id, e.observation_date, e.observation_time, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
                      e.subject_area as eval_subject_area, e.evaluation_focus as eval_focus,
                      e.semester as eval_semester, e.department as eval_department,
@@ -104,10 +131,7 @@ if ($is_leader) {
                         OR
                         (
                             (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                            AND (
-                                eu.department = :department_primary
-                                OR ((eu.department IS NULL OR eu.department = '') AND t.department = :department_primary_fallback)
-                            )
+                            AND eu.department = :department_primary
                         )
                       )";
     }
@@ -118,28 +142,42 @@ if ($is_leader) {
     if ($raw_department !== '') {
         $stmt->bindParam(':department_sched', $raw_department);
         $stmt->bindParam(':department_primary', $raw_department);
-        $stmt->bindParam(':department_primary_fallback', $raw_department);
     }
 } elseif ($is_coordinator) {
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
-                     e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
+                     e.id as eval_id, e.observation_date, e.observation_time, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
                      e.subject_area as eval_subject_area, e.evaluation_focus as eval_focus,
                      e.semester as eval_semester, e.department as eval_department,
                      t.scheduled_by, t.scheduled_department
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
-              JOIN teacher_assignments ta ON ta.teacher_id = t.id AND ta.evaluator_id = :evaluator_id_print
+              LEFT JOIN teacher_departments td ON td.teacher_id = t.id
               LEFT JOIN users tu ON tu.id = t.user_id
-              WHERE (t.user_id IS NULL OR t.user_id != :current_user_id)
+              LEFT JOIN users eu ON eu.id = e.evaluator_id
+              WHERE (
+                    e.department = :department_match1
+                    OR (
+                        (e.department IS NULL OR e.department = '')
+                        AND t.scheduled_department = :department_match2
+                    )
+                    OR (
+                        (e.department IS NULL OR e.department = '')
+                        AND (t.scheduled_department IS NULL OR t.scheduled_department = '')
+                        AND eu.department = :department_match3
+                    )
+              )
+              AND (t.user_id IS NULL OR t.user_id != :current_user_id)
               AND (tu.id IS NULL OR tu.role NOT IN ('dean','principal','president','vice_president'))
               AND e.academic_year = :academic_year
               AND e.semester = :semester
               ORDER BY t.name ASC";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':evaluator_id_print', $_SESSION['user_id']);
+    $stmt->bindParam(':department_match1', $raw_department);
+    $stmt->bindParam(':department_match2', $raw_department);
+    $stmt->bindParam(':department_match3', $raw_department);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
@@ -147,7 +185,7 @@ if ($is_leader) {
     $query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                      t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
                      t.evaluation_subject_area, t.evaluation_subject, t.evaluation_semester,
-                     e.id as eval_id, e.observation_date, e.status as eval_status, e.faculty_signature,
+                     e.id as eval_id, e.observation_date, e.observation_time, e.status as eval_status, e.faculty_signature,
                      e.subject_observed, e.observation_room as eval_room,
                      e.subject_area as eval_subject_area, e.evaluation_focus as eval_focus,
                      e.semester as eval_semester, e.department as eval_department,
@@ -163,14 +201,13 @@ if ($is_leader) {
                     )
                     OR
                     (
-                        (t.scheduled_department IS NULL OR t.scheduled_department = '')
-                        AND t.department = :department_primary
+                        t.department = :department_primary
+                        AND e.evaluator_id = :self_eval_id
                     )
                     OR
                     (
-                        e.evaluator_id = :self_eval_id
+                        e.evaluator_id = :self_eval_id2
                         AND e.department = :self_eval_dept
-                        AND (t.department = :department_primary2 OR td.department = :department_secondary)
                     )
               )
               AND (t.user_id IS NULL OR t.user_id != :current_user_id)
@@ -181,9 +218,8 @@ if ($is_leader) {
     $stmt->bindParam(':department_sched', $raw_department);
     $stmt->bindParam(':department_primary', $raw_department);
     $stmt->bindParam(':self_eval_id', $_SESSION['user_id']);
+    $stmt->bindParam(':self_eval_id2', $_SESSION['user_id']);
     $stmt->bindParam(':self_eval_dept', $raw_department);
-    $stmt->bindParam(':department_primary2', $raw_department);
-    $stmt->bindParam(':department_secondary', $raw_department);
     $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
     $stmt->bindParam(':academic_year', $academic_year);
     $stmt->bindParam(':semester', $semester);
@@ -417,6 +453,36 @@ $focus_labels = [
     'assessment' => "Assessment of Students' Learning"
 ];
 
+$slot_end_by_eval_id = [];
+$slot_end_by_teacher_start = [];
+try {
+    $slotStmt = $db->prepare(
+        "SELECT evaluation_id, teacher_id, schedule_start, schedule_end
+         FROM teacher_schedules
+         WHERE academic_year = :ay
+           AND semester = :sem"
+    );
+    $slotStmt->execute([
+        ':ay' => (string)$academic_year,
+        ':sem' => (string)$semester
+    ]);
+    while ($sr = $slotStmt->fetch(PDO::FETCH_ASSOC)) {
+        $eid = (int)($sr['evaluation_id'] ?? 0);
+        $slot_tid = (int)($sr['teacher_id'] ?? 0);
+        $sstart = trim((string)($sr['schedule_start'] ?? ''));
+        $send = trim((string)($sr['schedule_end'] ?? ''));
+        if ($eid > 0 && $send !== '' && !isset($slot_end_by_eval_id[$eid])) {
+            $slot_end_by_eval_id[$eid] = $send;
+        }
+        if ($slot_tid > 0 && $sstart !== '' && $send !== '') {
+            $slot_key = $slot_tid . '|' . date('Y-m-d H:i', strtotime($sstart));
+            if (!isset($slot_end_by_teacher_start[$slot_key])) {
+                $slot_end_by_teacher_start[$slot_key] = $send;
+            }
+        }
+    }
+} catch (Exception $e) {}
+
 // Process teachers with evaluations (key each row by evaluation ID so
 // multiple schedules for the same teacher remain independent).
 foreach ($eval_teachers as $t) {
@@ -430,8 +496,13 @@ foreach ($eval_teachers as $t) {
     $is_done = ($t['eval_status'] === 'completed');
     $faculty_sig = $t['faculty_signature'] ?? '';
     $eval_id_ref = $t['eval_id'] ?? null;
+    $obs_time_raw = trim((string)($t['observation_time'] ?? ''));
+    $obs_datetime = $obs_date;
+    if (!empty($obs_date) && $obs_time_raw !== '' && $obs_time_raw !== '00:00:00' && $obs_time_raw !== '00:00') {
+        $obs_datetime = $obs_date . ' ' . $obs_time_raw;
+    }
     $eval_data[$row_key] = [
-        'date' => $obs_date,
+        'date' => $obs_datetime,
         'done' => $is_done,
         'faculty_signature' => $faculty_sig,
         'eval_id' => $eval_id_ref,
@@ -440,15 +511,24 @@ foreach ($eval_teachers as $t) {
 
     // Use eval-level data for the evaluation row
     $focus_raw = $t['eval_focus'] ?? $t['evaluation_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
     $day_time = '';
     $sched_dt = $t['evaluation_schedule'] ?? '';
     $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
+    $row_sched_start = $sched_dt;
+    if (!empty($obs_date) && $obs_time_raw !== '' && $obs_time_raw !== '00:00:00' && $obs_time_raw !== '00:00') {
+        $row_sched_start = $obs_date . ' ' . $obs_time_raw;
+    }
+    if ($eval_id > 0 && !empty($slot_end_by_eval_id[$eval_id])) {
+        $sched_dt_end = $slot_end_by_eval_id[$eval_id];
+    } elseif (!empty($row_sched_start)) {
+        $slot_key_lookup = ((int)$tid) . '|' . date('Y-m-d H:i', strtotime((string)$row_sched_start));
+        if (!empty($slot_end_by_teacher_start[$slot_key_lookup])) {
+            $sched_dt_end = $slot_end_by_teacher_start[$slot_key_lookup];
+        }
+    }
     if (!empty($obs_date)) {
         $day_time = date('l', strtotime($obs_date));
-        $obs_time_fmt = trim((string)($t['observation_time'] ?? ''));
+        $obs_time_fmt = $obs_time_raw;
         if (($obs_time_fmt === '' || $obs_time_fmt === '00:00:00' || $obs_time_fmt === '00:00') && !empty($sched_dt)) {
             // Permanent fallback: use teacher schedule start when eval row time is blank.
             $obs_time_fmt = date('H:i:s', strtotime($sched_dt));
@@ -456,21 +536,8 @@ foreach ($eval_teachers as $t) {
         if ($obs_time_fmt !== '' && $obs_time_fmt !== '00:00:00' && $obs_time_fmt !== '00:00') {
             $start_fmt = date('g:i A', strtotime($obs_time_fmt));
             $end_fmt = '';
-            // Use teacher-level end time only when this eval row matches the
-            // currently active teacher schedule; avoids applying latest end time
-            // to older evaluation rows in print.
-            $obs_dt_key = date('Y-m-d H:i', strtotime($obs_date . ' ' . $obs_time_fmt));
-            $sched_dt_key = !empty($sched_dt) ? date('Y-m-d H:i', strtotime($sched_dt)) : '';
-            if (!empty($sched_dt_end) && $sched_dt_key !== '' && $sched_dt_key === $obs_dt_key) {
+            if (!empty($sched_dt_end)) {
                 $end_fmt = date('g:i A', strtotime($sched_dt_end));
-            } elseif (!empty($sched_dt_end) && !empty($sched_dt)) {
-                // Fallback: if the schedule date matches the observation date,
-                // use schedule end time so print can still display a time range.
-                $obs_date_key = date('Y-m-d', strtotime($obs_date));
-                $sched_date_key = date('Y-m-d', strtotime($sched_dt));
-                if ($obs_date_key === $sched_date_key) {
-                    $end_fmt = date('g:i A', strtotime($sched_dt_end));
-                }
             }
             $day_time .= "\n" . $start_fmt . ($end_fmt !== '' ? (' - ' . $end_fmt) : '');
         }
@@ -488,7 +555,7 @@ foreach ($eval_teachers as $t) {
     }
     $schedule_data[$row_key] = [
         'semester' => $t['eval_semester'] ?? $t['evaluation_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => $day_time,
         'subject_area' => $t['eval_subject_area'] ?? $t['evaluation_subject_area'] ?? '',
         'subject' => normalizeSubjectDisplay($t['subject_observed'] ?? $t['evaluation_subject'] ?? ''),
@@ -520,10 +587,12 @@ foreach ($eval_teachers as $t) {
     if (empty($sched_dt)) continue;
 
     $sched_dt_key = date('Y-m-d H:i', strtotime($sched_dt));
-    $obs_dt_key = !empty($obs_date) ? date('Y-m-d H:i', strtotime($obs_date)) : '';
+    $obs_time_raw = trim((string)($t['observation_time'] ?? ''));
+    $obs_dt_raw = !empty($obs_date) && $obs_time_raw !== '' ? ($obs_date . ' ' . $obs_time_raw) : $obs_date;
+    $obs_dt_key = !empty($obs_dt_raw) ? date('Y-m-d H:i', strtotime($obs_dt_raw)) : '';
     if ($sched_dt_key === $obs_dt_key) continue;
 
-    $sched_key = $tid . '_sched';
+    $sched_key = $tid . '_sched_' . date('YmdHi', strtotime($sched_dt));
     if (isset($seen_ids[$sched_key])) continue;
     $seen_ids[$sched_key] = true;
 
@@ -531,9 +600,6 @@ foreach ($eval_teachers as $t) {
     $eval_data[$sched_key] = ['date' => $sched_dt_key, 'done' => false, 'faculty_signature' => '', 'eval_id' => null, 'status' => 'scheduled'];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
 
     $ts = strtotime($sched_dt);
     $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
@@ -543,7 +609,7 @@ foreach ($eval_teachers as $t) {
     }
     $schedule_data[$sched_key] = [
         'semester' => $t['evaluation_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => $sched_day_time,
         'subject_area' => $t['evaluation_subject_area'] ?? '',
         'subject' => normalizeSubjectDisplay($t['evaluation_subject'] ?? ''),
@@ -585,9 +651,6 @@ foreach ($scheduled_teachers as $t) {
     $eval_data[$tid] = ['date' => $sched_date, 'done' => false, 'faculty_signature' => '', 'eval_id' => null, 'status' => 'scheduled'];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
     $day_time = '';
     if (!empty($sched_dt)) { 
         $ts = strtotime($sched_dt);
@@ -604,7 +667,7 @@ foreach ($scheduled_teachers as $t) {
     }
     $schedule_data[$tid] = [
         'semester' => $t['evaluation_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => $day_time,
         'subject_area' => $t['evaluation_subject_area'] ?? '',
         'subject' => normalizeSubjectDisplay($t['evaluation_subject'] ?? ''),
@@ -639,10 +702,18 @@ if (!empty($teachers_list)) {
         $rk = $t['_row_key'] ?? $t['id'];
         $ed = $eval_data[$rk] ?? [];
         $sd = $schedule_data[$rk] ?? [];
+        $row_owning_dept_key = trim((string)($t['scheduled_department'] ?? ''));
+        if ($row_owning_dept_key === '') {
+            $row_owning_dept_key = trim((string)($t['eval_department'] ?? ''));
+        }
+        if ($row_owning_dept_key === '') {
+            $row_owning_dept_key = trim((string)($t['teacher_department'] ?? ''));
+        }
         $date_raw = trim((string)($ed['date'] ?? ''));
-        $date_norm = $date_raw !== '' ? date('Y-m-d', strtotime($date_raw)) : '';
+        $date_norm = $date_raw !== '' ? date('Y-m-d H:i', strtotime($date_raw)) : '';
         $key = implode('|', [
             (string)($t['id'] ?? ''),
+            strtolower($row_owning_dept_key),
             $date_norm,
             strtolower(trim((string)($sd['subject_area'] ?? ''))),
             $normalize_subject_slot((string)($sd['subject'] ?? '')),
@@ -707,11 +778,8 @@ if (!empty($filter_status)) {
     $teachers_list = array_values($teachers_list);
 }
 
-// Teacher signature in print comes from observation acknowledgments.
-// Primary match is evaluation_id; fallback is teacher+date slot.
+// Teacher signature in print comes from the exact observation acknowledgment row.
 $ack_eval_map = [];
-$ack_teacher_date_map = [];
-$ack_teacher_latest_map = [];
 try {
     $eval_ids_for_ack = [];
     foreach ($teachers_list as $tt) {
@@ -739,31 +807,6 @@ try {
         }
     }
 
-    // Fallback map for legacy/null/relinked evaluation_id cases in print.
-    $ack_slot_sql = "SELECT a.teacher_id, DATE(COALESCE(e.observation_date, a.acknowledged_at)) AS slot_date,
-                            a.signature, a.acknowledged_at, a.id
-                     FROM observation_plan_acknowledgments a
-                     LEFT JOIN evaluations e ON e.id = a.evaluation_id
-                     WHERE a.academic_year = ?
-                       AND a.semester IN (?, ?)
-                     ORDER BY a.acknowledged_at DESC, a.id DESC";
-    $ack_slot_stmt = $db->prepare($ack_slot_sql);
-    $ack_slot_stmt->execute([$academic_year, $semester, $sem_alt]);
-    while ($ack = $ack_slot_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $teacher_id = (int)($ack['teacher_id'] ?? 0);
-        $slot_date = trim((string)($ack['slot_date'] ?? ''));
-        $sig_val = trim((string)($ack['signature'] ?? ''));
-        if ($teacher_id <= 0 || $slot_date === '') {
-            continue;
-        }
-        $slot_key = $teacher_id . '|' . $slot_date;
-        if (!isset($ack_teacher_date_map[$slot_key])) {
-            $ack_teacher_date_map[$slot_key] = $sig_val;
-        }
-        if ($sig_val !== '' && !isset($ack_teacher_latest_map[$teacher_id])) {
-            $ack_teacher_latest_map[$teacher_id] = $sig_val;
-        }
-    }
 } catch (Exception $e) {}
 
 $dean_role_display = ucfirst(str_replace('_', ' ', $_SESSION['role']));
@@ -1002,23 +1045,6 @@ try {
                             <?php 
                             $row_eval_id = (int)($eval_data[$rk]['eval_id'] ?? 0);
                             $ack_sig = ($row_eval_id > 0) ? trim((string)($ack_eval_map[$row_eval_id]['signature'] ?? '')) : '';
-                            if ($ack_sig === '') {
-                                $row_date_raw = $eval_data[$rk]['date'] ?? '';
-                                $row_date = !empty($row_date_raw) ? date('Y-m-d', strtotime($row_date_raw)) : '';
-                                $slot_key = ((int)$tid) . '|' . $row_date;
-                                $ack_sig = trim((string)($ack_teacher_date_map[$slot_key] ?? ''));
-                            }
-                            // Keep print consistent with report rows:
-                            // if acknowledgment signature is missing, fallback to
-                            // evaluation-row faculty signature for this slot.
-                            if ($ack_sig === '') {
-                                $ack_sig = trim((string)($eval_data[$rk]['faculty_signature'] ?? ''));
-                            }
-                            // Final fallback: latest teacher acknowledgment signature
-                            // (covers legacy rows where evaluation_id/date linkage differs).
-                            if ($ack_sig === '') {
-                                $ack_sig = trim((string)($ack_teacher_latest_map[(int)$tid] ?? ''));
-                            }
                             if ($ack_sig !== ''): ?>
                                 <img src="<?php echo htmlspecialchars($ack_sig); ?>" alt="Teacher Signature" style="max-height: 35px; max-width: 80px;">
                             <?php endif; ?>

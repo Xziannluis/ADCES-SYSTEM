@@ -16,6 +16,41 @@ $db = $database->getConnection();
 $evaluation = new Evaluation($db);
 $teacher = new Teacher($db);
 
+function formatFocusDisplay($focusRaw) {
+    $labels = [
+        'communications' => 'Communication Competence',
+        'management' => 'Management and Presentation of the Lesson',
+        'assessment' => "Assessment of Students' Learning",
+        'teacher_actions' => 'Teacher Actions',
+        'student_learning_actions' => 'Student Learning Actions',
+    ];
+
+    $focusRaw = trim((string)$focusRaw);
+    if ($focusRaw === '') return '';
+
+    $decoded = json_decode($focusRaw, true);
+    if (is_string($decoded)) {
+        $decodedAgain = json_decode($decoded, true);
+        $decoded = is_array($decodedAgain) ? $decodedAgain : $decoded;
+    }
+
+    if (is_array($decoded)) {
+        $items = $decoded;
+    } else {
+        $clean = str_replace(['[', ']', '"', "'"], '', $focusRaw);
+        $items = preg_split('/\s*,\s*|\r\n|\r|\n/', $clean);
+    }
+
+    $display = [];
+    foreach ($items as $item) {
+        $key = trim((string)$item);
+        if ($key === '') continue;
+        $display[] = $labels[$key] ?? $key;
+    }
+
+    return implode(', ', array_values(array_unique($display)));
+}
+
 // Map department codes/names to their full display names for printing.
 // Add/adjust entries as needed to match your database values.
 $department_map = [
@@ -365,6 +400,38 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         }
         .report-table td li {
             margin-bottom: 4px;
+        }
+        #reportPreviewModal .modal-dialog {
+            max-width: min(1180px, calc(100vw - 32px)) !important;
+        }
+        .preview-observation-table {
+            table-layout: fixed;
+            width: 100%;
+        }
+        .preview-observation-table th,
+        .preview-observation-table td {
+            white-space: normal;
+            word-break: normal;
+            overflow-wrap: anywhere;
+            hyphens: none;
+            line-height: 1.35;
+            vertical-align: middle;
+        }
+        .preview-observation-table th {
+            font-size: 0.82rem;
+            padding: 10px 12px;
+        }
+        .preview-observation-table td {
+            padding: 12px;
+        }
+        .preview-observation-table .col-focus { width: 36%; }
+        .preview-observation-table .col-date { width: 10%; }
+        .preview-observation-table .col-time { width: 13%; }
+        .preview-observation-table .col-area { width: 20%; }
+        .preview-observation-table .col-subject { width: 13%; }
+        .preview-observation-table .col-room { width: 8%; }
+        #previewFocus div + div {
+            margin-top: 4px;
         }
         .report-table tr:nth-child(even) {
             background: #f8f9fa;
@@ -882,7 +949,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                         class="btn btn-primary"
                                         onclick="openReportPreview(this)"
                                         data-eval-id="<?php echo (int)($eval['id'] ?? 0); ?>"
-                                        data-observation-focus="<?php echo htmlspecialchars((string)($eval['evaluation_focus'] ?? '')); ?>"
+                                        data-observation-focus="<?php echo htmlspecialchars(formatFocusDisplay($eval['evaluation_focus'] ?? '')); ?>"
                                         data-observation-date="<?php echo htmlspecialchars(date('m-d-y', strtotime((string)$eval['observation_date']))); ?>"
                                         data-day-time="<?php echo htmlspecialchars(strip_tags((string)$format_day_time($eval))); ?>"
                                         data-subject-area="<?php echo htmlspecialchars((string)($eval['subject_area'] ?? '')); ?>"
@@ -1012,7 +1079,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                             class="btn btn-sm btn-primary"
                                             onclick="openReportPreview(this)"
                                             data-eval-id="<?php echo (int)($eval['id'] ?? 0); ?>"
-                                            data-observation-focus="<?php echo htmlspecialchars((string)($eval['evaluation_focus'] ?? '')); ?>"
+                                            data-observation-focus="<?php echo htmlspecialchars(formatFocusDisplay($eval['evaluation_focus'] ?? '')); ?>"
                                             data-observation-date="<?php echo htmlspecialchars(date('m-d-y', strtotime((string)$eval['observation_date']))); ?>"
                                             data-day-time="<?php echo htmlspecialchars(strip_tags((string)$format_day_time($eval))); ?>"
                                             data-subject-area="<?php echo htmlspecialchars((string)($eval['subject_area'] ?? '')); ?>"
@@ -1085,6 +1152,8 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         let reportSigTouched = false;
         let currentPreviewData = null;
         let currentPreviewEvalId = 0;
+        let printEvaluationId = 0;
+        const shouldSkipPrintSignature = <?php echo json_encode(($_SESSION['role'] ?? '') === 'president'); ?>;
 
         function initReportSignaturePad() {
             reportSigCanvas = document.getElementById('reportSignatureCanvas');
@@ -1139,7 +1208,23 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             reportSigTouched = false;
         }
 
-        function openPrintReport() {
+        function openReportsPrintWindow() {
+            const params = new URLSearchParams(window.location.search);
+            params.set('auto_print', '1');
+            if (printEvaluationId > 0) {
+                params.set('evaluation_id', String(printEvaluationId));
+            } else {
+                params.delete('evaluation_id');
+            }
+            window.open('reports_print.php?' + params.toString(), '_blank');
+        }
+
+        function openPrintReport(scope) {
+            printEvaluationId = (scope === 'preview') ? currentPreviewEvalId : 0;
+            if (shouldSkipPrintSignature) {
+                openReportsPrintWindow();
+                return;
+            }
             if (!reportSignatureModal) {
                 const el = document.getElementById('printSignatureModal');
                 reportSignatureModal = new bootstrap.Modal(el);
@@ -1177,9 +1262,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                         throw new Error((res && res.message) ? res.message : 'Failed to save signature.');
                     }
                     if (reportSignatureModal) reportSignatureModal.hide();
-                    const params = new URLSearchParams(window.location.search);
-                    params.set('auto_print', '1');
-                    window.open('reports_print.php?' + params.toString(), '_blank');
+                    openReportsPrintWindow();
                 })
                 .catch(err => {
                     alert(err.message || 'Unable to continue printing.');
@@ -1190,7 +1273,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             currentPreviewEvalId = parseInt(btn.dataset.evalId || '0', 10) || 0;
             const focus = (btn.dataset.observationFocus || '').trim();
             const focusHtml = focus
-                ? focus.split(',').map(item => `<div>${escapeHtml(item.trim())}</div>`).join('')
+                ? focus.split(/\s*;\s*/).map(item => `<div>${escapeHtml(item.trim())}</div>`).join('')
                 : '<div class="text-muted">N/A</div>';
             const dayTime = (btn.dataset.dayTime || '').replace(/\s+/g, ' ').trim();
             currentPreviewData = {
@@ -1435,7 +1518,15 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                 </div>
                 <div class="modal-body" style="max-height:72vh; overflow-y:auto;">
                     <div class="table-responsive">
-                        <table class="table table-bordered align-middle mb-0">
+                        <table class="table table-bordered align-middle mb-0 preview-observation-table">
+                            <colgroup>
+                                <col class="col-focus">
+                                <col class="col-date">
+                                <col class="col-time">
+                                <col class="col-area">
+                                <col class="col-subject">
+                                <col class="col-room">
+                            </colgroup>
                             <thead class="table-dark">
                                 <tr>
                                     <th>Focus of Observation</th>
@@ -1475,7 +1566,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-primary" onclick="openPrintReport()">
+                    <button type="button" class="btn btn-primary" onclick="openPrintReport('preview')">
                         <i class="fas fa-print me-1"></i>Print Report
                     </button>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>

@@ -151,6 +151,7 @@ try {
 $academic_year = trim((string)($_GET['academic_year'] ?? ''));
 $semester = trim((string)($_GET['semester'] ?? ''));
 $teacher_id = trim((string)($_GET['teacher_id'] ?? ''));
+$selected_evaluation_id = (int)($_GET['evaluation_id'] ?? 0);
 
 $academic_year_label = ($academic_year !== '') ? $academic_year : 'All';
 $semester_label = ($semester !== '') ? $semester : 'All';
@@ -166,6 +167,41 @@ foreach ($available_teachers as $teacher_option) {
 $report_department = $raw_department;
 $evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', '', null, $report_scope_observer_id);
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+if ($selected_evaluation_id > 0 && !empty($evaluations)) {
+    $selectedEvaluation = null;
+    foreach ($evaluations as $evaluationRow) {
+        if ((int)($evaluationRow['id'] ?? 0) === $selected_evaluation_id) {
+            $selectedEvaluation = $evaluationRow;
+            break;
+        }
+    }
+
+    if ($selectedEvaluation === null) {
+        $evaluations = [];
+    } else {
+        $selectedTeacherId = (int)($selectedEvaluation['teacher_id'] ?? 0);
+        $selectedAcademicYear = trim((string)($selectedEvaluation['academic_year'] ?? ''));
+        $selectedSemester = trim((string)($selectedEvaluation['semester'] ?? ''));
+        $selectedDate = date('Y-m-d', strtotime((string)($selectedEvaluation['observation_date'] ?? '')));
+        $selectedTime = trim((string)($selectedEvaluation['observation_time'] ?? ''));
+
+        $evaluations = array_values(array_filter($evaluations, static function(array $evaluationRow) use (
+            $selectedTeacherId,
+            $selectedAcademicYear,
+            $selectedSemester,
+            $selectedDate,
+            $selectedTime
+        ): bool {
+            $rowDate = date('Y-m-d', strtotime((string)($evaluationRow['observation_date'] ?? '')));
+            return (int)($evaluationRow['teacher_id'] ?? 0) === $selectedTeacherId
+                && trim((string)($evaluationRow['academic_year'] ?? '')) === $selectedAcademicYear
+                && trim((string)($evaluationRow['semester'] ?? '')) === $selectedSemester
+                && $rowDate === $selectedDate
+                && trim((string)($evaluationRow['observation_time'] ?? '')) === $selectedTime;
+        }));
+    }
+}
 
 $format_day_time = static function(array $eval): string {
     $obsDate = trim((string)($eval['observation_date'] ?? ''));
@@ -267,7 +303,7 @@ foreach ($evaluations as $evaluationRow) {
                 direction: ltr !important;
             }
             body { background: #fff; padding: 0; margin: 0; }
-            .print-page { width: 100%; max-width: 100%; box-shadow: none; padding: 0; margin: 0; }
+            .print-page { width: 100%; max-width: 100%; box-shadow: none; padding: 0; margin: 0; overflow: visible; }
         }
         .print-header {
             padding: 8px 0 10px;
@@ -315,6 +351,7 @@ foreach ($evaluations as $evaluationRow) {
             width: 100%;
             border-collapse: collapse;
             table-layout: fixed;
+            page-break-inside: auto;
         }
         .report-table col.col-date { width: 7%; }
         .report-table col.col-teacher { width: 9%; }
@@ -335,9 +372,9 @@ foreach ($evaluations as $evaluationRow) {
             text-align: left;
         }
         .report-table td {
-            font-size: 10px;
+            font-size: 8.5px;
             font-weight: 400 !important;
-            line-height: 1.4;
+            line-height: 1.25;
             word-break: break-word;
             overflow-wrap: anywhere;
             padding: 3px 4px;
@@ -348,13 +385,34 @@ foreach ($evaluations as $evaluationRow) {
         }
         .report-table th:first-child,
         .report-table td:first-child {
-            font-size: 9.5px;
+            font-size: 8px;
             word-break: normal;
             overflow-wrap: normal;
         }
+        .report-table thead {
+            display: table-header-group;
+        }
+        .report-table tbody {
+            display: table-row-group;
+        }
+        .report-table tr {
+            page-break-inside: avoid;
+            break-inside: avoid;
+            break-inside: avoid-page;
+            page-break-after: auto;
+        }
+        .report-table th,
+        .report-table td,
+        .observation-notes,
+        .observation-notes li,
+        .ratings-cell {
+            page-break-inside: avoid;
+            break-inside: avoid;
+            break-inside: avoid-page;
+        }
         .observation-notes {
-            font-size: 10px;
-            line-height: 1.4;
+            font-size: 8.5px;
+            line-height: 1.25;
             font-weight: 400 !important;
             text-rendering: optimizeLegibility;
         }

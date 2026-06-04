@@ -44,9 +44,34 @@ function defaultIsoIndicators(): array {
     ];
 }
 
+function defaultPeacIndicators(): array {
+    return [
+        'teacher_actions' => [
+            'The teacher communicates clear expectations of student performance in line with the unit standards and competencies.',
+            'The teacher utilizes various learning materials, resources and strategies to enable all students to learn and achieve the unit standards and competencies and learning goals.',
+            "The teacher monitors and checks on students' learning and attainment of the unit standards and competencies by conducting varied forms of assessments during class discussion.",
+            'The teacher provides appropriate feedback or interventions to enable students in attaining the unit standards and competencies.',
+            'The teacher manages the classroom environment and time in a way that supports student learning and the achievement of the unit standards and competencies.',
+            "The teacher processes students' understanding by asking clarifying or critical thinking questions related to the unit standards and competencies."
+        ],
+        'student_learning_actions' => [
+            'The students are active and engaged with the different learning tasks aimed at accomplishing the unit standards and competencies.',
+            'The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.',
+            'The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.',
+            'The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.',
+            'The students are able to explain how their ideas, outputs or performances accomplish the unit standards and competencies.',
+            'The students, when encouraged or on their own, ask questions to clarify or deepen their understanding of the unit standards and competencies.',
+            'The students are able to relate or transfer their learning to daily life and real world situations.',
+            'The students are able to integrate 21st century skills in their achievement of the unit standards and competencies.',
+            "The students are able to reflect on and connect their learning with the school's PVMGO."
+        ]
+    ];
+}
+
 // Fetch form settings
 $formSettings = [];
 $isoIndicators = defaultIsoIndicators();
+$peacIndicators = defaultPeacIndicators();
 try {
     $fsStmt = $db->query("SELECT setting_key, setting_value FROM form_settings");
     while ($row = $fsStmt->fetch(PDO::FETCH_ASSOC)) {
@@ -58,17 +83,28 @@ try {
 
 try {
     $isoStmt = $db->prepare("SELECT category, criterion_text FROM evaluation_criteria
-                             WHERE category IN ('communications','management','assessment')
+                             WHERE category IN ('communications','management','assessment','teacher_actions','student_learning_actions')
                              ORDER BY category, criterion_index ASC");
     $isoStmt->execute();
-    $tmp = ['communications' => [], 'management' => [], 'assessment' => []];
+    $tmp = [
+        'communications' => [],
+        'management' => [],
+        'assessment' => [],
+        'teacher_actions' => [],
+        'student_learning_actions' => []
+    ];
     while ($row = $isoStmt->fetch(PDO::FETCH_ASSOC)) {
         $cat = (string)($row['category'] ?? '');
         $txt = trim((string)($row['criterion_text'] ?? ''));
         if (isset($tmp[$cat]) && $txt !== '') $tmp[$cat][] = $txt;
     }
     foreach ($tmp as $cat => $items) {
-        if (!empty($items)) $isoIndicators[$cat] = $items;
+        if (empty($items)) continue;
+        if (isset($isoIndicators[$cat])) {
+            $isoIndicators[$cat] = $items;
+        } elseif (isset($peacIndicators[$cat])) {
+            $peacIndicators[$cat] = $items;
+        }
     }
 } catch (PDOException $e) {
     // fallback to defaults
@@ -80,8 +116,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ok = true;
 
     $postedIndicators = [];
-    foreach (['communications', 'management', 'assessment'] as $cat) {
-        $rows = $_POST['iso_' . $cat . '_rows'] ?? [];
+    foreach (['communications', 'management', 'assessment', 'teacher_actions', 'student_learning_actions'] as $cat) {
+        $prefix = isset($isoIndicators[$cat]) ? 'iso_' : 'peac_';
+        $rows = $_POST[$prefix . $cat . '_rows'] ?? [];
         if (!is_array($rows)) $rows = [];
         $clean = [];
         foreach ($rows as $line) {
@@ -95,7 +132,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$ok) {
-        $_SESSION['error'] = "Each ISO category must have at least one indicator.";
+        $_SESSION['error'] = "Each ISO and PEAC category must have at least one indicator.";
         header("Location: form_settings.php");
         exit();
     }
@@ -108,7 +145,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $updateStmt->execute([':key' => $f, ':val' => $val, ':val2' => $val]);
         }
 
-        $delStmt = $db->prepare("DELETE FROM evaluation_criteria WHERE category IN ('communications','management','assessment')");
+        $delStmt = $db->prepare("DELETE FROM evaluation_criteria WHERE category IN ('communications','management','assessment','teacher_actions','student_learning_actions')");
         $delStmt->execute();
         $insStmt = $db->prepare("INSERT INTO evaluation_criteria (category, criterion_index, criterion_text)
                                  VALUES (:category, :idx, :txt)");
@@ -127,7 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $ok = false;
     }
 
-    $_SESSION[$ok ? 'success' : 'error'] = $ok ? "Form settings and ISO indicators updated successfully." : "Failed to update form settings.";
+    $_SESSION[$ok ? 'success' : 'error'] = $ok ? "Form settings, ISO indicators, and PEAC factors updated successfully." : "Failed to update form settings.";
     header("Location: form_settings.php");
     exit();
 }
@@ -181,81 +218,128 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <h5 class="mb-0"><i class="fas fa-file-alt me-2"></i>Evaluation Form Settings</h5>
                 </div>
                 <div class="card-body">
-                    <p class="text-muted mb-3">These values appear on the Classroom Evaluation Form header.</p>
                     <form method="POST" action="">
-                        <div class="mb-3">
-                            <label for="form_code_no" class="form-label fw-bold">Form Code No.</label>
-                            <input type="text" class="form-control" id="form_code_no" name="form_code_no" value="<?php echo htmlspecialchars($formSettings['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04'); ?>" required>
+                        <div class="d-flex gap-2 mb-3">
+                            <button type="button" class="btn btn-primary" id="showIsoSettingsBtn" onclick="showFormTypeSettings('iso')">
+                                <i class="fas fa-file-alt me-1"></i>ISO Dynamic Form
+                            </button>
+                            <button type="button" class="btn btn-outline-primary" id="showPeacSettingsBtn" onclick="showFormTypeSettings('peac')">
+                                <i class="fas fa-clipboard-check me-1"></i>PEAC Dynamic Form
+                            </button>
                         </div>
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="issue_status" class="form-label fw-bold">Issue Status</label>
-                                <input type="text" class="form-control" id="issue_status" name="issue_status" value="<?php echo htmlspecialchars($formSettings['issue_status'] ?? '02'); ?>" required>
+
+                        <div id="isoSettingsSection">
+                            <p class="text-muted mb-3">These values appear only on the ISO Classroom Evaluation Form header.</p>
+                            <div class="mb-3">
+                                <label for="form_code_no" class="form-label fw-bold">Form Code No.</label>
+                                <input type="text" class="form-control" id="form_code_no" name="form_code_no" value="<?php echo htmlspecialchars($formSettings['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04'); ?>" required>
                             </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="revision_no" class="form-label fw-bold">Revision No.</label>
-                                <input type="text" class="form-control" id="revision_no" name="revision_no" value="<?php echo htmlspecialchars($formSettings['revision_no'] ?? '02'); ?>" required>
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label for="issue_status" class="form-label fw-bold">Issue Status</label>
+                                    <input type="text" class="form-control" id="issue_status" name="issue_status" value="<?php echo htmlspecialchars($formSettings['issue_status'] ?? '02'); ?>" required>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label for="revision_no" class="form-label fw-bold">Revision No.</label>
+                                    <input type="text" class="form-control" id="revision_no" name="revision_no" value="<?php echo htmlspecialchars($formSettings['revision_no'] ?? '02'); ?>" required>
+                                </div>
                             </div>
-                        </div>
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label for="date_effective" class="form-label fw-bold">Date Effective</label>
-                                <input type="text" class="form-control" id="date_effective" name="date_effective" value="<?php echo htmlspecialchars($formSettings['date_effective'] ?? '13 September 2023'); ?>" required>
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label for="date_effective" class="form-label fw-bold">Date Effective</label>
+                                    <input type="text" class="form-control" id="date_effective" name="date_effective" value="<?php echo htmlspecialchars($formSettings['date_effective'] ?? '13 September 2023'); ?>" required>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label for="approved_by" class="form-label fw-bold">Approved By</label>
+                                    <input type="text" class="form-control" id="approved_by" name="approved_by" value="<?php echo htmlspecialchars($formSettings['approved_by'] ?? 'President'); ?>" required>
+                                </div>
                             </div>
-                            <div class="col-md-6 mb-3">
-                                <label for="approved_by" class="form-label fw-bold">Approved By</label>
-                                <input type="text" class="form-control" id="approved_by" name="approved_by" value="<?php echo htmlspecialchars($formSettings['approved_by'] ?? 'President'); ?>" required>
+                            <hr class="my-4">
+                            <h6 class="fw-bold mb-3">ISO Indicators (Dynamic)</h6>
+                            <p class="text-muted small">Edit indicators per row. These will be used only in the ISO evaluation form.</p>
+
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Communications Indicators</label>
+                                <div id="communicationsRows" class="indicator-rows">
+                                    <?php foreach (($isoIndicators['communications'] ?? []) as $item): ?>
+                                        <div class="input-group mb-2">
+                                            <span class="input-group-text">-</span>
+                                            <input type="text" class="form-control" name="iso_communications_rows[]" value="<?php echo htmlspecialchars($item); ?>" required>
+                                            <button type="button" class="btn btn-outline-danger" onclick="removeIndicatorRow(this)"><i class="fas fa-times"></i></button>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="addIndicatorRow('communicationsRows','iso_communications_rows[]')">
+                                    <i class="fas fa-plus me-1"></i>Add Row
+                                </button>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Management Indicators</label>
+                                <div id="managementRows" class="indicator-rows">
+                                    <?php foreach (($isoIndicators['management'] ?? []) as $item): ?>
+                                        <div class="input-group mb-2">
+                                            <span class="input-group-text">-</span>
+                                            <input type="text" class="form-control" name="iso_management_rows[]" value="<?php echo htmlspecialchars($item); ?>" required>
+                                            <button type="button" class="btn btn-outline-danger" onclick="removeIndicatorRow(this)"><i class="fas fa-times"></i></button>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="addIndicatorRow('managementRows','iso_management_rows[]')">
+                                    <i class="fas fa-plus me-1"></i>Add Row
+                                </button>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Assessment Indicators</label>
+                                <div id="assessmentRows" class="indicator-rows">
+                                    <?php foreach (($isoIndicators['assessment'] ?? []) as $item): ?>
+                                        <div class="input-group mb-2">
+                                            <span class="input-group-text">-</span>
+                                            <input type="text" class="form-control" name="iso_assessment_rows[]" value="<?php echo htmlspecialchars($item); ?>" required>
+                                            <button type="button" class="btn btn-outline-danger" onclick="removeIndicatorRow(this)"><i class="fas fa-times"></i></button>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="addIndicatorRow('assessmentRows','iso_assessment_rows[]')">
+                                    <i class="fas fa-plus me-1"></i>Add Row
+                                </button>
                             </div>
                         </div>
 
-                        <hr class="my-4">
-                        <h6 class="fw-bold mb-3">ISO Indicators (Dynamic)</h6>
-                        <p class="text-muted small">Edit indicators per row (one sentence each). These will be used in the ISO evaluation form.</p>
+                        <div id="peacSettingsSection" style="display:none;">
+                        <h6 class="fw-bold mb-3">PEAC Factors / Indicators (Dynamic)</h6>
+                        <p class="text-muted small">Edit PEAC factors per row. These will be used only in the PEAC evaluation form.</p>
 
                         <div class="mb-3">
-                            <label class="form-label fw-bold">Communications Indicators</label>
-                            <div id="communicationsRows" class="indicator-rows">
-                                <?php foreach (($isoIndicators['communications'] ?? []) as $item): ?>
+                            <label class="form-label fw-bold">Teacher Actions Factors</label>
+                            <div id="teacherActionsRows" class="indicator-rows">
+                                <?php foreach (($peacIndicators['teacher_actions'] ?? []) as $item): ?>
                                     <div class="input-group mb-2">
                                         <span class="input-group-text">-</span>
-                                        <input type="text" class="form-control" name="iso_communications_rows[]" value="<?php echo htmlspecialchars($item); ?>" required>
+                                        <input type="text" class="form-control" name="peac_teacher_actions_rows[]" value="<?php echo htmlspecialchars($item); ?>" required>
                                         <button type="button" class="btn btn-outline-danger" onclick="removeIndicatorRow(this)"><i class="fas fa-times"></i></button>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
-                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addIndicatorRow('communicationsRows','iso_communications_rows[]')">
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addIndicatorRow('teacherActionsRows','peac_teacher_actions_rows[]')">
                                 <i class="fas fa-plus me-1"></i>Add Row
                             </button>
                         </div>
+
                         <div class="mb-3">
-                            <label class="form-label fw-bold">Management Indicators</label>
-                            <div id="managementRows" class="indicator-rows">
-                                <?php foreach (($isoIndicators['management'] ?? []) as $item): ?>
+                            <label class="form-label fw-bold">Student Learning Actions Factors</label>
+                            <div id="studentLearningActionsRows" class="indicator-rows">
+                                <?php foreach (($peacIndicators['student_learning_actions'] ?? []) as $item): ?>
                                     <div class="input-group mb-2">
                                         <span class="input-group-text">-</span>
-                                        <input type="text" class="form-control" name="iso_management_rows[]" value="<?php echo htmlspecialchars($item); ?>" required>
+                                        <input type="text" class="form-control" name="peac_student_learning_actions_rows[]" value="<?php echo htmlspecialchars($item); ?>" required>
                                         <button type="button" class="btn btn-outline-danger" onclick="removeIndicatorRow(this)"><i class="fas fa-times"></i></button>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
-                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addIndicatorRow('managementRows','iso_management_rows[]')">
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addIndicatorRow('studentLearningActionsRows','peac_student_learning_actions_rows[]')">
                                 <i class="fas fa-plus me-1"></i>Add Row
                             </button>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label fw-bold">Assessment Indicators</label>
-                            <div id="assessmentRows" class="indicator-rows">
-                                <?php foreach (($isoIndicators['assessment'] ?? []) as $item): ?>
-                                    <div class="input-group mb-2">
-                                        <span class="input-group-text">-</span>
-                                        <input type="text" class="form-control" name="iso_assessment_rows[]" value="<?php echo htmlspecialchars($item); ?>" required>
-                                        <button type="button" class="btn btn-outline-danger" onclick="removeIndicatorRow(this)"><i class="fas fa-times"></i></button>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addIndicatorRow('assessmentRows','iso_assessment_rows[]')">
-                                <i class="fas fa-plus me-1"></i>Add Row
-                            </button>
                         </div>
 
                         <button type="submit" class="btn btn-primary">
@@ -295,6 +379,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 return;
             }
             row.remove();
+        }
+
+        function showFormTypeSettings(type) {
+            const isoSection = document.getElementById('isoSettingsSection');
+            const peacSection = document.getElementById('peacSettingsSection');
+            const isoBtn = document.getElementById('showIsoSettingsBtn');
+            const peacBtn = document.getElementById('showPeacSettingsBtn');
+            const showPeac = type === 'peac';
+            if (isoSection) isoSection.style.display = showPeac ? 'none' : '';
+            if (peacSection) peacSection.style.display = showPeac ? '' : 'none';
+            if (isoBtn) {
+                isoBtn.classList.toggle('btn-primary', !showPeac);
+                isoBtn.classList.toggle('btn-outline-primary', showPeac);
+            }
+            if (peacBtn) {
+                peacBtn.classList.toggle('btn-primary', showPeac);
+                peacBtn.classList.toggle('btn-outline-primary', !showPeac);
+            }
         }
     </script>
 </body>

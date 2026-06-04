@@ -14,6 +14,33 @@ require_once '../includes/mailer.php';
 $database = new Database();
 $db = $database->getConnection();
 
+function formatFocusItems($focusRaw, array $labels) {
+    $focusRaw = trim((string)$focusRaw);
+    if ($focusRaw === '') return [];
+
+    $decoded = json_decode($focusRaw, true);
+    if (is_string($decoded)) {
+        $decodedAgain = json_decode($decoded, true);
+        $decoded = is_array($decodedAgain) ? $decodedAgain : $decoded;
+    }
+
+    if (is_array($decoded)) {
+        $items = $decoded;
+    } else {
+        $clean = str_replace(['[', ']', '"', "'"], '', $focusRaw);
+        $items = preg_split('/\s*,\s*|\r\n|\r|\n/', $clean);
+    }
+
+    $display = [];
+    foreach ($items as $item) {
+        $key = trim((string)$item);
+        if ($key === '') continue;
+        $display[] = $labels[$key] ?? $key;
+    }
+
+    return array_values(array_unique($display));
+}
+
 $teacher_id = $_SESSION['teacher_id'] ?? null;
 
 // If teacher_id not in session, try to resolve it now (e.g. teacher record linked after login)
@@ -75,6 +102,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $signature_data = null;
         }
         $signed_count = 0;
+        $updated_count = 0;
         $signed_eval_ids = [];
         $has_upcoming = false;
         foreach ($signed_items as $item) {
@@ -160,7 +188,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     ':eid' => $eval_id
                 ]);
             }
-            if ($check->rowCount() === 0) {
+            $existing_ack_id = (int)($check->fetchColumn() ?: 0);
+            if ($existing_ack_id === 0) {
                 $ins = $db->prepare("INSERT INTO observation_plan_acknowledgments (teacher_id, academic_year, semester, department, evaluation_id, acknowledged_at, signature) VALUES (:tid, :ay, :sem, :dept, :eid, NOW(), :sig)");
                 $ins->execute([':tid' => $teacher_id, ':ay' => $ack_academic_year, ':sem' => $ack_semester, ':dept' => $sign_dept, ':eid' => $eval_id, ':sig' => $signature_data]);
                 $signed_count++;
@@ -169,11 +198,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 } else {
                     $has_upcoming = true;
                 }
+            } elseif ($signature_data !== null) {
+                $upd = $db->prepare("UPDATE observation_plan_acknowledgments
+                                     SET signature = :sig,
+                                         acknowledged_at = NOW(),
+                                         department = COALESCE(:dept, department)
+                                     WHERE id = :id");
+                $upd->execute([
+                    ':sig' => $signature_data,
+                    ':dept' => $sign_dept,
+                    ':id' => $existing_ack_id
+                ]);
+                $updated_count++;
+                if ($eval_id !== null) {
+                    $signed_eval_ids[] = $eval_id;
+                } else {
+                    $has_upcoming = true;
+                }
             }
             }
         }
-        if ($signed_count > 0) {
-            $success_message = "Successfully signed {$signed_count} observation schedule(s).";
+        if (($signed_count + $updated_count) > 0) {
+            $success_message = "Successfully signed " . ($signed_count + $updated_count) . " observation schedule(s).";
             // Determine departments of signed schedules
             $signed_depts = [];
             if (!empty($signed_eval_ids)) {
@@ -191,9 +237,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $pd = $pdStmt->fetchColumn();
                 if (!empty($pd)) $signed_depts[] = $pd;
             }
-            // Notify evaluators in those specific departments
-            require_once __DIR__ . '/../includes/mailer.php';
-            notifyObservationPlanSigned($db, $teacher_id, $_SESSION['name'] ?? 'Teacher', $signed_depts);
         } else {
             $success_message = "Selected schedules were already signed.";
         }
@@ -680,9 +723,6 @@ if (!empty($filter_status)) {
         $show_upcoming = false;
     } elseif ($filter_status === 'upcoming') {
         $eval_groups = []; // hide completed, only show upcoming
-    } elseif ($filter_status === 'signed') {
-        $eval_groups = []; // hide completed evals
-        if (!isset($signed_map['upcoming'])) $show_upcoming = false; // only show if signed
     } elseif ($filter_status === 'observer_unbalanced') {
         $eval_groups = array_filter($eval_groups, function($group) {
             foreach ($group as $row) {
@@ -1025,7 +1065,6 @@ try {
                                 <option value="" <?php echo $filter_status === '' ? 'selected' : ''; ?>>All Status</option>
                                 <option value="upcoming" <?php echo $filter_status === 'upcoming' ? 'selected' : ''; ?>>Upcoming</option>
                                 <option value="completed" <?php echo $filter_status === 'completed' ? 'selected' : ''; ?>>Completed</option>
-                                <option value="signed" <?php echo $filter_status === 'signed' ? 'selected' : ''; ?>>Signed</option>
                                 <option value="observer_unbalanced" <?php echo $filter_status === 'observer_unbalanced' ? 'selected' : ''; ?>>Observer Imbalance</option>
                             </select>
                         </div>
@@ -1147,9 +1186,7 @@ try {
                                         return $n !== '' && $n !== trim((string)$self_name);
                                     }));
 
-                                    $focus_arr = [];
-                                    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-                                    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
+                                    $focus_display = formatFocusItems($focus_raw, $focus_labels);
 
                                     // Status and first-column control for this group
                                     $completed_evaluators = [];
@@ -1313,8 +1350,6 @@ try {
                                 <td class="cell-status">
                                     <?php if ($group_observer_unbalanced): ?>
                                         <span class="badge bg-danger">Observer Imbalance</span>
-                                    <?php elseif ($row_is_signed): ?>
-                                        <span class="badge bg-success">Signed</span>
                                     <?php elseif ($row_is_done): ?>
                                         <span class="badge bg-success">Conducted</span>
                                     <?php else: ?>
@@ -1327,9 +1362,7 @@ try {
                             <?php if ($show_upcoming): ?>
                             <?php
                                 $focus_raw = $teacher_data['evaluation_focus'] ?? '';
-                                $focus_arr = [];
-                                if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-                                $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
+                                $focus_display = formatFocusItems($focus_raw, $focus_labels);
                                 $ts = strtotime($teacher_data['evaluation_schedule']);
                                 $row_date = date('M d, Y', $ts);
                                 $row_day_time = date('D', $ts) . '<br>' . date('g:i A', $ts);
@@ -1384,11 +1417,7 @@ try {
                                     <?php endforeach; ?>
                                 </td>
                                 <td class="cell-status">
-                                    <?php if ($upcoming_signed): ?>
-                                        <span class="badge bg-success">Signed</span>
-                                    <?php else: ?>
-                                        <span class="badge bg-info">In Progress</span>
-                                    <?php endif; ?>
+                                    <span class="badge bg-info">In Progress</span>
                                 </td>
                             </tr>
                             <?php endif; ?>
