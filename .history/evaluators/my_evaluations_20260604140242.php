@@ -463,22 +463,9 @@ if ($teacher_data) {
                             </div>
                             <div class="col-md-4 text-md-end">
                                 <?php if($eval['status'] === 'completed'): ?>
-                                    <?php $hasSigned = !empty($eval['rater_signature']); ?>
-                                    <div class="d-flex gap-2 justify-content-md-end align-items-center flex-wrap">
-                                        <a href="view_my_evaluation.php?eval_id=<?php echo $eval['id']; ?>" class="btn-view">
-                                            <i class="fas fa-eye me-2"></i>View
-                                        </a>
-                                        <?php if(!$hasSigned): ?>
-                                        <button type="button" class="btn-sign" data-bs-toggle="modal" data-bs-target="#signModal" onclick="prepareSignModal(<?php echo $eval['id']; ?>)">
-                                            <i class="fas fa-pen me-1"></i>Sign
-                                            <span class="sign-badge">!</span>
-                                        </button>
-                                        <?php else: ?>
-                                        <span class="badge-status badge-completed">
-                                            <i class="fas fa-check me-1"></i>Signed
-                                        </span>
-                                        <?php endif; ?>
-                                    </div>
+                                <a href="view_my_evaluation.php?eval_id=<?php echo $eval['id']; ?>" class="btn-view">
+                                    <i class="fas fa-eye me-2"></i>View
+                                </a>
                                 <?php else: ?>
                                 <span class="text-muted">
                                     <i class="fas fa-hourglass-half me-2"></i>Awaiting Completion
@@ -500,54 +487,6 @@ if ($teacher_data) {
             <?php endif; ?>
 
         </div>
-        </div>
-    </div>
-
-    <!-- Sign Modal -->
-    <div class="modal fade" id="signModal" tabindex="-1" aria-labelledby="signModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title" id="signModalLabel">
-                        <i class="fas fa-pen me-2"></i>Sign Evaluation
-                    </h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label fw-semibold">Printed Name</label>
-                        <input type="text" class="form-control" id="signatureName" value="<?php echo htmlspecialchars($_SESSION['name']); ?>" readonly>
-                    </div>
-                    
-                    <div class="mb-3">
-                        <label class="form-label fw-semibold">Signature</label>
-                        <p class="form-text text-muted">Please sign below using your mouse or touchpad. Ensure your entire signature fits within the box.</p>
-                        <canvas id="signaturePad" class="signature-canvas" width="100" height="200"></canvas>
-                        <div class="form-text mt-2">
-                            <small><i class="fas fa-info-circle me-1"></i>Sign in the box above</small>
-                        </div>
-                    </div>
-
-                    <input type="hidden" id="evaluationId" value="">
-                    <input type="hidden" id="signatureData" value="">
-
-                    <div class="mb-3">
-                        <label class="form-label fw-semibold">Date</label>
-                        <input type="date" class="form-control" id="signatureDate" required>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" id="clearSignBtn">
-                        <i class="fas fa-eraser me-2"></i>Clear
-                    </button>
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                        <i class="fas fa-times me-2"></i>Cancel
-                    </button>
-                    <button type="button" class="btn btn-primary" id="submitSignBtn">
-                        <i class="fas fa-check me-2"></i>Sign & Submit
-                    </button>
-                </div>
-            </div>
         </div>
     </div>
 
@@ -609,157 +548,6 @@ if ($teacher_data) {
         // Initialize on page load
         updateMonths();
     })();
-
-    // Signature Canvas Functions
-    function createSignaturePad(canvas) {
-        const ctx = canvas.getContext('2d');
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.strokeStyle = '#000';
-
-        let drawing = false;
-        let hasInk = false;
-
-        function getPoint(evt) {
-            const rect = canvas.getBoundingClientRect();
-            const scaleX = canvas.width / rect.width;
-            const scaleY = canvas.height / rect.height;
-            return {
-                x: (evt.clientX - rect.left) * scaleX,
-                y: (evt.clientY - rect.top) * scaleY
-            };
-        }
-
-        function pointerDown(evt) {
-            evt.preventDefault();
-            drawing = true;
-            const p = getPoint(evt);
-            ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-        }
-
-        function pointerMove(evt) {
-            if (!drawing) return;
-            evt.preventDefault();
-            const p = getPoint(evt);
-            ctx.lineTo(p.x, p.y);
-            ctx.stroke();
-            hasInk = true;
-        }
-
-        function pointerUp(evt) {
-            if (!drawing) return;
-            evt.preventDefault();
-            drawing = false;
-        }
-
-        canvas.addEventListener('pointerdown', pointerDown);
-        canvas.addEventListener('pointermove', pointerMove);
-        canvas.addEventListener('pointerup', pointerUp);
-        canvas.addEventListener('pointercancel', pointerUp);
-        canvas.addEventListener('pointerleave', pointerUp);
-
-        return {
-            clear() {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                hasInk = false;
-            },
-            toDataUrl() {
-                if (!hasInk) return '';
-                try { return canvas.toDataURL('image/png'); } catch (e) { return ''; }
-            }
-        };
-    }
-
-    let signaturePad = null;
-
-    function prepareSignModal(evalId) {
-        document.getElementById('evaluationId').value = evalId;
-        
-        // Set today's date
-        const today = new Date().toISOString().split('T')[0];
-        document.getElementById('signatureDate').value = today;
-
-        // Initialize signature pad if not already done
-        if (!signaturePad) {
-            const canvas = document.getElementById('signaturePad');
-            canvas.width = canvas.offsetWidth;
-            signaturePad = createSignaturePad(canvas);
-        } else {
-            // Clear previous signature
-            signaturePad.clear();
-        }
-    }
-
-    // Clear signature button
-    document.getElementById('clearSignBtn')?.addEventListener('click', function() {
-        if (signaturePad) {
-            signaturePad.clear();
-        }
-    });
-
-    // Submit signature
-    document.getElementById('submitSignBtn')?.addEventListener('click', function() {
-        if (!signaturePad) {
-            alert('Signature pad not initialized');
-            return;
-        }
-
-        const signatureData = signaturePad.toDataUrl();
-        if (!signatureData) {
-            alert('Please sign the signature pad first.');
-            return;
-        }
-
-        const evalId = document.getElementById('evaluationId').value;
-        const signDate = document.getElementById('signatureDate').value;
-
-        if (!evalId || !signDate) {
-            alert('Missing required fields');
-            return;
-        }
-
-        // Show loading state
-        const btn = document.getElementById('submitSignBtn');
-        const originalHTML = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Submitting...';
-
-        // Send to backend
-        fetch('save_signature.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                evaluation_id: evalId,
-                signature: signatureData,
-                signature_date: signDate,
-                signer_name: document.getElementById('signatureName').value
-            })
-        })
-        .then(response => response.json())
-        .then(data => {
-            btn.disabled = false;
-            btn.innerHTML = originalHTML;
-
-            if (data.success) {
-                alert('Signature submitted successfully!');
-                // Close modal and refresh page
-                const modal = bootstrap.Modal.getInstance(document.getElementById('signModal'));
-                modal.hide();
-                location.reload();
-            } else {
-                alert('Error: ' + (data.message || 'Failed to save signature'));
-            }
-        })
-        .catch(error => {
-            btn.disabled = false;
-            btn.innerHTML = originalHTML;
-            alert('Error: ' + error.message);
-        });
-    });
     </script>
 </body>
 </html>

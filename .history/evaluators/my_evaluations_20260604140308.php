@@ -503,6 +503,8 @@ if ($teacher_data) {
         </div>
     </div>
 
+    <?php include '../includes/footer.php'; ?>
+
     <!-- Sign Modal -->
     <div class="modal fade" id="signModal" tabindex="-1" aria-labelledby="signModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg">
