@@ -117,6 +117,62 @@ function h($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 function ratingChecked($current, $value) { return ((string)$current === (string)$value) ? 'checked' : ''; }
 function avgOrZero($v) { return ($v === null || $v === '') ? 0 : (float)$v; }
 
+function defaultIsoPrintIndicators(): array {
+    return [
+        'communications' => [
+            'Uses an audible voice that can be heard at the back of the room.',
+            'Speaks fluently in the language of instruction.',
+            'Facilitates a dynamic discussion.',
+            'Uses engaging non-verbal cues (facial expression, gestures).',
+            'Uses words & expressions suited to the level of the students.',
+        ],
+        'management' => [
+            'The TILO (Topic Intended Learning Outcomes) are clearly presented.',
+            'Recall and connects previous lessons to the new lessons.',
+            'Uses varied and suitable teaching methods.',
+            'Presents lesson in an organized and logical sequence.',
+            'Uses examples and illustrations to clarify lessons.',
+            'Uses instructional materials/technology effectively.',
+            'Asks thought-provoking questions.',
+            'Encourages students to participate in the discussion.',
+            'Provides opportunities for collaborative/cooperative learning.',
+            'Maintains discipline and a learning-conducive environment.',
+            'Manages class time effectively.',
+            'Summarizes key points before ending the class.',
+        ],
+        'assessment' => [
+            'Construct test questions and activities that align to intended outcomes.',
+            'Uses assessment tool that relates specific course competencies stated in the syllabus.',
+            'Design test/quarter/assignments and other assessment tasks that are corrector-based.',
+            'Provides timely feedback to students on their performance.',
+            "Conducts normative assessment before evaluating and grading the learner's performance outcome.",
+            'Monitors the formative assessment results and find ways to ensure learning for the learners.',
+        ],
+    ];
+}
+
+$isoIndicators = defaultIsoPrintIndicators();
+try {
+    $criteriaStmt = $db->prepare("SELECT category, criterion_index, criterion_text
+                                  FROM evaluation_criteria
+                                  WHERE category IN ('communications','management','assessment')
+                                  ORDER BY category, criterion_index ASC");
+    $criteriaStmt->execute();
+    $tmpIndicators = ['communications' => [], 'management' => [], 'assessment' => []];
+    while ($row = $criteriaStmt->fetch(PDO::FETCH_ASSOC)) {
+        $category = trim((string)($row['category'] ?? ''));
+        $text = trim((string)($row['criterion_text'] ?? ''));
+        if (isset($tmpIndicators[$category]) && $text !== '') {
+            $tmpIndicators[$category][] = $text;
+        }
+    }
+    foreach ($tmpIndicators as $category => $items) {
+        if (!empty($items)) {
+            $isoIndicators[$category] = $items;
+        }
+    }
+} catch (PDOException $e) {}
+
 $communicationsAvg = avgOrZero($eval['communications_avg'] ?? 0);
 $managementAvg     = avgOrZero($eval['management_avg'] ?? 0);
 $assessmentAvg     = avgOrZero($eval['assessment_avg'] ?? 0);
@@ -346,41 +402,26 @@ $autoPrint = !empty($_GET['auto_print']);
 </div>
 
 <?php
-$commIndicators = [
-    "Uses an audible voice that can be heard at the back of the room.",
-    "Speaks fluently in the language of instruction.",
-    "Facilitates a dynamic discussion.",
-    "Uses engaging non-verbal cues (facial expression, gestures).",
-    "Uses words & expressions suited to the level of the students.",
-];
-$mgmtIndicators = [
-    "The TILO (Topic Intended Learning Outcomes) are clearly presented.",
-    "Recall and connects previous lessons to the new lessons.",
-    "The topic/lesson is introduced in an interesting & engaging way.",
-    "Uses current issues, real life & local examples to enrich class discussion.",
-    "Focuses class discussion on key concepts of the lesson.",
-    "Encourages active participation among students and ask questions about the topic.",
-    "Uses current instructional strategies and resources.",
-    "Designs teaching aids that facilitate understanding of key concepts.",
-    "Adapts teaching approach in the light of student feedback and reactions.",
-    "Aids students using thought provoking questions (Art of Questioning).",
-    "Integrate the institutional core values to the lessons.",
-    "Conduct the lesson using the principle of SMART",
-];
-$assIndicators = [
-    "Monitors students' understanding on key concepts discussed.",
-    "Uses assessment tool that relates specific course competencies stated in the syllabus.",
-    "Design test/quarter/assignments and other assessment tasks that are corrector-based.",
-    "Introduces varied activities that will answer the differentiated needs to the learners with varied learning style.",
-    "Conducts normative assessment before evaluating and grading the learner's performance outcome.",
-    "Monitors the formative assessment results and find ways to ensure learning for the learners.",
+$domains = [
+    ['title' => 'Communications Competence', 'key' => 'communications', 'indicators' => $isoIndicators['communications'], 'avg' => $communicationsAvg],
+    ['title' => 'Management and Presentation of the Lesson', 'key' => 'management', 'indicators' => $isoIndicators['management'], 'avg' => $managementAvg],
+    ['title' => 'Assessment of Students\' Learning', 'key' => 'assessment', 'indicators' => $isoIndicators['assessment'], 'avg' => $assessmentAvg],
 ];
 
-$domains = [
-    ['title' => 'Communications Competence', 'key' => 'communications', 'indicators' => $commIndicators, 'avg' => $communicationsAvg],
-    ['title' => 'Management and Presentation of the Lesson', 'key' => 'management', 'indicators' => $mgmtIndicators, 'avg' => $managementAvg],
-    ['title' => 'Assessment of Students\' Learning', 'key' => 'assessment', 'indicators' => $assIndicators, 'avg' => $assessmentAvg],
-];
+foreach ($domains as &$domain) {
+    $savedRows = $detailMap[$domain['key']] ?? [];
+    if (empty($savedRows)) continue;
+    ksort($savedRows);
+    $savedIndicators = [];
+    foreach ($savedRows as $idx => $savedRow) {
+        $savedText = trim((string)($savedRow['criterion_text'] ?? ''));
+        $savedIndicators[(int)$idx] = $savedText !== '' ? $savedText : ($domain['indicators'][(int)$idx] ?? '');
+    }
+    if (!empty($savedIndicators)) {
+        $domain['indicators'] = $savedIndicators;
+    }
+}
+unset($domain);
 
 foreach ($domains as $domain):
 ?>
@@ -424,7 +465,6 @@ foreach ($domains as $domain):
         <td style="padding: 6px 10px; text-align: left;">Total Average:<span class="avg-line"><?php echo number_format($overallAvg, 1); ?></span></td>
     </tr>
 </table>
-<div style="font-weight: 700; font-size: 10px; margin: 2px 0 4px; padding-left: 20px;">Interpretation: <?php echo h($interpretationText); ?></div>
 <div class="interpretation-box">
     <strong>Interpretation of Over-all Rating</strong>
     <table>

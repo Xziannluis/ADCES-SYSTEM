@@ -20,6 +20,33 @@ function normalizeSubjectDisplay($subject) {
     return trim((string)$s);
 }
 
+function formatFocusDisplay($focusRaw, array $labels) {
+    $focusRaw = trim((string)$focusRaw);
+    if ($focusRaw === '') return '';
+
+    $decoded = json_decode($focusRaw, true);
+    if (is_string($decoded)) {
+        $decodedAgain = json_decode($decoded, true);
+        $decoded = is_array($decodedAgain) ? $decodedAgain : $decoded;
+    }
+
+    if (is_array($decoded)) {
+        $items = $decoded;
+    } else {
+        $clean = str_replace(['[', ']', '"', "'"], '', $focusRaw);
+        $items = preg_split('/\s*,\s*|\r\n|\r|\n/', $clean);
+    }
+
+    $display = [];
+    foreach ($items as $item) {
+        $key = trim((string)$item);
+        if ($key === '') continue;
+        $display[] = $labels[$key] ?? $key;
+    }
+
+    return implode(', ', array_values(array_unique($display)));
+}
+
 $database = new Database();
 $db = $database->getConnection();
 $teacher = new Teacher($db);
@@ -484,9 +511,6 @@ foreach ($eval_teachers as $t) {
 
     // Use eval-level data for the evaluation row
     $focus_raw = $t['eval_focus'] ?? $t['evaluation_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
     $day_time = '';
     $sched_dt = $t['evaluation_schedule'] ?? '';
     $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
@@ -531,7 +555,7 @@ foreach ($eval_teachers as $t) {
     }
     $schedule_data[$row_key] = [
         'semester' => $t['eval_semester'] ?? $t['evaluation_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => $day_time,
         'subject_area' => $t['eval_subject_area'] ?? $t['evaluation_subject_area'] ?? '',
         'subject' => normalizeSubjectDisplay($t['subject_observed'] ?? $t['evaluation_subject'] ?? ''),
@@ -576,9 +600,6 @@ foreach ($eval_teachers as $t) {
     $eval_data[$sched_key] = ['date' => $sched_dt_key, 'done' => false, 'faculty_signature' => '', 'eval_id' => null, 'status' => 'scheduled'];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
 
     $ts = strtotime($sched_dt);
     $sched_dt_end = $t['evaluation_schedule_end'] ?? '';
@@ -588,7 +609,7 @@ foreach ($eval_teachers as $t) {
     }
     $schedule_data[$sched_key] = [
         'semester' => $t['evaluation_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => $sched_day_time,
         'subject_area' => $t['evaluation_subject_area'] ?? '',
         'subject' => normalizeSubjectDisplay($t['evaluation_subject'] ?? ''),
@@ -630,9 +651,6 @@ foreach ($scheduled_teachers as $t) {
     $eval_data[$tid] = ['date' => $sched_date, 'done' => false, 'faculty_signature' => '', 'eval_id' => null, 'status' => 'scheduled'];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
     $day_time = '';
     if (!empty($sched_dt)) { 
         $ts = strtotime($sched_dt);
@@ -649,7 +667,7 @@ foreach ($scheduled_teachers as $t) {
     }
     $schedule_data[$tid] = [
         'semester' => $t['evaluation_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => $day_time,
         'subject_area' => $t['evaluation_subject_area'] ?? '',
         'subject' => normalizeSubjectDisplay($t['evaluation_subject'] ?? ''),
@@ -760,11 +778,8 @@ if (!empty($filter_status)) {
     $teachers_list = array_values($teachers_list);
 }
 
-// Teacher signature in print comes from observation acknowledgments.
-// Primary match is evaluation_id; fallback is teacher+date slot.
+// Teacher signature in print comes from the exact observation acknowledgment row.
 $ack_eval_map = [];
-$ack_teacher_date_map = [];
-$ack_teacher_latest_map = [];
 try {
     $eval_ids_for_ack = [];
     foreach ($teachers_list as $tt) {
@@ -792,31 +807,6 @@ try {
         }
     }
 
-    // Fallback map for legacy/null/relinked evaluation_id cases in print.
-    $ack_slot_sql = "SELECT a.teacher_id, DATE(COALESCE(e.observation_date, a.acknowledged_at)) AS slot_date,
-                            a.signature, a.acknowledged_at, a.id
-                     FROM observation_plan_acknowledgments a
-                     LEFT JOIN evaluations e ON e.id = a.evaluation_id
-                     WHERE a.academic_year = ?
-                       AND a.semester IN (?, ?)
-                     ORDER BY a.acknowledged_at DESC, a.id DESC";
-    $ack_slot_stmt = $db->prepare($ack_slot_sql);
-    $ack_slot_stmt->execute([$academic_year, $semester, $sem_alt]);
-    while ($ack = $ack_slot_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $teacher_id = (int)($ack['teacher_id'] ?? 0);
-        $slot_date = trim((string)($ack['slot_date'] ?? ''));
-        $sig_val = trim((string)($ack['signature'] ?? ''));
-        if ($teacher_id <= 0 || $slot_date === '') {
-            continue;
-        }
-        $slot_key = $teacher_id . '|' . $slot_date;
-        if (!isset($ack_teacher_date_map[$slot_key])) {
-            $ack_teacher_date_map[$slot_key] = $sig_val;
-        }
-        if ($sig_val !== '' && !isset($ack_teacher_latest_map[$teacher_id])) {
-            $ack_teacher_latest_map[$teacher_id] = $sig_val;
-        }
-    }
 } catch (Exception $e) {}
 
 $dean_role_display = ucfirst(str_replace('_', ' ', $_SESSION['role']));
@@ -932,13 +922,24 @@ try {
             margin-top: 30px;
             font-size: 10px;
         }
-        .prepared-by .label { margin-bottom: 0; font-style: italic; }
+        .prepared-by-inner {
+            width: 180px;
+            text-align: left;
+        }
+        .prepared-by .label {
+            margin-bottom: 2px;
+            font-style: italic;
+            text-align: left;
+        }
+        .prepared-by-signature-stack {
+            display: inline-block;
+            text-align: center;
+        }
         .sig-img {
             display: block;
             max-height: 40px;
             max-width: 160px;
-            margin-top: 4px;
-            margin-bottom: -8px;
+            margin: 0 auto -6px;
         }
         .name-line {
             font-weight: 700;
@@ -1055,23 +1056,6 @@ try {
                             <?php 
                             $row_eval_id = (int)($eval_data[$rk]['eval_id'] ?? 0);
                             $ack_sig = ($row_eval_id > 0) ? trim((string)($ack_eval_map[$row_eval_id]['signature'] ?? '')) : '';
-                            if ($ack_sig === '') {
-                                $row_date_raw = $eval_data[$rk]['date'] ?? '';
-                                $row_date = !empty($row_date_raw) ? date('Y-m-d', strtotime($row_date_raw)) : '';
-                                $slot_key = ((int)$tid) . '|' . $row_date;
-                                $ack_sig = trim((string)($ack_teacher_date_map[$slot_key] ?? ''));
-                            }
-                            // Keep print consistent with report rows:
-                            // if acknowledgment signature is missing, fallback to
-                            // evaluation-row faculty signature for this slot.
-                            if ($ack_sig === '') {
-                                $ack_sig = trim((string)($eval_data[$rk]['faculty_signature'] ?? ''));
-                            }
-                            // Final fallback: latest teacher acknowledgment signature
-                            // (covers legacy rows where evaluation_id/date linkage differs).
-                            if ($ack_sig === '') {
-                                $ack_sig = trim((string)($ack_teacher_latest_map[(int)$tid] ?? ''));
-                            }
                             if ($ack_sig !== ''): ?>
                                 <img src="<?php echo htmlspecialchars($ack_sig); ?>" alt="Teacher Signature" style="max-height: 35px; max-width: 80px;">
                             <?php endif; ?>
@@ -1089,16 +1073,20 @@ try {
 
         <!-- Prepared By -->
         <div class="prepared-by">
-            <p class="label">Prepared by:</p>
-            <img
-                id="preparedBySignatureImage"
-                class="sig-img"
-                src="<?php echo !empty($dean_signature) ? htmlspecialchars($dean_signature) : ''; ?>"
-                alt="Signature"
-                style="<?php echo !empty($dean_signature) ? '' : 'display:none;'; ?>"
-            >
-            <p class="name-line"><?php echo htmlspecialchars(strtoupper($dean_name)); ?></p>
-            <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
+            <div class="prepared-by-inner">
+                <p class="label">Prepared by:</p>
+                <div class="prepared-by-signature-stack">
+                    <img
+                        id="preparedBySignatureImage"
+                        class="sig-img"
+                        src="<?php echo !empty($dean_signature) ? htmlspecialchars($dean_signature) : ''; ?>"
+                        alt="Signature"
+                        style="<?php echo !empty($dean_signature) ? '' : 'display:none;'; ?>"
+                    >
+                    <p class="name-line" id="preparedByPrintedNameLine"><?php echo htmlspecialchars(strtoupper($dean_name)); ?></p>
+                    <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1107,10 +1095,15 @@ try {
         const usePreparedSig = urlParams.get('prepared_sig') === '1';
         if (usePreparedSig) {
             const sig = sessionStorage.getItem('prepared_by_signature_data') || '';
+            const printedName = sessionStorage.getItem('prepared_by_printed_name') || '';
             const sigImg = document.getElementById('preparedBySignatureImage');
             if (sig && sigImg) {
                 sigImg.src = sig;
                 sigImg.style.display = 'block';
+            }
+            const printedNameLine = document.getElementById('preparedByPrintedNameLine');
+            if (printedName && printedNameLine) {
+                printedNameLine.textContent = printedName.toUpperCase();
             }
         }
         if (urlParams.get('auto_print') === '1') {

@@ -81,9 +81,9 @@ try {
     // keep defaults
 }
 
-// Note: expired schedules are NOT auto-cleared here.
-// Once the scheduled time passes, the evaluator can proceed to evaluate.
-// Schedules are cleared only after an evaluation is submitted.
+// Expired schedules are not auto-cleared here, but the evaluation window is closed.
+// Evaluators can proceed only within a complete schedule start/end window.
+// Schedules are cleared only after an evaluation is submitted or manually rescheduled.
 
 $hasTeacherDepartments = false;
 try {
@@ -262,36 +262,62 @@ $pendingScheduleStmt = null;
 $pendingScheduleAnyStmt = null;
 try {
     $pendingScheduleStmt = $db->prepare(
-        "SELECT id, observation_date, observation_time, observation_room, subject_area, subject_observed,
-                evaluation_focus, semester, evaluation_form_type, status
-         FROM evaluations
-         WHERE teacher_id = :tid
-           AND evaluator_id = :eid
-           AND observation_date IS NOT NULL
-           AND (
-                status IN ('draft','pending','observer_unbalanced')
-                OR status IS NULL
-                OR status = ''
-           )
-         ORDER BY observation_date ASC, COALESCE(observation_time, '00:00:00') ASC, id ASC"
-    );
-    $pendingScheduleAnyStmt = $db->prepare(
         "SELECT e.id, e.observation_date, e.observation_time, e.observation_room, e.subject_area, e.subject_observed,
-                e.evaluation_focus, e.semester, e.evaluation_form_type, e.status
+                e.evaluation_focus, e.semester, e.evaluation_form_type, e.status,
+                COALESCE(ts.schedule_end, ts_slot.schedule_end) AS schedule_end
          FROM evaluations e
-         INNER JOIN teachers t ON t.id = e.teacher_id
+         LEFT JOIN teacher_schedules ts ON ts.evaluation_id = e.id
+         LEFT JOIN teacher_schedules ts_slot ON ts_slot.teacher_id = e.teacher_id
+            AND DATE(ts_slot.schedule_start) = e.observation_date
+            AND DATE_FORMAT(ts_slot.schedule_start, '%H:%i') = (
+                CASE
+                    WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                    ELSE LEFT(TRIM(e.observation_time), 5)
+                END
+            )
          WHERE e.teacher_id = :tid
+           AND e.evaluator_id = :eid
            AND e.observation_date IS NOT NULL
            AND (
                 e.status IN ('draft','pending','observer_unbalanced')
                 OR e.status IS NULL
                 OR e.status = ''
            )
+         ORDER BY e.observation_date ASC, COALESCE(e.observation_time, '00:00:00') ASC, e.id ASC"
+    );
+    $pendingScheduleAnyStmt = $db->prepare(
+        "SELECT e.id, e.observation_date, e.observation_time, e.observation_room, e.subject_area, e.subject_observed,
+                e.evaluation_focus, e.semester, e.evaluation_form_type, e.status,
+                COALESCE(ts.schedule_end, ts_slot.schedule_end) AS schedule_end
+         FROM evaluations e
+         INNER JOIN teachers t ON t.id = e.teacher_id
+         LEFT JOIN teacher_schedules ts ON ts.evaluation_id = e.id
+         LEFT JOIN teacher_schedules ts_slot ON ts_slot.teacher_id = e.teacher_id
+            AND DATE(ts_slot.schedule_start) = e.observation_date
+            AND DATE_FORMAT(ts_slot.schedule_start, '%H:%i') = (
+                CASE
+                    WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                    ELSE LEFT(TRIM(e.observation_time), 5)
+                END
+            )
+          WHERE e.teacher_id = :tid
+            AND e.observation_date IS NOT NULL
            AND (
-                t.department = :dept
-                OR t.scheduled_department = :dept2
-                OR e.department = :dept3
+                e.status IN ('draft','pending','observer_unbalanced','completed')
+                OR e.status IS NULL
+                OR e.status = ''
            )
+            AND (
+                 t.department = :dept
+                 OR t.scheduled_department = :dept2
+                 OR e.department = :dept3
+                 OR EXISTS (
+                     SELECT 1
+                     FROM teacher_assignments ta
+                     WHERE ta.teacher_id = e.teacher_id
+                       AND ta.evaluator_id = :assigned_evaluator_id
+                 )
+            )
          ORDER BY e.observation_date ASC, COALESCE(e.observation_time, '00:00:00') ASC, e.id ASC"
     );
 } catch (Exception $e) {
@@ -375,20 +401,60 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     <?php if($teachers->rowCount() > 0): ?>
                     <?php
                         // Schedule balance check:
-                        // A slot is "balanced" only when it has at least one Dean/Principal
-                        // and at least one Coordinator observer row.
+                        // A slot is "balanced" when it has at least 2 active observer rows.
                         $schedule_balance_stmt = $db->prepare(
-                            "SELECT
-                                COUNT(DISTINCT e.evaluator_id) AS observer_count,
-                                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal') THEN 1 ELSE 0 END) AS has_head,
-                                MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('chairperson','subject_coordinator','grade_level_coordinator') THEN 1 ELSE 0 END) AS has_coordinator
-                             FROM evaluations e
-                             JOIN users u ON u.id = e.evaluator_id
-                             WHERE e.teacher_id = :tid
-                               AND e.observation_date = :obs_date
-                               AND COALESCE(DATE_FORMAT(e.observation_time, '%H:%i'), '00:00') = :obs_time
-                               AND (:balance_dept = '' OR e.department = :balance_dept_match)
-                               AND (e.status IS NULL OR e.status <> 'completed')"
+                            "SELECT GREATEST(
+                                (
+                                    SELECT COUNT(DISTINCT e.evaluator_id)
+                                    FROM evaluations e
+                                    WHERE e.teacher_id = :tid_eval
+                                      AND e.observation_date = :obs_date_eval
+                                      AND (
+                                           CASE
+                                               WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                               ELSE LEFT(TRIM(e.observation_time), 5)
+                                           END
+                                      ) = :obs_time_eval
+                                      AND (:balance_dept_eval = '' OR e.department = :balance_dept_match_eval)
+                                      AND (e.status IS NULL OR e.status NOT IN ('cancelled','canceled','rescheduled'))
+                                ),
+                                (
+                                    SELECT CASE WHEN EXISTS (
+                                        SELECT 1
+                                        FROM teacher_schedules ts
+                                        WHERE ts.teacher_id = :tid_sched
+                                          AND DATE(ts.schedule_start) = :obs_date_sched
+                                          AND DATE_FORMAT(ts.schedule_start, '%H:%i') = :obs_time_sched
+                                          AND (:balance_dept_sched = '' OR ts.scheduled_department = :balance_dept_match_sched)
+                                          AND ts.status = 'scheduled'
+                                    ) THEN (
+                                        SELECT COUNT(DISTINCT observer_id)
+                                        FROM (
+                                            SELECT u.id AS observer_id
+                                            FROM users u
+                                            WHERE u.status = 'active'
+                                              AND u.role IN ('dean','principal')
+                                              AND (:balance_dept_dean = '' OR u.department = :balance_dept_match_dean)
+                                            UNION
+                                            SELECT u.id AS observer_id
+                                            FROM teacher_assignments ta
+                                            JOIN users u ON u.id = ta.evaluator_id
+                                            WHERE ta.teacher_id = :tid_assign
+                                              AND u.status = 'active'
+                                              AND u.role IN ('chairperson','subject_coordinator','grade_level_coordinator')
+                                              AND (:balance_dept_coord = '' OR u.department = :balance_dept_match_coord)
+                                            UNION
+                                            SELECT u.id AS observer_id
+                                            FROM teacher_assignments ta
+                                            JOIN users u ON u.id = ta.evaluator_id
+                                            WHERE ta.teacher_id = :tid_pvp
+                                              AND ta.eval_id IS NOT NULL
+                                              AND u.status = 'active'
+                                              AND u.role IN ('president','vice_president')
+                                        ) required_observers
+                                    ) ELSE 0 END
+                                )
+                            ) AS observer_count"
                         );
                     ?>
                     <div class="list-group" id="teacherList">
@@ -460,15 +526,16 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 }
                             }
 
-                            // Dean/Principal fallback: if own evaluator-slot is missing,
-                            // use closest pending slot for this teacher in their department.
-                            if (!$effective_schedule_row && $is_dean_or_principal && $sched_for_this_dept && $pendingScheduleAnyStmt) {
+                            // Dean/Principal/Coordinator fallback: if own evaluator-slot is missing,
+                            // use closest pending slot for this teacher in their department or assignment.
+                            if (!$effective_schedule_row && ($is_dean_or_principal || $is_coordinator) && $sched_for_this_dept && $pendingScheduleAnyStmt) {
                                 try {
                                     $pendingScheduleAnyStmt->execute([
                                         ':tid' => (int)$teacher_row['id'],
                                         ':dept' => (string)$viewer_dept_eval,
                                         ':dept2' => (string)$viewer_dept_eval,
-                                        ':dept3' => (string)$viewer_dept_eval
+                                        ':dept3' => (string)$viewer_dept_eval,
+                                        ':assigned_evaluator_id' => (int)$_SESSION['user_id']
                                     ]);
                                     $anyRows = $pendingScheduleAnyStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
                                     if (!empty($anyRows)) {
@@ -520,6 +587,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 if (trim((string)($effective_schedule_row['evaluation_form_type'] ?? '')) !== '') {
                                     $teacher_row['evaluation_form_type'] = $effective_schedule_row['evaluation_form_type'];
                                 }
+                                if (trim((string)($effective_schedule_row['schedule_end'] ?? '')) !== '') {
+                                    $teacher_row['evaluation_schedule_end'] = $effective_schedule_row['schedule_end'];
+                                }
                             }
 
                             // Permanent guard:
@@ -539,6 +609,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                             $schedule_display = trim((string)$scheduleRaw);
                             $scheduleEndRawEffective = (string)($teacher_row['evaluation_schedule_end'] ?? '');
                             $schedule_block_message = 'No schedule is set. Please ask the dean/principal to set one first.';
+                            $schedule_is_complete = false;
+                            $schedule_window_closed = false;
 
                             if (!empty($scheduleRaw)) {
                                 try {
@@ -557,14 +629,21 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     if (!empty($scheduleEndRaw)) {
                                         $scheduleEnd = new DateTime($scheduleEndRaw, $timezone);
                                         $scheduleEnd->setTimezone($timezone);
+                                        $schedule_is_complete = true;
                                         if ($now > $scheduleEnd) {
                                             $schedule_ended = true;
                                         }
                                     }
                                     
-                                    if ($schedule_ended) {
+                                    if (!$schedule_is_complete) {
+                                        $can_evaluate_now = false;
+                                        $schedule_badge_class = 'bg-secondary';
+                                        $schedule_badge_text = 'Schedule required';
+                                        $schedule_block_message = 'A complete schedule with start and end time is required before evaluation can proceed.';
+                                    } elseif ($schedule_ended) {
                                         // Schedule end time has passed - evaluation window closed
                                         $can_evaluate_now = false;
+                                        $schedule_window_closed = true;
                                         $schedule_badge_class = 'bg-danger';
                                         $schedule_badge_text = 'Closed';
                                         $schedule_block_message = 'The evaluation deadline has passed. No further changes are allowed.';
@@ -626,34 +705,46 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 }
                             }
 
-                            // After completing evaluation, reset to "Schedule required"
-                            // so a new schedule can be set for the next evaluation cycle
+                            // Once this evaluator has completed their required form(s),
+                            // show this slot as done for them. Other observers who have
+                            // not submitted yet will still see their own Evaluate state.
                             if ($all_done) {
-                                $schedule_badge_class = 'bg-secondary';
-                                $schedule_badge_text = 'Schedule required';
+                                $schedule_badge_class = 'bg-success';
+                                $schedule_badge_text = 'Done';
                                 $can_evaluate_now = false;
+                                $schedule_block_message = 'You have already completed this evaluation.';
                             }
 
-                            // Guard: block evaluation when slot has only one observer/evaluator
-                            // or when required evaluator roles are unbalanced.
-                            if ($can_evaluate_now && $slot_date !== '') {
+                            // Guard: any scheduled slot with fewer than two observer rows
+                            // is imbalanced, even before the scheduled time opens. Completed
+                            // observers still count because they were part of this slot.
+                            if (!$all_done && $slot_date !== '' && $schedule_is_complete && !$schedule_window_closed) {
                                 try {
                                     $schedule_balance_stmt->execute([
-                                        ':tid' => (int)$teacher_row['id'],
-                                        ':obs_date' => $slot_date,
-                                        ':obs_time' => $slot_time,
-                                        ':balance_dept' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
-                                        ':balance_dept_match' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? ''))
+                                        ':tid_eval' => (int)$teacher_row['id'],
+                                        ':obs_date_eval' => $slot_date,
+                                        ':obs_time_eval' => $slot_time,
+                                        ':balance_dept_eval' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
+                                        ':balance_dept_match_eval' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
+                                        ':tid_sched' => (int)$teacher_row['id'],
+                                        ':obs_date_sched' => $slot_date,
+                                        ':obs_time_sched' => $slot_time,
+                                        ':balance_dept_sched' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
+                                        ':balance_dept_match_sched' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
+                                        ':balance_dept_dean' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
+                                        ':balance_dept_match_dean' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
+                                        ':tid_assign' => (int)$teacher_row['id'],
+                                        ':balance_dept_coord' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
+                                        ':balance_dept_match_coord' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
+                                        ':tid_pvp' => (int)$teacher_row['id']
                                     ]);
                                     $bal = $schedule_balance_stmt->fetch(PDO::FETCH_ASSOC) ?: [];
                                     $observer_count = (int)($bal['observer_count'] ?? 0);
-                                    $has_head = (int)($bal['has_head'] ?? 0) === 1;
-                                    $has_coordinator = (int)($bal['has_coordinator'] ?? 0) === 1;
-                                    if ($observer_count <= 1 || !$has_head || !$has_coordinator) {
+                                    if ($observer_count < 2) {
                                         $can_evaluate_now = false;
                                         $schedule_badge_class = 'bg-danger';
-                                        $schedule_badge_text = 'Evaluator unbalanced';
-                                        $schedule_block_message = 'Evaluation cannot proceed: this schedule needs at least 2 observers and balanced roles (Dean/Principal and Coordinator).';
+                                        $schedule_badge_text = 'Evaluator imbalanced';
+                                        $schedule_block_message = 'Evaluation cannot proceed: this schedule needs at least 2 observers/evaluators.';
                                     }
                                 } catch (Exception $e) {
                                     // fail-open to avoid blocking all rows on query issues
@@ -667,7 +758,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 $can_evaluate_now = false;
                                 if (
                                     !$all_done &&
-                                    !empty($scheduleRaw)
+                                    !empty($scheduleRaw) &&
+                                    $schedule_is_complete &&
+                                    !$schedule_window_closed
                                 ) {
                                     $schedule_badge_class = 'bg-secondary';
                                     $schedule_badge_text = 'Accept as observer first';
@@ -675,7 +768,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 }
                             }
                         ?>
-                        <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'Schedule required for next evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars((string)$scheduleRaw, ENT_QUOTES); ?>" data-schedule-end-raw="<?php echo htmlspecialchars((string)$scheduleEndRawEffective, ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
+                        <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'You have already completed this evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars((string)$scheduleRaw, ENT_QUOTES); ?>" data-schedule-end-raw="<?php echo htmlspecialchars((string)$scheduleEndRawEffective, ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_row['name']); ?></h6>
@@ -841,34 +934,37 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 </div>
                             </div>
                             
-                            <!-- Rating Scale -->
-                            <div class="rating-scale">
-                                <h6>Rating Scale:</h6>
-                                <div class="rating-scale-item">
-                                    <span>5</span>
-                                    <span>Excellent</span>
-                                </div>
-                                <div class="rating-scale-item">
-                                    <span>4</span>
-                                    <span>Very Satisfactory</span>
-                                </div>
-                                <div class="rating-scale-item">
-                                    <span>3</span>
-                                    <span>Satisfactory</span>
-                                </div>
-                                <div class="rating-scale-item">
-                                    <span>2</span>
-                                    <span>Below Satisfactory</span>
-                                </div>
-                                <div class="rating-scale-item">
-                                    <span>1</span>
-                                    <span>Needs Improvement</span>
-                                </div>
-                            </div>
-                            
                             <!-- PART 3: Domains of Teaching Performance -->
                             <div class="evaluation-section">
                                 <h5>PART 3: Domains of Teaching Performance</h5>
+                                <div class="rating-scale">
+                                    <h6>Rating Scale:</h6>
+                                    <div class="rating-scale-item">
+                                        <span class="rating-scale-score">5 &ndash; Excellent</span>
+                                        <span class="rating-scale-separator">-</span>
+                                        <span class="rating-scale-description">the teacher manifested the performance indicator which greatly exceeds standards</span>
+                                    </div>
+                                    <div class="rating-scale-item">
+                                        <span class="rating-scale-score">4 &ndash; Very Satisfactory</span>
+                                        <span class="rating-scale-separator">-</span>
+                                        <span class="rating-scale-description">the teacher manifested the performance indicator which more than meets standards</span>
+                                    </div>
+                                    <div class="rating-scale-item">
+                                        <span class="rating-scale-score">3 &ndash; Satisfactory</span>
+                                        <span class="rating-scale-separator">-</span>
+                                        <span class="rating-scale-description">the teacher manifested the performance indicator which meets standards</span>
+                                    </div>
+                                    <div class="rating-scale-item">
+                                        <span class="rating-scale-score">2 &ndash; Below Satisfactory</span>
+                                        <span class="rating-scale-separator">-</span>
+                                        <span class="rating-scale-description">the teacher manifested the performance indicator which falls below standards</span>
+                                    </div>
+                                    <div class="rating-scale-item">
+                                        <span class="rating-scale-score">1 &ndash; Needs Improvement</span>
+                                        <span class="rating-scale-separator">-</span>
+                                        <span class="rating-scale-description">the teacher barely manifested the expected performance indicator</span>
+                                    </div>
+                                </div>
                                 
                                 <!-- Communications Competence -->
                                 <div class="mb-4">
@@ -1157,25 +1253,25 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     <div class="row">
                                         <div class="col-md-6">
                                             <h6>Overall Rating Interpretation</h6>
-                                            <div class="rating-scale">
+                                            <div class="rating-scale rating-scale-compact">
                                                 <div class="rating-scale-item">
-                                                    <span>5</span>
+                                                    <span>4.6-5.0</span>
                                                     <span>Excellent</span>
                                                 </div>
                                                 <div class="rating-scale-item">
-                                                    <span>4</span>
+                                                    <span>3.6-4.5</span>
                                                     <span>Very Satisfactory</span>
                                                 </div>
                                                 <div class="rating-scale-item">
-                                                    <span>3</span>
+                                                    <span>2.6-3.5</span>
                                                     <span>Satisfactory</span>
                                                 </div>
                                                 <div class="rating-scale-item">
-                                                    <span>2</span>
+                                                    <span>1.6-2.5</span>
                                                     <span>Below Satisfactory</span>
                                                 </div>
                                                 <div class="rating-scale-item">
-                                                    <span>1</span>
+                                                    <span>1.0-1.5</span>
                                                     <span>Needs Improvement</span>
                                                 </div>
                                             </div>
@@ -1260,7 +1356,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                                 <span class="input-group-text" style="border-color: #ccc; background: #fff; font-weight: 600;">
                                                     AGREEMENT:
                                                 </span>
-                                            <textarea class="form-control" id="agreement" name="agreement" rows="3" placeholder="State agreement or additional notes"></textarea>
+                                            <textarea class="form-control" id="agreement" name="agreement" rows="3" placeholder="State agreement or additional notes" required></textarea>
                                             </div>
                                         </div>
                                     </div>
@@ -2025,31 +2121,23 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             let interpretationClass = '';
             const numericAvg = parseFloat(overallAvg);
             
-            // round to nearest integer and map directly to the simple scale
-            const rounded = Math.floor(numericAvg);
-            switch (rounded) {
-                case 5:
-                    interpretation = 'Excellent';
-                    interpretationClass = 'text-success';
-                    break;
-                case 4:
-                    interpretation = 'Very Satisfactory';
-                    interpretationClass = 'text-primary';
-                    break;
-                case 3:
-                    interpretation = 'Satisfactory';
-                    interpretationClass = 'text-info';
-                    break;
-                case 2:
-                    interpretation = 'Below Satisfactory';
-                    interpretationClass = 'text-warning';
-                    break;
-                case 1:
-                    interpretation = 'Needs Improvement';
-                    interpretationClass = 'text-danger';
-                    break;
-                default:
-                    interpretation = 'Not Rated';
+            if (numericAvg >= 4.6) {
+                interpretation = 'Excellent';
+                interpretationClass = 'text-success';
+            } else if (numericAvg >= 3.6) {
+                interpretation = 'Very Satisfactory';
+                interpretationClass = 'text-primary';
+            } else if (numericAvg >= 2.6) {
+                interpretation = 'Satisfactory';
+                interpretationClass = 'text-info';
+            } else if (numericAvg >= 1.6) {
+                interpretation = 'Below Satisfactory';
+                interpretationClass = 'text-warning';
+            } else if (numericAvg >= 1.0) {
+                interpretation = 'Needs Improvement';
+                interpretationClass = 'text-danger';
+            } else {
+                interpretation = 'Not Rated';
             }
             
             const ratingElement = document.getElementById('ratingInterpretation');

@@ -194,6 +194,15 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
             resize: vertical;
         }
 
+        .rating-scale-item span:first-child {
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .rating-scale-item span:nth-child(2):last-child {
+            grid-column: 3;
+        }
+
 
         /* Keep Back button clickable */
         .btn, a.btn {
@@ -337,11 +346,11 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
                 <!-- Rating Scale -->
                 <div class="rating-scale">
                     <h6>Rating Scale:</h6>
-                    <div class="rating-scale-item"><span>5 - Excellent</span><span>Greatly exceeds standards</span></div>
-                    <div class="rating-scale-item"><span>4 - Very Satisfactory</span><span>More than meets standards</span></div>
-                    <div class="rating-scale-item"><span>3 - Satisfactory</span><span>Meets standards</span></div>
-                    <div class="rating-scale-item"><span>2 - Below Satisfactory</span><span>Falls below standards</span></div>
-                    <div class="rating-scale-item"><span>1 - Needs Improvement</span><span>Barely meets expectations</span></div>
+                    <div class="rating-scale-item"><span>5 - Excellent</span><span>the teacher manifested the performance indicator which greatly exceeds standards</span></div>
+                    <div class="rating-scale-item"><span>4 - Very Satisfactory</span><span>the teacher manifested the performance indicator which more than meets standards</span></div>
+                    <div class="rating-scale-item"><span>3 - Satisfactory</span><span>the teacher manifested the performance indicator which meets standards</span></div>
+                    <div class="rating-scale-item"><span>2 - Below Satisfactory</span><span>the teacher manifested the performance indicator which falls below standards</span></div>
+                    <div class="rating-scale-item"><span>1 - Needs Improvement</span><span>the teacher barely manifested the expected performance indicator</span></div>
                 </div>
 
                 <!-- PART 3 -->
@@ -493,13 +502,13 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
                     <div class="mb-4">
                         <div class="row">
                             <div class="col-md-6">
-                                <h6>Overall Rating Interpretation</h6>
+                                <h6>Interpretation of Over-all Rating</h6>
                                 <div class="rating-scale">
-                                    <div class="rating-scale-item"><span>5</span><span>Excellent</span></div>
-                                    <div class="rating-scale-item"><span>4</span><span>Very Satisfactory</span></div>
-                                    <div class="rating-scale-item"><span>3</span><span>Satisfactory</span></div>
-                                    <div class="rating-scale-item"><span>2</span><span>Below Satisfactory</span></div>
-                                    <div class="rating-scale-item"><span>1</span><span>Needs Improvement</span></div>
+                                    <div class="rating-scale-item"><span>4.6-5.0</span><span>Excellent</span></div>
+                                    <div class="rating-scale-item"><span>3.6-4.5</span><span>Very Satisfactory</span></div>
+                                    <div class="rating-scale-item"><span>2.6-3.5</span><span>Satisfactory</span></div>
+                                    <div class="rating-scale-item"><span>1.6-2.5</span><span>Below Satisfactory</span></div>
+                                    <div class="rating-scale-item"><span>1.0-1.5</span><span>Needs Improvement</span></div>
                                 </div>
                             </div>
                             <div class="col-md-6">

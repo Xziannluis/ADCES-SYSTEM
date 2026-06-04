@@ -31,6 +31,33 @@ function normalizeSubjectDisplay($subject) {
     return trim((string)$s);
 }
 
+function formatFocusDisplay($focusRaw, array $labels) {
+    $focusRaw = trim((string)$focusRaw);
+    if ($focusRaw === '') return '';
+
+    $decoded = json_decode($focusRaw, true);
+    if (is_string($decoded)) {
+        $decodedAgain = json_decode($decoded, true);
+        $decoded = is_array($decodedAgain) ? $decodedAgain : $decoded;
+    }
+
+    if (is_array($decoded)) {
+        $items = $decoded;
+    } else {
+        $clean = str_replace(['[', ']', '"', "'"], '', $focusRaw);
+        $items = preg_split('/\s*,\s*|\r\n|\r|\n/', $clean);
+    }
+
+    $display = [];
+    foreach ($items as $item) {
+        $key = trim((string)$item);
+        if ($key === '') continue;
+        $display[] = $labels[$key] ?? $key;
+    }
+
+    return implode(', ', array_values(array_unique($display)));
+}
+
 // Ensure evaluation status supports "rescheduled" for remarks workflow.
 // This keeps behavior consistent across Dean/Coordinator/President/VP views.
 try {
@@ -717,6 +744,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                                               AND observation_date = :od
                                                               AND COALESCE(observation_time, '') = COALESCE(:ot, '')
                                                               AND status <> 'completed'");
+            $balance_remaining_observers_stmt = $db->prepare(
+                "SELECT
+                    COUNT(DISTINCT e.evaluator_id) AS observer_count,
+                    MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal') THEN 1 ELSE 0 END) AS has_head,
+                    MAX(CASE WHEN LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('chairperson','subject_coordinator','grade_level_coordinator') THEN 1 ELSE 0 END) AS has_coordinator
+                 FROM evaluations e
+                 JOIN users u ON u.id = e.evaluator_id
+                 WHERE e.teacher_id = :tid
+                   AND e.academic_year = :ay
+                   AND e.semester = :sem
+                   AND e.observation_date = :od
+                   AND COALESCE(e.observation_time, '') = COALESCE(:ot, '')
+                   AND (:dept = '' OR e.department = :dept_match)
+                   AND e.status <> 'completed'"
+            );
             $mark_unbalanced_slot_stmt = $db->prepare("UPDATE evaluations
                                                        SET status = 'observer_unbalanced', updated_at = NOW()
                                                        WHERE teacher_id = :tid
@@ -796,6 +838,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $remaining_slot_rows = (int)$count_remaining_slot_stmt->fetchColumn();
                 $count_remaining_observers_stmt->execute($slotParams);
                 $remaining_observers = (int)$count_remaining_observers_stmt->fetchColumn();
+                $balance_remaining_observers_stmt->execute([
+                    ':tid' => $tid,
+                    ':ay' => (string)($src['academic_year'] ?? ''),
+                    ':sem' => (string)($src['semester'] ?? ''),
+                    ':od' => (string)($src['observation_date'] ?? ''),
+                    ':ot' => (string)($src['observation_time'] ?? ''),
+                    ':dept' => trim((string)($src['department'] ?? '')),
+                    ':dept_match' => trim((string)($src['department'] ?? ''))
+                ]);
+                $balance_remaining = $balance_remaining_observers_stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+                $has_required_head = (int)($balance_remaining['has_head'] ?? 0) === 1;
+                $has_required_coordinator = (int)($balance_remaining['has_coordinator'] ?? 0) === 1;
                 $is_observer_unbalanced = false;
                 if ($remaining_slot_rows <= 0) {
                     $delete_remaining_slot_stmt->execute($slotParams);
@@ -1509,9 +1563,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $clr_pvp->execute([':tid' => $teacher_id]);
         } catch (Exception $e) {}
 
-        // Keep previous acknowledgments intact.
-        // New schedules should require their own eval_id signature rows, while
-        // past eval_id signatures remain attached to their original schedules.
+        // Rescheduled rows need a fresh teacher signature for the new slot.
+        // Do not carry an old acknowledgment forward on the same evaluation_id.
+        if ($is_reschedule && (int)$eval_id > 0) {
+            try {
+                $clear_ack = $db->prepare("DELETE FROM observation_plan_acknowledgments WHERE evaluation_id = :eval_id");
+                $clear_ack->execute([':eval_id' => (int)$eval_id]);
+            } catch (Exception $e) {}
+        }
 
         $success_message = $is_reschedule ? "Schedule updated. Teacher will need to sign again." : "Evaluation schedule set successfully!";
         if ($is_reschedule && isset($_SESSION['reschedule_once'])) {
@@ -2201,12 +2260,20 @@ if ($is_leader) {
                   LEFT JOIN teacher_departments td ON td.teacher_id = t.id
                   WHERE (
                         (
+                            e.department = :dept1
+                        )
+                        OR
+                        (
+                            (e.department IS NULL OR e.department = '')
+                            AND
                             t.scheduled_department IS NOT NULL
                             AND t.scheduled_department <> ''
                             AND t.scheduled_department = :dept3
                         )
                         OR
                         (
+                            (e.department IS NULL OR e.department = '')
+                            AND
                             (t.scheduled_department IS NULL OR t.scheduled_department = '')
                             AND eu.department = :dept1
                         )
@@ -2214,12 +2281,13 @@ if ($is_leader) {
                   AND (t.user_id IS NULL OR t.user_id != :current_user_id)
                   AND e.academic_year = :academic_year
                   AND e.semester = :semester
+                  AND (e.status IS NULL OR e.status <> 'completed' OR e.evaluator_id = :current_user_id_completed)
                   ORDER BY t.name ASC";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':dept1', $raw_department);
-        $stmt->bindParam(':dept2', $raw_department);
         $stmt->bindParam(':dept3', $raw_department);
         $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
+        $stmt->bindParam(':current_user_id_completed', $_SESSION['user_id']);
         $stmt->bindParam(':academic_year', $academic_year);
         $stmt->bindParam(':semester', $semester);
     } else {
@@ -2236,9 +2304,11 @@ if ($is_leader) {
                   WHERE (t.user_id IS NULL OR t.user_id != :current_user_id)
                   AND e.academic_year = :academic_year
                   AND e.semester = :semester
+                  AND (e.status IS NULL OR e.status <> 'completed' OR e.evaluator_id = :current_user_id_completed)
                   ORDER BY t.name ASC";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':current_user_id', $_SESSION['user_id']);
+        $stmt->bindParam(':current_user_id_completed', $_SESSION['user_id']);
         $stmt->bindParam(':academic_year', $academic_year);
         $stmt->bindParam(':semester', $semester);
     }
@@ -2297,7 +2367,14 @@ if ($is_leader) {
               FROM teachers t
               JOIN evaluations e ON e.teacher_id = t.id
               WHERE (
-                    (t.scheduled_department IS NOT NULL AND t.scheduled_department <> '' AND t.scheduled_department = :dept2)
+                    e.department = :dept2
+                    OR
+                    (
+                        (e.department IS NULL OR e.department = '')
+                        AND t.scheduled_department IS NOT NULL
+                        AND t.scheduled_department <> ''
+                        AND t.scheduled_department = :dept2
+                    )
                     OR
                     (
                         e.evaluator_id = :self_eval_id
@@ -2344,22 +2421,12 @@ if ($is_leader) {
                               )
                           AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                           AND (t.user_id IS NULL OR t.user_id != :current_user_id)
-                          AND NOT EXISTS (
-                              SELECT 1 FROM evaluations e2
-                              WHERE e2.teacher_id = t.id
-                                AND e2.academic_year = :academic_year
-                                AND e2.semester = :semester
-                                AND e2.status = 'completed'
-                                AND DATE_FORMAT(e2.observation_date, '%Y-%m-%d %H:%i') = DATE_FORMAT(t.evaluation_schedule, '%Y-%m-%d %H:%i')
-                          )
                         ORDER BY t.name ASC";
         $sched_stmt = $db->prepare($sched_query);
         $sched_stmt->bindParam(':filter_dept', $raw_department);
         $sched_stmt->bindParam(':filter_dept3', $raw_department);
         $sched_stmt->bindParam(':filter_semester', $semester);
         $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
-        $sched_stmt->bindParam(':academic_year', $academic_year);
-        $sched_stmt->bindParam(':semester', $semester);
     } else {
         $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
                                t.evaluation_schedule, t.evaluation_schedule_end, t.evaluation_room, t.evaluation_focus,
@@ -2370,20 +2437,10 @@ if ($is_leader) {
                           AND t.evaluation_schedule IS NOT NULL
                           AND (t.evaluation_semester = :filter_semester OR t.evaluation_semester IS NULL OR t.evaluation_semester = '')
                           AND (t.user_id IS NULL OR t.user_id != :current_user_id)
-                          AND NOT EXISTS (
-                              SELECT 1 FROM evaluations e2
-                              WHERE e2.teacher_id = t.id
-                                AND e2.academic_year = :academic_year
-                                AND e2.semester = :semester
-                                AND e2.status = 'completed'
-                                AND DATE_FORMAT(e2.observation_date, '%Y-%m-%d %H:%i') = DATE_FORMAT(t.evaluation_schedule, '%Y-%m-%d %H:%i')
-                          )
                         ORDER BY t.name ASC";
         $sched_stmt = $db->prepare($sched_query);
         $sched_stmt->bindParam(':filter_semester', $semester);
         $sched_stmt->bindParam(':current_user_id', $_SESSION['user_id']);
-        $sched_stmt->bindParam(':academic_year', $academic_year);
-        $sched_stmt->bindParam(':semester', $semester);
     }
 } elseif ($is_coordinator) {
     $sched_query = "SELECT DISTINCT t.id, t.name, t.department as teacher_department,
@@ -2448,6 +2505,72 @@ if ($is_leader) {
 }
 $sched_stmt->execute();
 $scheduled_teachers = $sched_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Use teacher_schedules as the authoritative source for scheduled-only rows.
+// teachers.evaluation_schedule stores only the latest schedule and has no
+// academic year, so it can leak rows into the wrong Academic Year filter.
+try {
+    $scheduled_params = [
+        ':ay' => (string)$academic_year,
+        ':sem' => (string)$semester,
+        ':current_user_id' => (int)($_SESSION['user_id'] ?? 0),
+    ];
+    $scheduled_where = [
+        "t.status = 'active'",
+        "ts.academic_year = :ay",
+        "ts.semester = :sem",
+        "ts.status <> 'cancelled'",
+        "(t.user_id IS NULL OR t.user_id != :current_user_id)",
+    ];
+    $scheduled_joins = "";
+
+    if ($is_leader) {
+        if ($raw_department !== '') {
+            $scheduled_where[] = "(
+                (ts.scheduled_department IS NOT NULL AND ts.scheduled_department <> '' AND ts.scheduled_department = :schedule_dept)
+                OR
+                ((ts.scheduled_department IS NULL OR ts.scheduled_department = '') AND t.department = :teacher_dept)
+            )";
+            $scheduled_params[':schedule_dept'] = $raw_department;
+            $scheduled_params[':teacher_dept'] = $raw_department;
+        }
+    } elseif ($is_coordinator) {
+        $scheduled_joins = "LEFT JOIN users tu ON tu.id = t.user_id";
+        $scheduled_where[] = "ts.scheduled_department = :schedule_dept";
+        $scheduled_where[] = "(tu.id IS NULL OR LOWER(REPLACE(TRIM(tu.role), ' ', '_')) NOT IN ('dean','principal','president','vice_president'))";
+        $scheduled_params[':schedule_dept'] = $raw_department;
+    } else {
+        $scheduled_where[] = "ts.scheduled_department = :schedule_dept";
+        $scheduled_params[':schedule_dept'] = $raw_department;
+    }
+
+    $scheduled_query = "SELECT DISTINCT
+                           t.id,
+                           t.name,
+                           t.department as teacher_department,
+                           ts.schedule_start as evaluation_schedule,
+                           ts.schedule_end as evaluation_schedule_end,
+                           ts.room as evaluation_room,
+                           ts.focus_json as evaluation_focus,
+                           ts.subject_area as evaluation_subject_area,
+                           ts.subject as evaluation_subject,
+                           ts.semester as evaluation_semester,
+                           ts.form_type as evaluation_form_type,
+                           ts.scheduled_by,
+                           ts.scheduled_department,
+                           ts.evaluation_id as schedule_eval_id,
+                           ts.status as schedule_status
+                        FROM teacher_schedules ts
+                        JOIN teachers t ON t.id = ts.teacher_id
+                        $scheduled_joins
+                        WHERE " . implode("\n                          AND ", $scheduled_where) . "
+                        ORDER BY t.name ASC, ts.schedule_start ASC";
+    $scheduled_stmt = $db->prepare($scheduled_query);
+    $scheduled_stmt->execute($scheduled_params);
+    $scheduled_teachers = $scheduled_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    // Keep the legacy result if the schedule table is unavailable.
+}
 
 // Build completion map for CURRENT evaluator per schedule slot.
 // This is used for remarks logic:
@@ -2765,13 +2888,10 @@ foreach ($eval_teachers as $t) {
     // Any row tied to an evaluation record must use row-level evaluation data,
     // not the teacher's latest schedule fields (which can be overwritten by newer schedules).
     $focus_raw = $is_eval_row ? ($t['eval_focus'] ?? $t['evaluation_focus'] ?? '') : ($t['evaluation_focus'] ?? $t['eval_focus'] ?? '');
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
 
     $schedule_data[$row_key] = [
         'semester' => $is_eval_row ? ($t['eval_semester'] ?? $t['evaluation_semester'] ?? '') : ($t['evaluation_semester'] ?? $t['eval_semester'] ?? ''),
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => '',
         'subject_area' => $is_eval_row ? ($t['eval_subject_area'] ?? $t['evaluation_subject_area'] ?? '') : ($t['evaluation_subject_area'] ?? $t['eval_subject_area'] ?? ''),
         'subject' => normalizeSubjectDisplay($is_eval_row ? ($t['subject_observed'] ?? $t['evaluation_subject'] ?? '') : ($t['evaluation_subject'] ?? $t['subject_observed'] ?? '')),
@@ -2881,9 +3001,6 @@ foreach ([] as $t) {
         ];
         // Rebuild schedule_data from teacher's current schedule columns
         $focus_raw = $t['evaluation_focus'] ?? '';
-        $focus_arr = [];
-        if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-        $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
         $ts = strtotime($sched_dt);
         $day_str = date('l', $ts);
         $start_time = date('g:i A', $ts);
@@ -2898,7 +3015,7 @@ foreach ([] as $t) {
         }
         $schedule_data[$tid] = [
             'semester' => $t['evaluation_semester'] ?? '',
-            'focus' => implode(', ', $focus_display),
+            'focus' => formatFocusDisplay($focus_raw, $focus_labels),
             'day_time' => $day_time_str,
             'subject_area' => $t['evaluation_subject_area'] ?? '',
             'subject' => normalizeSubjectDisplay($t['evaluation_subject'] ?? ''),
@@ -2934,19 +3051,16 @@ foreach ($scheduled_teachers as $t) {
         'date' => $sched_date,
         'done' => false,
         'faculty_signature' => '',
-        'eval_id' => null,
-        'status' => 'scheduled',
+        'eval_id' => !empty($t['schedule_eval_id']) ? (int)$t['schedule_eval_id'] : null,
+        'status' => strtolower(trim((string)($t['schedule_status'] ?? 'scheduled'))),
         'cutoff' => trim((string)($t['evaluation_schedule_end'] ?? '')) !== '' ? $t['evaluation_schedule_end'] : $sched_dt,
     ];
 
     $focus_raw = $t['evaluation_focus'] ?? '';
-    $focus_arr = [];
-    if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-    $focus_display = array_map(function($f) use ($focus_labels) { return $focus_labels[$f] ?? $f; }, $focus_arr);
 
     $schedule_data[$row_key] = [
         'semester' => $t['evaluation_semester'] ?? '',
-        'focus' => implode(', ', $focus_display),
+        'focus' => formatFocusDisplay($focus_raw, $focus_labels),
         'day_time' => '',
         'subject_area' => $t['evaluation_subject_area'] ?? '',
         'subject' => normalizeSubjectDisplay($t['evaluation_subject'] ?? ''),
@@ -2976,6 +3090,9 @@ foreach ($scheduled_teachers as $t) {
     $active_eval_id_for_schedule = 0;
     try {
         if (!empty($sched_dt)) {
+            $active_eval_id_for_schedule = (int)($t['schedule_eval_id'] ?? 0);
+        }
+        if (!empty($sched_dt) && $active_eval_id_for_schedule <= 0) {
             $activeEvalStmt = $db->prepare(
                 "SELECT id
                  FROM evaluations
@@ -2997,8 +3114,60 @@ foreach ($scheduled_teachers as $t) {
                 ':sched_dt' => $sched_dt
             ]);
             $active_eval_id_for_schedule = (int)($activeEvalStmt->fetchColumn() ?: 0);
+
+            if ($active_eval_id_for_schedule <= 0) {
+                $activeScheduleStmt = $db->prepare(
+                    "SELECT evaluation_id
+                     FROM teacher_schedules
+                     WHERE teacher_id = :tid
+                       AND academic_year = :ay
+                       AND semester = :sem
+                       AND schedule_start = :sched_dt
+                       AND (:owning_dept = '' OR scheduled_department = :owning_dept_match)
+                       AND evaluation_id IS NOT NULL
+                     ORDER BY id DESC
+                     LIMIT 1"
+                );
+                $activeScheduleStmt->execute([
+                    ':tid' => $tid,
+                    ':ay' => $academic_year,
+                    ':sem' => $semester,
+                    ':sched_dt' => $sched_dt,
+                    ':owning_dept' => (string)$owning_dept,
+                    ':owning_dept_match' => (string)$owning_dept
+                ]);
+                $active_eval_id_for_schedule = (int)($activeScheduleStmt->fetchColumn() ?: 0);
+            }
+
+            if ($active_eval_id_for_schedule <= 0) {
+                $activeEvalLooseStmt = $db->prepare(
+                    "SELECT id
+                     FROM evaluations
+                     WHERE teacher_id = :tid
+                       AND academic_year = :ay
+                       AND semester = :sem
+                       AND (:owning_dept = '' OR department = :owning_dept_match)
+                       AND status <> 'completed'
+                       AND DATE_FORMAT(CONCAT(observation_date, ' ', COALESCE(observation_time, '00:00:00')), '%Y-%m-%d %H:%i') = DATE_FORMAT(:sched_dt, '%Y-%m-%d %H:%i')
+                     ORDER BY id DESC
+                     LIMIT 1"
+                );
+                $activeEvalLooseStmt->execute([
+                    ':tid' => $tid,
+                    ':ay' => $academic_year,
+                    ':sem' => $semester,
+                    ':owning_dept' => (string)$owning_dept,
+                    ':owning_dept_match' => (string)$owning_dept,
+                    ':sched_dt' => $sched_dt
+                ]);
+                $active_eval_id_for_schedule = (int)($activeEvalLooseStmt->fetchColumn() ?: 0);
+            }
         }
     } catch (Exception $e) {}
+
+    if ($active_eval_id_for_schedule > 0) {
+        $eval_data[$row_key]['eval_id'] = $active_eval_id_for_schedule;
+    }
 
     // Observers are department dean/principal + coordinator who set the schedule.
     $scheduled_by_id = (int)($t['scheduled_by'] ?? 0);
@@ -3142,30 +3311,6 @@ if (!empty($filter_status)) {
     $teachers_list = array_values($teachers_list);
 }
 
-// For President/Vice President Observation Plan:
-// hide rows that are already in "Did Not Evaluate" state.
-if ($is_leader) {
-    $teachers_list = array_values(array_filter($teachers_list, function($t) use ($eval_data) {
-        $row_key = $t['_row_key'] ?? $t['id'];
-        $is_done = !empty($eval_data[$row_key]['done']);
-        if ($is_done) return true;
-
-        $row_sched_end_raw = trim((string)($eval_data[$row_key]['cutoff'] ?? ''));
-        $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
-        $cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
-        if ($cutoff_raw === '') return true;
-
-        try {
-            $tz = new DateTimeZone('Asia/Manila');
-            $cutoff_at = new DateTime($cutoff_raw, $tz);
-            $now_at = new DateTime('now', $tz);
-            // Exclude overdue + not done rows ("Did Not Evaluate")
-            return !($now_at > $cutoff_at);
-        } catch (Exception $e) {
-            return true;
-        }
-    }));
-}
 $dean_role_display = ucfirst(str_replace('_', ' ', $_SESSION['role']));
 
 // Pending reschedule requests (shared across recipients) for Observation Plan UI.
@@ -3358,7 +3503,6 @@ if (empty($schedule_available_departments)) {
 // Unscheduled teachers are only shown in the modal dropdown, not in the table
 
 // Load acknowledgment data for current semester/year
-$ack_map = [];
 $ack_eval_map = [];
 $ack_upcoming_map = [];
 try {
@@ -3398,17 +3542,6 @@ try {
                     }
                 }
             }
-            if (!isset($ack_map[$tid])) {
-                $ack_map[$tid] = $ack_row;
-            } else {
-                // Prefer a row with an actual drawn signature if available.
-                $currentHasSig = !empty($ack_map[$tid]['signature']);
-                $newHasSig = !empty($ack_row['signature']);
-                if (!$currentHasSig && $newHasSig) {
-                    $ack_map[$tid] = $ack_row;
-                }
-            }
-
             // Keep schedule-only ("upcoming") signature separately for rows
             // that do not yet have a concrete evaluation_id.
             if (($ack_row['evaluation_id'] === null || $ack_row['evaluation_id'] === '') && !isset($ack_upcoming_map[$tid])) {
@@ -3502,12 +3635,23 @@ try {
         .prepared-by p:first-child {
             margin-bottom: 0;
         }
+        .prepared-by .prepared-by-inner {
+            width: 220px;
+            text-align: left;
+        }
+        .prepared-by .prepared-by-inner p:first-child {
+            text-align: left;
+            margin-bottom: 2px;
+        }
+        .prepared-by .prepared-by-signature-stack {
+            display: inline-block;
+            text-align: center;
+        }
         .prepared-by .sig-img {
             display: block;
             max-height: 50px;
             max-width: 200px;
-            margin-top: 5px;
-            margin-bottom: -10px;
+            margin: 0 auto -8px;
         }
         .prepared-by .name-line {
             font-weight: 700;
@@ -4163,9 +4307,7 @@ try {
                             <?php if ($my_show_upcoming): ?>
                             <?php
                                 $focus_raw = $my_teacher_data['evaluation_focus'] ?? '';
-                                $focus_arr = [];
-                                if ($focus_raw) { try { $focus_arr = json_decode($focus_raw, true) ?: []; } catch (\Exception $e) {} }
-                                $focus_display = array_map(function($f) use ($focus_labels_my) { return $focus_labels_my[$f] ?? $f; }, $focus_arr);
+                                $focus_display = formatFocusDisplay($focus_raw, $focus_labels_my);
                                 $ts = strtotime($my_teacher_data['evaluation_schedule']);
                                 $my_day_time = date('l', $ts) . '<br>' . date('g:i A', $ts);
                                 $my_sched_end = $my_teacher_data['evaluation_schedule_end'] ?? '';
@@ -4183,7 +4325,7 @@ try {
                                     <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars(date('M d, Y g:i A', $ts)); ?>" style="width:20px;height:20px;" title="<?php echo $upcoming_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($my_teacher_data['evaluation_semester'] ?? '') . ' Semester'); ?></td>
-                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $focus_display)); ?></td>
+                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars($focus_display); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo date('M d, Y', $ts); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $my_day_time; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($my_teacher_data['evaluation_subject_area'] ?? ''); ?></td>
@@ -4206,9 +4348,7 @@ try {
                             <?php foreach ($my_unique_evaluations as $ev): ?>
                             <?php
                                 $ev_focus_raw = $ev['evaluation_focus'] ?? '';
-                                $ev_focus_arr = [];
-                                if ($ev_focus_raw) { try { $ev_focus_arr = json_decode($ev_focus_raw, true) ?: []; } catch (\Exception $e) {} }
-                                $ev_focus_display = array_map(function($f) use ($focus_labels_my) { return $focus_labels_my[$f] ?? $f; }, $ev_focus_arr);
+                                $ev_focus_display = formatFocusDisplay($ev_focus_raw, $focus_labels_my);
                                 $ev_signed = isset($my_signed_map[(int)$ev['id']]);
                                 $ev_signature = $my_signed_map[(int)$ev['id']]['signature'] ?? '';
                                 $ev_status = strtolower(trim((string)($ev['status'] ?? '')));
@@ -4322,7 +4462,7 @@ try {
                                     <input type="checkbox" class="form-check-input sign-item-check" value="<?php echo (int)$ev['id']; ?>" data-schedule-label="Schedule: <?php echo htmlspecialchars(!empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''); ?>" style="width:20px;height:20px;" title="<?php echo $ev_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($ev['semester'] ?? '') . ' Semester'); ?></td>
-                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars(implode(', ', $ev_focus_display)); ?></td>
+                                <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars($ev_focus_display); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo !empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $ev_day_time; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars($ev['subject_area'] ?? ''); ?></td>
@@ -4496,16 +4636,17 @@ try {
                     <table class="plan-table">
                         <thead>
                             <tr>
-                                <th style="width: 14%;">Teacher</th>
+                                <th style="width: 12%;">Teacher</th>
                                 <th style="width: 6%;">Semester</th>
                                 <th style="width: 12%;">Focus of Observation</th>
                                 <th style="width: 8%;">Date</th>
                                 <th style="width: 7%;">Day &amp; Time</th>
                                 <th style="width: 8%;" id="th_subject_area"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Grade Level/Section' : 'Subject Area'; ?></th>
-                                <th style="width: 9%;" id="th_subject"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
+                                <th style="width: 8%;" id="th_subject"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
                                 <th style="width: 5%;">Room</th>
                                 <th style="width: 12%;">Name of Observers</th>
-                                <th style="width: 9%; min-width: 70px;">Remarks</th>
+                                <th style="width: 10%; min-width: 90px;">Teacher's Signature</th>
+                                <th style="width: 12%; min-width: 70px;">Remarks</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -4608,41 +4749,6 @@ try {
                                         } catch (Exception $e) {}
                                     }
 
-                                    // For President/Vice President view, hide rows that would show
-                                    // "Did Not Evaluate" in remarks.
-                                    $hide_for_leader_dne = false;
-                                    if ($is_leader) {
-                                        $row_required_form_type_hide = strtolower(trim((string)($t['evaluation_form_type'] ?? 'iso')));
-                                        if (!in_array($row_required_form_type_hide, ['iso', 'peac', 'both'], true)) {
-                                            $row_required_form_type_hide = 'iso';
-                                        }
-                                        $slot_date_hide = $eval_data[$row_key]['date'] ?? '';
-                                        if (!empty($slot_date_hide)) {
-                                            $slot_date_hide = date('Y-m-d', strtotime((string)$slot_date_hide));
-                                        }
-                                        $slot_key_hide = implode('|', [
-                                            (string)$tid,
-                                            (string)$slot_date_hide,
-                                            strtolower(trim((string)($sd['room'] ?? ''))),
-                                            strtolower(trim((string)($sd['subject_area'] ?? ''))),
-                                            strtolower(trim((string)normalizeSubjectDisplay((string)($sd['subject'] ?? '')))),
-                                        ]);
-                                        $slot_done_hide = $completed_forms_by_slot[$slot_key_hide] ?? [];
-                                        $is_done_required_hide = false;
-                                        if ($row_required_form_type_hide === 'both') {
-                                            $is_done_required_hide = !empty($slot_done_hide['iso']) && !empty($slot_done_hide['peac']);
-                                        } elseif ($row_required_form_type_hide === 'peac') {
-                                            $is_done_required_hide = !empty($slot_done_hide['peac']);
-                                        } else {
-                                            $is_done_required_hide = !empty($slot_done_hide['iso']);
-                                        }
-                                        if (!$is_done_required_hide && $observer_cutoff_raw !== '' && $is_schedule_past_for_observer) {
-                                            $hide_for_leader_dne = true;
-                                        }
-                                    }
-                                    if ($hide_for_leader_dne) {
-                                        continue;
-                                    }
                                 ?>
                                 <tr>
                                     <td>
@@ -4707,6 +4813,18 @@ try {
                                         ?>
                                     </td>
                                     <td class="text-center" style="font-size:0.8rem;">
+                                        <?php
+                                        $teacher_signature_display = trim((string)($ack_eval['signature'] ?? ''));
+                                        ?>
+                                        <?php if ($teacher_signature_display !== ''): ?>
+                                            <img src="<?php echo htmlspecialchars($teacher_signature_display); ?>" alt="Teacher Signature" style="max-height:34px;max-width:96px;">
+                                        <?php else: ?>
+                                            <div style="height:34px;display:flex;align-items:flex-end;justify-content:center;">
+                                                <span style="display:inline-block;width:86px;border-bottom:1px solid #777;"></span>
+                                            </div>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-center" style="font-size:0.8rem;">
                                         <?php 
                                         $row_required_form_type = strtolower(trim((string)($t['evaluation_form_type'] ?? 'iso')));
                                         if (!in_array($row_required_form_type, ['iso', 'peac', 'both'], true)) {
@@ -4753,14 +4871,14 @@ try {
                                         $row_eval_status = strtolower(trim((string)($eval_data[$row_key]['status'] ?? '')));
                                         if ($is_done_by_requirement) {
                                             echo '<span class="badge bg-success">Conducted</span>';
+                                        } elseif (count($observers) < 2) {
+                                            echo '<span class="badge bg-danger">Observer Imbalance</span>';
                                         } elseif ($is_overdue_not_evaluated) {
-                                            echo '<span class="badge bg-danger">Did Not Evaluate</span>';
+                                            echo '<span class="badge bg-danger">Closed</span>';
                                         } elseif ($row_eval_status === 'rescheduled') {
                                             echo '<span class="badge bg-warning text-dark">Rescheduled</span>';
                                         } elseif ($row_eval_status === 'observer_unbalanced') {
                                             echo '<span class="badge bg-danger">Observer Imbalance</span>';
-                                        } elseif ($is_schedule_signed) {
-                                            echo '<span class="badge bg-success">Signed</span>';
                                         } elseif ($has_schedule) {
                                             echo '<span class="badge bg-info">Scheduled</span>';
                                         } else {
@@ -4781,12 +4899,16 @@ try {
 
                 <!-- Prepared By (print only) -->
                 <div class="prepared-by print-only">
-                    <p><em>Prepared by:</em></p>
-                    <?php if (!empty($dean_signature)): ?>
-                    <img class="sig-img" src="<?php echo $dean_signature; ?>" alt="Signature">
-                    <?php endif; ?>
-                    <p class="name-line"><?php echo htmlspecialchars(strtoupper($dean_name)); ?></p>
-                    <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
+                    <div class="prepared-by-inner">
+                        <p><em>Prepared by:</em></p>
+                        <div class="prepared-by-signature-stack">
+                            <?php if (!empty($dean_signature)): ?>
+                            <img class="sig-img" src="<?php echo $dean_signature; ?>" alt="Signature">
+                            <?php endif; ?>
+                            <p class="name-line"><?php echo htmlspecialchars(strtoupper($dean_name)); ?></p>
+                            <p class="role-dept"><?php echo htmlspecialchars($dean_role_display); ?>, <?php echo htmlspecialchars($raw_department); ?></p>
+                        </div>
+                    </div>
                 </div>
             </div>
             <?php endif; ?>
@@ -5141,6 +5263,7 @@ function applyTeacherFilterByDepartment() {
 function openPrintPlan() {
     const modalId = 'preparedBySignaturePrintModal';
     let modalEl = document.getElementById(modalId);
+    const defaultPreparedByName = <?php echo json_encode((string)($_SESSION['name'] ?? '')); ?>;
     if (!modalEl) {
         modalEl = document.createElement('div');
         modalEl.className = 'modal fade';
@@ -5151,11 +5274,14 @@ function openPrintPlan() {
             + '<div class="modal-dialog modal-dialog-centered" style="max-width:500px;">'
             + '  <div class="modal-content">'
             + '    <div class="modal-header">'
-            + '      <h5 class="modal-title"><i class="fas fa-signature me-2"></i>Signature</h5>'
+            + '      <h5 class="modal-title"><i class="fas fa-signature me-2"></i>Sign Before Printing</h5>'
             + '      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>'
             + '    </div>'
             + '    <div class="modal-body">'
-            + '      <p class="text-muted small mb-2">Draw your signature before printing the observation plan.</p>'
+            + '      <p class="text-muted small mb-2">Prepared by</p>'
+            + '      <label for="preparedByPrintedName" class="form-label fw-bold">Printed Name</label>'
+            + '      <input type="text" id="preparedByPrintedName" class="form-control mb-3" value="">'
+            + '      <label class="form-label fw-bold">Signature</label>'
             + '      <div style="border:1px solid #ced4da;border-radius:8px;background:#fff;overflow:hidden;">'
             + '        <canvas id="preparedBySigCanvas" width="440" height="140" style="display:block;width:100%;height:140px;touch-action:none;cursor:crosshair;"></canvas>'
             + '      </div>'
@@ -5175,9 +5301,13 @@ function openPrintPlan() {
     const canvas = modalEl.querySelector('#preparedBySigCanvas');
     const clearBtn = modalEl.querySelector('#preparedBySigClearBtn');
     const printBtn = modalEl.querySelector('#preparedBySigPrintBtn');
+    const printedNameInput = modalEl.querySelector('#preparedByPrintedName');
     const ctx = canvas.getContext('2d');
     let drawing = false;
     canvas.dataset.hasStroke = "0";
+    if (printedNameInput && !printedNameInput.value.trim()) {
+        printedNameInput.value = defaultPreparedByName;
+    }
 
     function getPoint(evt) {
         const rect = canvas.getBoundingClientRect();
@@ -5229,11 +5359,17 @@ function openPrintPlan() {
         });
 
         printBtn.addEventListener('click', function() {
+            const printedName = printedNameInput ? printedNameInput.value.trim() : '';
             if (canvas.dataset.hasStroke !== "1") {
                 alert('Please draw your signature first.');
                 return;
             }
+            if (!printedName) {
+                alert('Please enter printed name.');
+                return;
+            }
             sessionStorage.setItem('prepared_by_signature_data', canvas.toDataURL('image/png'));
+            sessionStorage.setItem('prepared_by_printed_name', printedName);
             const params = new URLSearchParams(window.location.search);
             params.set('auto_print', '1');
             params.set('prepared_sig', '1');

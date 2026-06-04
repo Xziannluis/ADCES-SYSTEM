@@ -97,6 +97,52 @@ foreach ($details as $d) {
 function h($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 function ratingChecked($current, $value) { return ((string)$current === (string)$value) ? 'checked' : ''; }
 
+function defaultPeacPrintIndicators(): array {
+    return [
+        'teacher_actions' => [
+            'The teacher communicates clear expectations of student performance in line with the unit standards and competencies.',
+            'The teacher utilizes various learning materials, resources and strategies to enable all students to learn and achieve the unit standards and competencies and learning goals.',
+            "The teacher monitors and checks on students' learning and attainment of the unit standards and competencies by conducting varied forms of assessments during class discussion.",
+            'The teacher provides appropriate feedback or interventions to enable students in attaining the unit standards and competencies.',
+            'The teacher manages the classroom environment and time in a way that supports student learning and the achievement of the unit standards and competencies.',
+            "The teacher processes students' understanding by asking clarifying or critical thinking questions related to the unit standards and competencies."
+        ],
+        'student_learning_actions' => [
+            'The students are active and engaged with the different learning tasks aimed at accomplishing the unit standards and competencies.',
+            'The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.',
+            'The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.',
+            'The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.',
+            'The students are able to explain how their ideas, outputs or performances accomplish the unit standards and competencies.',
+            'The students, when encouraged or on their own, ask questions to clarify or deepen their understanding of the unit standards and competencies.',
+            'The students are able to relate or transfer their learning to daily life and real world situations.',
+            'The students are able to integrate 21st century skills in their achievement of the unit standards and competencies.',
+            "The students are able to reflect on and connect their learning with the school's PVMGO."
+        ]
+    ];
+}
+
+$peacIndicators = defaultPeacPrintIndicators();
+try {
+    $criteriaStmt = $db->prepare("SELECT category, criterion_text
+                                  FROM evaluation_criteria
+                                  WHERE category IN ('teacher_actions','student_learning_actions')
+                                  ORDER BY category, criterion_index ASC");
+    $criteriaStmt->execute();
+    $tmpIndicators = ['teacher_actions' => [], 'student_learning_actions' => []];
+    while ($row = $criteriaStmt->fetch(PDO::FETCH_ASSOC)) {
+        $category = trim((string)($row['category'] ?? ''));
+        $text = trim((string)($row['criterion_text'] ?? ''));
+        if (isset($tmpIndicators[$category]) && $text !== '') {
+            $tmpIndicators[$category][] = $text;
+        }
+    }
+    foreach ($tmpIndicators as $category => $items) {
+        if (!empty($items)) {
+            $peacIndicators[$category] = $items;
+        }
+    }
+} catch (PDOException $e) {}
+
 // PEAC uses communications_avg for Teacher Actions, management_avg for Student Actions
 $teacherActionsAvg = (float)($eval['communications_avg'] ?? 0);
 $studentActionsAvg = (float)($eval['management_avg'] ?? 0);
@@ -319,31 +365,28 @@ $autoPrint = !empty($_GET['auto_print']);
 </div>
 
 <?php
-$teacherActionIndicators = [
-    "The teacher communicates clear expectations of student performance in line with the unit standards and competencies.",
-    "The teacher utilizes various learning materials, resources and strategies to enable all students to learn and achieve the unit standards and competencies and learning goals.",
-    "The teacher monitors and checks on students' learning and attainment of the unit standards and competencies by conducting varied forms of assessments during class discussion.",
-    "The teacher provides appropriate feedback or interventions to enable students in attaining the unit standards and competencies.",
-    "The teacher manages the classroom environment and time in a way that supports student learning and the achievement of the unit standards and competencies.",
-    "The teacher processes students' understanding by asking clarifying or critical thinking questions related to the unit standards and competencies.",
-];
-
-$studentActionIndicators = [
-    "The students are active and engaged with the different learning tasks aimed at accomplishing the unit standards and competencies.",
-    "The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.",
-    "The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.",
-    "The students with the help of different learning materials and resources including technology achieve the learning goals of the unit standards and competencies.",
-    "The students are able to explain how their ideas, outputs or performances accomplish the unit standards and competencies.",
-    "The students, when encouraged or on their own, ask questions to clarify or deepen their understanding of the unit standards and competencies.",
-    "The students are able to relate or transfer their learning to daily life and real world situations.",
-    "The students are able to integrate 21st century skills in their achievement of the unit standards and competencies.",
-    "The students are able to reflect on and connect their learning with the school's PVMGO.",
-];
-
 $sections = [
-    ['title' => 'A. TEACHER ACTIONS', 'key' => $taCategory, 'indicators' => $teacherActionIndicators, 'avg' => $teacherActionsAvg, 'start' => 1],
-    ['title' => 'B. STUDENT LEARNING ACTIONS', 'key' => $slaCategory, 'indicators' => $studentActionIndicators, 'avg' => $studentActionsAvg, 'start' => 7],
+    ['title' => 'A. TEACHER ACTIONS', 'key' => $taCategory, 'indicators' => $peacIndicators['teacher_actions'], 'avg' => $teacherActionsAvg, 'start' => 1],
+    ['title' => 'B. STUDENT LEARNING ACTIONS', 'key' => $slaCategory, 'indicators' => $peacIndicators['student_learning_actions'], 'avg' => $studentActionsAvg, 'start' => count($peacIndicators['teacher_actions']) + 1],
 ];
+
+foreach ($sections as &$section) {
+    $savedRows = $detailMap[$section['key']] ?? [];
+    if (empty($savedRows)) continue;
+    ksort($savedRows);
+    $savedIndicators = [];
+    foreach ($savedRows as $idx => $savedRow) {
+        $savedText = trim((string)($savedRow['criterion_text'] ?? ''));
+        $savedIndicators[(int)$idx] = $savedText !== '' ? $savedText : ($section['indicators'][(int)$idx] ?? '');
+    }
+    if (!empty($savedIndicators)) {
+        $section['indicators'] = $savedIndicators;
+    }
+}
+unset($section);
+if (isset($sections[0], $sections[1])) {
+    $sections[1]['start'] = count($sections[0]['indicators']) + 1;
+}
 
 foreach ($sections as $section):
 ?>
