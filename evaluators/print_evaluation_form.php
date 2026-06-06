@@ -377,15 +377,11 @@ $autoPrint = !empty($_GET['auto_print']);
         </td>
     </tr>
     <tr>
-        <td class="label">Department:</td>
-        <td><?php echo h($eval['teacher_department'] ?? ''); ?></td>
-        <td class="label">Subject/Time of Observation:</td>
-        <td><?php echo h($eval['subject_observed'] ?? ''); ?></td>
-    </tr>
-    <tr>
-        <td colspan="2"></td>
-        <td class="label">Date of Observation:</td>
-        <td><?php echo h($eval['observation_date'] ?? ''); ?></td>
+        <td colspan="2"><strong>Department:</strong> <?php echo h($eval['teacher_department'] ?? ''); ?></td>
+        <td colspan="2">
+            <div><strong>Subject/Time of Observation:</strong> <?php echo h($eval['subject_observed'] ?? ''); ?></div>
+            <div><strong>Date of Observation:</strong> <?php echo h($eval['observation_date'] ?? ''); ?></div>
+        </td>
     </tr>
     <tr>
         <td colspan="4">Type of Classroom Observation: &nbsp;Please check the appropriate box. ( <?php echo ($eval['observation_type'] ?? '') === 'Formal' ? '/' : '&nbsp;'; ?> ) Formal &nbsp; , &nbsp; ( <?php echo ($eval['observation_type'] ?? '') === 'Informal' ? '/' : '&nbsp;'; ?> ) Informal</td>
