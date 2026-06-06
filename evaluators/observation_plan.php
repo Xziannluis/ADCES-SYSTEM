@@ -3760,7 +3760,7 @@ try {
             width: 100%;
             min-width: 620px;
             border-collapse: collapse;
-            margin-top: 15px;
+            margin-top: 6px;
         }
         .plan-table th, .plan-table td {
             border: 1px solid #333;
@@ -3950,6 +3950,10 @@ try {
             align-items: center;
             gap: 0.5rem;
             flex-wrap: wrap;
+            margin-bottom: 8px !important;
+        }
+        .logs-toolbar {
+            margin: 0 0 6px !important;
         }
         .myobs-sign-canvas-wrap {
             display: inline-block;
@@ -3992,6 +3996,28 @@ try {
         }
         #unableObserveCommentsWrap {
             display: block;
+        }
+        #unableLogsModal .modal-dialog {
+            max-width: min(1340px, calc(100% - 1rem));
+        }
+        #unableLogsModal .modal-content {
+            border: 0;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28);
+        }
+        #unableLogsModal .modal-header {
+            background: #2c3e50;
+            color: #fff;
+        }
+        #unableLogsModal .btn-close {
+            filter: invert(1) grayscale(100%);
+        }
+        #unableLogsFrame {
+            width: 100%;
+            height: min(82vh, 820px);
+            border: 0;
+            background: #fff;
         }
 
         @media print {
@@ -4812,7 +4838,7 @@ try {
                 </div>
 
                 <!-- Action Buttons -->
-                <div class="mb-3 action-toolbar no-print">
+                <div class="action-toolbar no-print">
                     <?php if (!$is_observer_only): ?>
                     <button type="button" class="btn btn-primary" onclick="openScheduleModal()">
                         <i class="fas fa-calendar-plus me-1"></i>Set Schedule
@@ -4835,6 +4861,14 @@ try {
                     </button>
                     <?php endif; ?>
                 </div>
+
+                <?php if (in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true)): ?>
+                <div class="logs-toolbar no-print text-start">
+                    <button type="button" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#unableLogsModal">
+                        <i class="fas fa-clipboard-list me-1"></i>Logs
+                    </button>
+                </div>
+                <?php endif; ?>
 
                 <!-- Observation Plan Table -->
                 <div class="table-responsive">
@@ -5359,6 +5393,33 @@ try {
         </div>
     </div>
     <?php endif; ?>
+
+    <?php
+        $unableLogsParams = [
+            'embedded' => 1,
+            'department' => $raw_department,
+            'academic_year' => $academic_year,
+            'semester' => $semester,
+            'v' => time(),
+        ];
+        if (!empty($filter_month)) {
+            $unableLogsParams['month'] = $filter_month;
+        }
+        $unableLogsUrl = 'unable_evaluate_logs.php?' . http_build_query($unableLogsParams);
+    ?>
+    <div class="modal fade" id="unableLogsModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-clipboard-list me-2"></i>Logs for Unable to Evaluate</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <iframe id="unableLogsFrame" src="<?php echo htmlspecialchars($unableLogsUrl, ENT_QUOTES); ?>" title="Logs for Unable to Evaluate"></iframe>
+                </div>
+            </div>
+        </div>
+    </div>
 
 <script>
 // Available departments for current user based on their role
@@ -6185,7 +6246,26 @@ document.addEventListener('DOMContentLoaded', () => {
     var acceptReqBtn = document.getElementById('acceptRescheduleBtn');
     var countBadge = document.getElementById('rescheduleCount');
 
+    function enforceSingleScheduleSelection(activeCb) {
+        if (!activeCb || !activeCb.checked) return;
+        document.querySelectorAll('.reschedule-check').forEach(function(cb) {
+            if (cb !== activeCb) cb.checked = false;
+        });
+    }
+
+    function normalizeSingleScheduleSelection() {
+        var firstChecked = null;
+        document.querySelectorAll('.reschedule-check:checked').forEach(function(cb) {
+            if (!firstChecked) {
+                firstChecked = cb;
+                return;
+            }
+            cb.checked = false;
+        });
+    }
+
     function updateRescheduleState() {
+        normalizeSingleScheduleSelection();
         var checked = document.querySelectorAll('.reschedule-check:checked');
         var count = checked.length;
         var allWithEvalId = true;
@@ -6209,18 +6289,16 @@ document.addEventListener('DOMContentLoaded', () => {
             countBadge.textContent = count;
             countBadge.style.display = count > 0 ? 'inline' : 'none';
         }
+        if (checkAll) {
+            checkAll.checked = false;
+            checkAll.indeterminate = count > 0;
+        }
     }
 
     document.querySelectorAll('.reschedule-check').forEach(function(cb) {
         cb.addEventListener('change', function() {
+            enforceSingleScheduleSelection(this);
             updateRescheduleState();
-            // Update "check all" state
-            if (checkAll) {
-                var total = document.querySelectorAll('.reschedule-check').length;
-                var checked = document.querySelectorAll('.reschedule-check:checked').length;
-                checkAll.checked = (total > 0 && checked === total);
-                checkAll.indeterminate = (checked > 0 && checked < total);
-            }
         });
     });
 
@@ -6228,13 +6306,20 @@ document.addEventListener('DOMContentLoaded', () => {
     // don't fire consistently (e.g. restored DOM state).
     document.addEventListener('change', function(e) {
         if (!e.target || !e.target.classList || !e.target.classList.contains('reschedule-check')) return;
+        enforceSingleScheduleSelection(e.target);
         updateRescheduleState();
     });
 
     if (checkAll) {
         checkAll.addEventListener('change', function() {
+            var first = null;
             document.querySelectorAll('.reschedule-check').forEach(function(cb) {
-                cb.checked = checkAll.checked;
+                if (checkAll.checked && !first) {
+                    cb.checked = true;
+                    first = cb;
+                } else {
+                    cb.checked = false;
+                }
             });
             updateRescheduleState();
         });
