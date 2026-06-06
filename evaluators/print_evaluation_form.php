@@ -241,47 +241,47 @@ $autoPrint = !empty($_GET['auto_print']);
         .eval-table td.rating-cell { text-align: center; width: 30px; }
         .eval-table td.comments-cell { width: 145px; font-size: 11px; }
         .eval-table .cat-header td { font-weight: 700; background: #f5f5f5; }
-        .eval-table .avg-row td { padding: 4px 6px; font-weight: 700; font-size: 12px; text-align: center; }
-        .avg-line { display: inline-block; width: 75px; border-bottom: 1px solid #000; text-align: center; margin-left: 6px; }
+        .eval-table .avg-row td { padding: 5px 6px; font-weight: 800; font-size: 13px; text-align: center; }
+        .avg-line { display: inline-block; width: 88px; border-bottom: 1.2px solid #000; text-align: center; margin-left: 6px; }
 
         /* Total average row in table */
         .total-avg-table { width: 100%; border-collapse: collapse; margin: 4px 0; }
         .total-avg-table tr { border: 1.5px solid #000; }
-        .total-avg-table td { border: none; padding: 6px 10px; font-weight: 700; font-size: 10px; text-align: left; }
-        .total-avg-table .avg-line { display: inline-block; width: 80px; border-bottom: 1px solid #000; text-align: center; margin-left: 8px; }
-        .interpretation-box { font-size: 9.5px; margin-bottom: 4px; }
-        .interpretation-box table td { padding: 0 6px; }
+        .total-avg-table td { border: none; padding: 7px 10px; font-weight: 800; font-size: 13px; text-align: left; }
+        .total-avg-table .avg-line { display: inline-block; width: 95px; border-bottom: 1.2px solid #000; text-align: center; margin-left: 8px; }
+        .interpretation-box { font-size: 13px; margin: 6px 0 8px; font-weight: 700; }
+        .interpretation-box table td { padding: 1px 6px; }
         .interpretation-box td:first-child { font-weight: 600; white-space: nowrap; }
 
         /* Narrative table */
-        .narrative-table { width: 100%; border-collapse: collapse; margin-bottom: 26px; table-layout: fixed; }
-        .narrative-table td { border: 1.5px solid #000; padding: 7px 8px; font-size: 10.5px; vertical-align: top; width: 50%; }
+        .narrative-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; table-layout: fixed; }
+        .narrative-table td { border: 1.5px solid #000; padding: 8px 9px; font-size: 12px; vertical-align: top; width: 50%; }
         .narrative-table td[colspan="2"] { width: 100%; }
-        .narrative-table .n-label { font-weight: 700; font-size: 11px; margin-bottom: 4px; }
-        .narrative-table .n-content { min-height: 78px; font-size: 10px; line-height: 1.45; text-align: justify; overflow-wrap: break-word; word-break: normal; white-space: normal; }
+        .narrative-table .n-label { font-weight: 700; font-size: 13px; margin-bottom: 5px; }
+        .narrative-table .n-content { min-height: 86px; font-size: 11.5px; line-height: 1.42; text-align: justify; overflow-wrap: break-word; word-break: normal; white-space: normal; }
 
         /* Signature section */
-        .sig-section { margin-top: 6px; page-break-inside: avoid; font-size: 10px; }
-        .sig-section h6 { font-size: 11px; font-weight: 700; margin: 0 0 2px; }
-        .sig-section p.cert { margin: 0 0 6px; font-size: 9px; font-style: italic; }
-        .sig-row { display: flex; gap: 30px; margin-bottom: 4px; align-items: flex-end; }
+        .sig-section { margin-top: 8px; page-break-inside: avoid; font-size: 11px; }
+        .sig-section h6 { font-size: 12.5px; font-weight: 700; margin: 0 0 2px; }
+        .sig-section p.cert { margin: 0 0 6px; font-size: 10px; font-style: italic; }
+        .sig-row { display: flex; gap: 30px; margin-bottom: 6px; align-items: flex-end; }
         .sig-col { flex: 1; }
         .sig-col:last-child { flex: 1; }
-        .sig-img { height: 50px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 4px; }
-        .sig-img img { max-height: 46px; max-width: 100%; object-fit: contain; }
-        .sig-name { text-align: center; font-weight: 600; font-size: 10px; margin: 4px 0; }
-        .sig-line { border-top: 1px solid #000; text-align: center; padding-top: 0; font-weight: 600; font-size: 10px; width: 120px; margin: 0 auto; }
-        .sig-caption { text-align: center; font-size: 8.5px; color: #444; }
-        .sig-date-value { height: 54px; display: flex; align-items: flex-end; justify-content: center; font-weight: 600; font-size: 10px; margin: 0 0 4px; }
+        .sig-img { height: 58px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 4px; }
+        .sig-img img { max-height: 54px; max-width: 100%; object-fit: contain; }
+        .sig-name { text-align: center; font-weight: 700; font-size: 11px; margin: 4px 0; }
+        .sig-line { border-top: 1px solid #000; text-align: center; padding-top: 0; font-weight: 600; font-size: 11px; width: 150px; margin: 0 auto; }
+        .sig-caption { text-align: center; font-size: 9.5px; color: #444; }
+        .sig-date-value { height: 60px; display: flex; align-items: flex-end; justify-content: center; font-weight: 700; font-size: 11px; margin: 0 0 4px; }
         .sig-date-row { display: flex; gap: 30px; margin-top: 2px; }
         .sig-date-col { flex: 1; font-size: 10px; }
 
         /* Footer */
-        .page-footer { margin-top: 6px; }
+        .page-footer { margin-top: 8px; }
         .page-footer img { width: 100%; height: auto; }
-        .form-code-box { border: 1px solid #000; width: 260px; margin: 12px 0 10px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .form-code-box { border: 1.2px solid #000; width: 340px; margin: 14px 0 12px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .form-code-box table { width: 100%; border-collapse: collapse; }
-        .form-code-box td { border: none; padding: 2px 6px; font-size: 7.8px; line-height: 1.15; vertical-align: middle; }
+        .form-code-box td { border: none; padding: 4px 8px; font-size: 10px; line-height: 1.15; vertical-align: middle; }
         .form-code-box td:first-child { background-color: #1f4f8f !important; color: #fff !important; font-weight: 700; width: 42%; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         .form-code-box td:last-child { font-weight: 700; }
         /* Print controls */
