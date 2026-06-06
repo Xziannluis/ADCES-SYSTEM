@@ -61,6 +61,7 @@ try {
 
 // Get teacher_id from URL
 $teacher_id = $_GET['teacher_id'] ?? null;
+$allow_observer_imbalance = !empty($_GET['allow_observer_imbalance']);
 if (empty($teacher_id)) {
     header("Location: evaluation.php");
     exit();
@@ -144,10 +145,13 @@ if ($can_evaluate && !empty($scheduleRaw)) {
         ]);
         $balance = $balanceStmt->fetch(PDO::FETCH_ASSOC) ?: [];
         $observerCount = (int)($balance['observer_count'] ?? 0);
-        if ($observerCount < 2) {
+        if ($observerCount < 2 && !$allow_observer_imbalance) {
             $can_evaluate = false;
             $schedule_message = 'Observer imbalance: evaluation cannot proceed until at least 2 observers/evaluators are assigned.';
             $schedule_alert_class = 'alert-danger';
+        } elseif ($observerCount < 2) {
+            $schedule_message = 'Only one observer/evaluator remains for this schedule.';
+            $schedule_alert_class = 'alert-warning';
         }
     } catch (Exception $e) {}
 }
@@ -319,6 +323,7 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
 
             <form id="peacEvaluationForm">
                 <input type="hidden" name="teacher_id" value="<?php echo (int)$teacher_id; ?>">
+                <input type="hidden" name="allow_observer_imbalance" value="<?php echo $allow_observer_imbalance ? '1' : '0'; ?>">
                 <input type="hidden" name="evaluation_form_type" value="peac">
 
                 <div class="card">

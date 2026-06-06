@@ -254,7 +254,7 @@ class EvaluationController {
         }
     }
 
-    private function assertObserverBalance(int $teacherId, string $observationDate, string $observationTime, string $department = ''): void {
+    private function assertObserverBalance(int $teacherId, string $observationDate, string $observationTime, string $department = '', bool $allowOverride = false): void {
         $observationDate = trim($observationDate);
         $observationTime = trim($observationTime);
         if ($observationDate === '') return;
@@ -347,7 +347,7 @@ class EvaluationController {
             // Keep evaluation-row count as fallback.
         }
 
-        if ($observerCount < 2) {
+        if ($observerCount < 2 && !$allowOverride) {
             throw new Exception('Observer imbalance: evaluation cannot proceed until at least 2 observers/evaluators are assigned.');
         }
     }
@@ -476,7 +476,8 @@ class EvaluationController {
                     $balanceDepartment = trim((string)$deptStmt->fetchColumn());
                 } catch (Exception $e) {}
             }
-            $this->assertObserverBalance((int)$teacherId, $balanceDate, $balanceTime, $balanceDepartment);
+            $allowObserverImbalance = !empty($postData['allow_observer_imbalance']);
+            $this->assertObserverBalance((int)$teacherId, $balanceDate, $balanceTime, $balanceDepartment, $allowObserverImbalance);
 
             // Enforce signatures for both ISO and PEAC submissions (server-side).
             $raterSig = trim((string)($postData['rater_signature'] ?? ''));

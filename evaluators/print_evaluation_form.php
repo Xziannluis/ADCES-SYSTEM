@@ -202,7 +202,7 @@ $autoPrint = !empty($_GET['auto_print']);
         .school-header .main-logo { width: 64px; height: 64px; object-fit: contain; justify-self: center; }
         .school-header .cert-logo { width: 86px; max-height: 58px; object-fit: contain; justify-self: start; }
         .school-header .header-text { text-align: center; color: #1f4f8f; line-height: 1.15; }
-        .school-header .school-name { margin: 0; font-size: 27px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
+        .school-header .school-name { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: 0; line-height: 1.05; text-transform: uppercase; }
         .school-header .school-line { margin: 1px 0; font-size: 11px; color: #222; }
         .school-header a { color: #1f4f8f; text-decoration: underline; font-size: 11px; }
         .eval-title { text-align: center !important; font-weight: 800; font-size: 19px; margin: 0 auto 22px; letter-spacing: 0; clear: both; }
@@ -210,12 +210,15 @@ $autoPrint = !empty($_GET['auto_print']);
         .print-page:last-of-type { page-break-after: auto; break-after: auto; }
 
         /* Section titles */
-        .section-title { font-weight: 800; font-size: 16px; margin: 7px 0 4px; }
+        .section-title { font-weight: 800; font-size: 14px; margin: 7px 0 4px; }
 
         /* PART 1 info table */
         .info-table { width: 100%; border-collapse: collapse; margin-bottom: 9px; font-size: 12px; table-layout: fixed; }
         .info-table td { border: 1.3px solid #000; padding: 4.5px 6px; line-height: 1.18; vertical-align: middle; overflow-wrap: anywhere; }
         .info-table td.label { font-weight: 700; }
+        .info-table .no-right-border { border-right: none; }
+        .info-table .no-left-border { border-left: none; }
+        .info-table .faculty-name-cell { padding-left: 0; }
         .info-table td.nowrap { white-space: nowrap; overflow-wrap: normal; }
         .info-table .split-cell { display: flex; justify-content: space-between; align-items: center; gap: 14px; white-space: nowrap; overflow-wrap: normal; }
         .info-table .split-label { font-weight: 700; }
@@ -367,14 +370,18 @@ $autoPrint = !empty($_GET['auto_print']);
         <col style="width:26%;">
     </colgroup>
     <tr>
-        <td class="label">Name of Faculty:</td>
-        <td><?php echo h($eval['teacher_name']); ?></td>
+        <td class="label no-right-border">Name of Faculty:</td>
+        <td class="no-left-border faculty-name-cell"><?php echo h($eval['teacher_name']); ?></td>
         <td colspan="2">
             <div class="split-cell">
                 <span><span class="split-label">Academic Year:</span> <?php echo h($eval['academic_year'] ?? ''); ?></span>
                 <span>Semester: ( <?php echo strpos((string)($eval['semester'] ?? ''), '1st') !== false ? '/' : '&nbsp;'; ?> ) 1st &nbsp; ( <?php echo strpos((string)($eval['semester'] ?? ''), '2nd') !== false ? '/' : '&nbsp;'; ?> ) 2nd</span>
             </div>
         </td>
+    </tr>
+    <tr>
+        <td colspan="2">&nbsp;</td>
+        <td colspan="2">&nbsp;</td>
     </tr>
     <tr>
         <td colspan="2"><strong>Department:</strong> <?php echo h($eval['teacher_department'] ?? ''); ?></td>

@@ -759,6 +759,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 }
                             }
                             $tid_check = (int)$teacher_row['id'];
+                            $observer_imbalance_warning = false;
                             $iso_done = false;
                             $peac_done = false;
                             $all_done = false;
@@ -810,10 +811,16 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     $bal = $schedule_balance_stmt->fetch(PDO::FETCH_ASSOC) ?: [];
                                     $observer_count = (int)($bal['observer_count'] ?? 0);
                                     if ($observer_count < 2) {
-                                        $can_evaluate_now = false;
-                                        $schedule_badge_class = 'bg-danger';
+                                        $observer_imbalance_warning = true;
                                         $schedule_badge_text = 'Evaluator imbalanced';
-                                        $schedule_block_message = 'Evaluation cannot proceed: this schedule needs at least 2 observers/evaluators.';
+                                        if ($can_evaluate_now) {
+                                            $schedule_badge_class = 'bg-warning text-dark';
+                                            $schedule_block_message = 'Only one observer/evaluator remains for this schedule.';
+                                        } else {
+                                            $can_evaluate_now = false;
+                                            $schedule_badge_class = 'bg-danger';
+                                            $schedule_block_message = 'Evaluation cannot proceed: this schedule needs at least 2 observers/evaluators.';
+                                        }
                                     }
                                 } catch (Exception $e) {
                                     // fail-open to avoid blocking all rows on query issues
@@ -837,7 +844,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 }
                             }
                         ?>
-                        <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'You have already completed this evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars((string)$scheduleRaw, ENT_QUOTES); ?>" data-schedule-end-raw="<?php echo htmlspecialchars((string)$scheduleEndRawEffective, ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
+                        <div class="list-group-item teacher-item <?php echo ($can_evaluate_now && !$all_done) ? '' : 'disabled'; ?>" data-teacher-id="<?php echo $teacher_row['id']; ?>" data-teacher-name="<?php echo htmlspecialchars($teacher_row['name'] ?? '', ENT_QUOTES); ?>" data-has-schedule="<?php echo ($has_schedule && !$all_done) ? '1' : '0'; ?>" data-can-evaluate-now="<?php echo ($can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-observer-imbalance="<?php echo ($observer_imbalance_warning && $can_evaluate_now && !$all_done) ? '1' : '0'; ?>" data-schedule-message="<?php echo htmlspecialchars($schedule_message, ENT_QUOTES); ?>" data-block-reason="<?php echo htmlspecialchars($all_done ? 'You have already completed this evaluation.' : $schedule_block_message, ENT_QUOTES); ?>" data-focus="<?php echo htmlspecialchars($teacher_row['evaluation_focus'] ?? '', ENT_QUOTES); ?>" data-semester="<?php echo htmlspecialchars($teacher_row['evaluation_semester'] ?? '', ENT_QUOTES); ?>" data-subject-area="<?php echo htmlspecialchars($teacher_row['evaluation_subject_area'] ?? '', ENT_QUOTES); ?>" data-room="<?php echo htmlspecialchars($teacher_row['evaluation_room'] ?? '', ENT_QUOTES); ?>" data-subject="<?php echo htmlspecialchars($teacher_row['evaluation_subject'] ?? '', ENT_QUOTES); ?>" data-form-type="<?php echo htmlspecialchars($teacher_form_type, ENT_QUOTES); ?>" data-iso-done="<?php echo $iso_done ? '1' : '0'; ?>" data-schedule-raw="<?php echo htmlspecialchars((string)$scheduleRaw, ENT_QUOTES); ?>" data-schedule-end-raw="<?php echo htmlspecialchars((string)$scheduleEndRawEffective, ENT_QUOTES); ?>" data-teacher-department="<?php echo htmlspecialchars($teacher_row['department'] ?? '', ENT_QUOTES); ?>" data-scheduled-department="<?php echo htmlspecialchars($teacher_row['scheduled_department'] ?? '', ENT_QUOTES); ?>">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1"><?php echo htmlspecialchars($teacher_row['name']); ?></h6>
@@ -898,6 +905,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 <form id="evaluationForm" method="POST">
                     <input type="hidden" id="draft_evaluation_id" name="evaluation_id" value="">
                     <input type="hidden" name="teacher_id" id="selected_teacher_id">
+                    <input type="hidden" name="allow_observer_imbalance" id="allowObserverImbalance" value="0">
                     <div class="card">
                         <div class="card-header">
                                 <h5 class="mb-0 text-center">CLASSROOM OBSERVATION FORM</h5>
@@ -1807,6 +1815,19 @@ if($_POST && isset($_POST['submit_evaluation'])) {
         });
 
         function initializeTeacherSelection() {
+            function confirmObserverImbalanceIfNeeded(item) {
+                const allowObserverImbalanceInput = document.getElementById('allowObserverImbalance');
+                if (allowObserverImbalanceInput) allowObserverImbalanceInput.value = '0';
+                if (!item || item.getAttribute('data-observer-imbalance') !== '1') {
+                    return true;
+                }
+                const proceed = confirm('Only one observer/evaluator remains. Do you still want to proceed with evaluation?');
+                if (proceed && allowObserverImbalanceInput) {
+                    allowObserverImbalanceInput.value = '1';
+                }
+                return proceed;
+            }
+
             // Teacher selection
             document.querySelectorAll('.teacher-item').forEach(item => {
                 item.addEventListener('click', function(e) {
@@ -1823,6 +1844,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     }
                     if (canEvaluateNow !== '1') {
                         alert('You can\'t evaluate this teacher yet. ' + blockReason);
+                        return;
+                    }
+                    if (!confirmObserverImbalanceIfNeeded(this)) {
                         return;
                     }
                     const teacherId = this.getAttribute('data-teacher-id');
@@ -1858,6 +1882,9 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 btn.addEventListener('click', function(e) {
                     e.stopPropagation();
                     const item = this.closest('.teacher-item');
+                    if (!confirmObserverImbalanceIfNeeded(item)) {
+                        return;
+                    }
                     const teacherId = item.getAttribute('data-teacher-id');
                     const nameElem = item.querySelector('h6');
                     const deptElem = item.querySelector('p');
@@ -1874,8 +1901,12 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 btn.addEventListener('click', function(e) {
                     e.stopPropagation();
                     const item = this.closest('.teacher-item');
+                    if (!confirmObserverImbalanceIfNeeded(item)) {
+                        return;
+                    }
                     const teacherId = item.getAttribute('data-teacher-id');
-                    window.location.href = 'evaluation_peac.php?teacher_id=' + encodeURIComponent(teacherId);
+                    const separator = 'evaluation_peac.php?teacher_id=' + encodeURIComponent(teacherId);
+                    window.location.href = separator + (item.getAttribute('data-observer-imbalance') === '1' ? '&allow_observer_imbalance=1' : '');
                 });
             });
 
