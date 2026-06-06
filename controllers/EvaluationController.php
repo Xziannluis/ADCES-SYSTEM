@@ -443,7 +443,7 @@ class EvaluationController {
             if (empty($postData['observation_room']) && !empty($effectiveSchedule['room'])) {
                 $postData['observation_room'] = (string)$effectiveSchedule['room'];
             }
-            if (!empty($effectiveSchedule['subject_observed'])) {
+            if (empty($postData['subject_observed']) && !empty($effectiveSchedule['subject_observed'])) {
                 $postData['subject_observed'] = (string)$effectiveSchedule['subject_observed'];
             }
             if (empty($postData['subject_area']) && !empty($effectiveSchedule['subject_area'])) {

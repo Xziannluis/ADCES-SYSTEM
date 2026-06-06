@@ -33,7 +33,30 @@ if ($evaluationId <= 0) {
 }
 
 $headerStmt = $db->prepare(
-    "SELECT e.*, t.name AS teacher_name, t.department AS teacher_department, u.name AS evaluator_name
+    "SELECT e.*, t.name AS teacher_name, t.department AS teacher_department, u.name AS evaluator_name,
+            COALESCE(
+                (
+                    SELECT ts.schedule_end
+                    FROM teacher_schedules ts
+                    WHERE ts.evaluation_id = e.id
+                    ORDER BY ts.id DESC
+                    LIMIT 1
+                ),
+                (
+                    SELECT ts2.schedule_end
+                    FROM teacher_schedules ts2
+                    WHERE ts2.teacher_id = e.teacher_id
+                      AND DATE(ts2.schedule_start) = e.observation_date
+                      AND DATE_FORMAT(ts2.schedule_start, '%H:%i') = (
+                          CASE
+                              WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                              ELSE LEFT(TRIM(e.observation_time), 5)
+                          END
+                      )
+                    ORDER BY ts2.id DESC
+                    LIMIT 1
+                )
+            ) AS print_schedule_end
      FROM evaluations e
      JOIN teachers t ON t.id = e.teacher_id
      JOIN users u ON u.id = e.evaluator_id
@@ -116,6 +139,36 @@ foreach ($details as $d) {
 function h($v) { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
 function ratingChecked($current, $value) { return ((string)$current === (string)$value) ? 'checked' : ''; }
 function avgOrZero($v) { return ($v === null || $v === '') ? 0 : (float)$v; }
+function formatPrintTime($value): string {
+    $value = trim((string)$value);
+    if ($value === '') return '';
+    try {
+        if (preg_match('/^\d{1,2}:\d{2}(:\d{2})?$/', $value)) {
+            $value = '2000-01-01 ' . $value;
+        }
+        return (new DateTime($value))->format('g:i A');
+    } catch (Exception $e) {
+        return '';
+    }
+}
+function subjectTimeForPrint(array $eval): string {
+    $subject = trim((string)($eval['subject_observed'] ?? ''));
+    if ($subject !== '' && preg_match('/\b\d{1,2}:\d{2}\s*(AM|PM)\b/i', $subject)) {
+        return $subject;
+    }
+
+    $start = formatPrintTime($eval['observation_time'] ?? '');
+    $end = formatPrintTime($eval['print_schedule_end'] ?? '');
+    $timeRange = '';
+    if ($start !== '' && $end !== '') {
+        $timeRange = $start . ' - ' . $end;
+    } elseif ($start !== '') {
+        $timeRange = $start;
+    }
+
+    if ($subject !== '' && $timeRange !== '') return $subject . ' ' . $timeRange;
+    return $subject !== '' ? $subject : $timeRange;
+}
 
 function defaultIsoPrintIndicators(): array {
     return [
@@ -267,15 +320,15 @@ $autoPrint = !empty($_GET['auto_print']);
         .sig-section { margin-top: 8px; page-break-inside: avoid; font-size: 11px; }
         .sig-section h6 { font-size: 12.5px; font-weight: 700; margin: 0 0 2px; }
         .sig-section p.cert { margin: 0 0 6px; font-size: 10px; font-style: italic; }
-        .sig-row { display: flex; gap: 30px; margin-bottom: 6px; align-items: flex-end; }
+        .sig-row { display: flex; gap: 30px; margin-bottom: 4px; align-items: flex-end; }
         .sig-col { flex: 1; }
         .sig-col:last-child { flex: 1; }
-        .sig-img { height: 58px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 4px; }
-        .sig-img img { max-height: 54px; max-width: 100%; object-fit: contain; }
-        .sig-name { text-align: center; font-weight: 700; font-size: 11px; margin: 4px 0; }
+        .sig-img { height: 42px; display: flex; align-items: flex-end; justify-content: center; margin-bottom: 0; }
+        .sig-img img { max-height: 42px; max-width: 100%; object-fit: contain; }
+        .sig-name { text-align: center; font-weight: 700; font-size: 11px; margin: 0 0 1px; }
         .sig-line { border-top: 1px solid #000; text-align: center; padding-top: 0; font-weight: 600; font-size: 11px; width: 150px; margin: 0 auto; }
         .sig-caption { text-align: center; font-size: 9.5px; color: #444; }
-        .sig-date-value { height: 60px; display: flex; align-items: flex-end; justify-content: center; font-weight: 700; font-size: 11px; margin: 0 0 4px; }
+        .sig-date-value { height: 42px; display: flex; align-items: flex-end; justify-content: center; font-weight: 700; font-size: 11px; margin: 0 0 1px; }
         .sig-date-row { display: flex; gap: 30px; margin-top: 2px; }
         .sig-date-col { flex: 1; font-size: 10px; }
 
@@ -386,7 +439,7 @@ $autoPrint = !empty($_GET['auto_print']);
     <tr>
         <td colspan="2"><strong>Department:</strong> <?php echo h($eval['teacher_department'] ?? ''); ?></td>
         <td colspan="2">
-            <div><strong>Subject/Time of Observation:</strong> <?php echo h($eval['subject_observed'] ?? ''); ?></div>
+            <div><strong>Subject/Time of Observation:</strong> <?php echo h(subjectTimeForPrint($eval)); ?></div>
             <div><strong>Date of Observation:</strong> <?php echo h($eval['observation_date'] ?? ''); ?></div>
         </td>
     </tr>

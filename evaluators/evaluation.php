@@ -1545,6 +1545,27 @@ if($_POST && isset($_POST['submit_evaluation'])) {
     </div>
     
     <?php include '../includes/footer.php'; ?>
+
+    <div class="observer-imbalance-backdrop" id="observerImbalanceModal" aria-hidden="true">
+        <div class="observer-imbalance-modal" role="dialog" aria-modal="true" aria-labelledby="observerImbalanceTitle">
+            <div class="observer-imbalance-modal__bar"></div>
+            <div class="observer-imbalance-modal__body">
+                <div class="observer-imbalance-modal__head">
+                    <div class="observer-imbalance-modal__icon">
+                        <i class="fas fa-exclamation-triangle"></i>
+                    </div>
+                    <div>
+                        <h5 id="observerImbalanceTitle">Observer imbalance detected</h5>
+                        <p>Only one observer/evaluator remains. Do you still want to proceed with evaluation?</p>
+                    </div>
+                </div>
+                <div class="observer-imbalance-modal__actions">
+                    <button type="button" class="btn btn-primary" data-observer-imbalance-choice="yes">Yes, proceed</button>
+                    <button type="button" class="btn btn-outline-secondary" data-observer-imbalance-choice="no">No</button>
+                </div>
+            </div>
+        </div>
+    </div>
     
     <script>
         const ISO_CRITERIA = <?php echo json_encode($isoCriteria, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
@@ -1624,6 +1645,77 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     border-radius: 4px;
                     padding: 3px 6px;
                     white-space: nowrap;
+                }
+                .observer-imbalance-backdrop {
+                    position: fixed;
+                    inset: 0;
+                    z-index: 1080;
+                    display: none;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 20px;
+                    background: rgba(15, 23, 42, 0.48);
+                    backdrop-filter: blur(3px);
+                }
+                .observer-imbalance-backdrop.is-visible { display: flex; }
+                .observer-imbalance-modal {
+                    width: min(430px, 100%);
+                    background: #fff;
+                    border-radius: 14px;
+                    box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+                    border: 1px solid rgba(148, 163, 184, 0.25);
+                    overflow: hidden;
+                    animation: observerModalIn 0.16s ease-out;
+                }
+                .observer-imbalance-modal__bar {
+                    height: 5px;
+                    background: linear-gradient(90deg, #f59e0b, #2563eb);
+                }
+                .observer-imbalance-modal__body { padding: 22px 24px 18px; }
+                .observer-imbalance-modal__head {
+                    display: flex;
+                    gap: 14px;
+                    align-items: flex-start;
+                    margin-bottom: 14px;
+                }
+                .observer-imbalance-modal__icon {
+                    width: 42px;
+                    height: 42px;
+                    border-radius: 50%;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    background: #fff7ed;
+                    color: #d97706;
+                    font-size: 18px;
+                    flex: 0 0 auto;
+                }
+                .observer-imbalance-modal h5 {
+                    margin: 0 0 5px;
+                    font-size: 1.05rem;
+                    font-weight: 800;
+                    color: #1f2937;
+                }
+                .observer-imbalance-modal p {
+                    margin: 0;
+                    color: #475569;
+                    line-height: 1.45;
+                    font-size: 0.94rem;
+                }
+                .observer-imbalance-modal__actions {
+                    display: flex;
+                    justify-content: flex-end;
+                    gap: 10px;
+                    padding-top: 18px;
+                }
+                .observer-imbalance-modal__actions .btn {
+                    min-width: 92px;
+                    border-radius: 8px;
+                    font-weight: 700;
+                }
+                @keyframes observerModalIn {
+                    from { opacity: 0; transform: translateY(8px) scale(0.98); }
+                    to { opacity: 1; transform: translateY(0) scale(1); }
                 }
             `;
             document.head.appendChild(style);
@@ -1775,7 +1867,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
         }
 
         // Set current date for forms
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', async function() {
             renderDynamicIsoIndicators();
             const today = toLocalDateInputValue(new Date());
             const observationDate = document.getElementById('observationDate');
@@ -1802,6 +1894,15 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 // If the teacher list is present, try to prefill the form from that list item then start
                 const preItem = document.querySelector(`.teacher-item[data-teacher-id="${preselectTeacher}"]`);
                 if (preItem) {
+                    if (preItem.getAttribute('data-observer-imbalance') === '1') {
+                        const proceed = await showObserverImbalanceModal();
+                        if (!proceed) {
+                            returnToEvaluationSelection();
+                            return;
+                        }
+                        const allowObserverImbalanceInput = document.getElementById('allowObserverImbalance');
+                        if (allowObserverImbalanceInput) allowObserverImbalanceInput.value = '1';
+                    }
                     const nameElem = preItem.querySelector('h6');
                     const deptElem = preItem.querySelector('p');
                     const facultyNameInput = document.getElementById('facultyName');
@@ -1814,23 +1915,102 @@ if($_POST && isset($_POST['submit_evaluation'])) {
             }
         });
 
+        function showObserverImbalanceModal() {
+            const modal = document.getElementById('observerImbalanceModal');
+            if (!modal) {
+                return Promise.resolve(false);
+            }
+            return new Promise(resolve => {
+                const yesBtn = modal.querySelector('[data-observer-imbalance-choice="yes"]');
+                const noBtn = modal.querySelector('[data-observer-imbalance-choice="no"]');
+
+                const close = (choice) => {
+                    modal.classList.remove('is-visible');
+                    modal.setAttribute('aria-hidden', 'true');
+                    yesBtn?.removeEventListener('click', onYes);
+                    noBtn?.removeEventListener('click', onNo);
+                    modal.removeEventListener('click', onBackdrop);
+                    document.removeEventListener('keydown', onKeydown);
+                    resolve(choice);
+                };
+                const onYes = () => close(true);
+                const onNo = () => close(false);
+                const onBackdrop = (event) => {
+                    if (event.target === modal) close(false);
+                };
+                const onKeydown = (event) => {
+                    if (event.key === 'Escape') close(false);
+                };
+
+                yesBtn?.addEventListener('click', onYes);
+                noBtn?.addEventListener('click', onNo);
+                modal.addEventListener('click', onBackdrop);
+                document.addEventListener('keydown', onKeydown);
+                modal.classList.add('is-visible');
+                modal.setAttribute('aria-hidden', 'false');
+                setTimeout(() => noBtn?.focus(), 0);
+            });
+        }
+
+        function getSelectedTeacherItem() {
+            const selectedTeacherId = document.getElementById('selected_teacher_id')?.value || '';
+            if (!selectedTeacherId) return null;
+            return Array.from(document.querySelectorAll('.teacher-item')).find(item => item.getAttribute('data-teacher-id') === selectedTeacherId) || null;
+        }
+
+        function returnToEvaluationSelection() {
+            const allowObserverImbalanceInput = document.getElementById('allowObserverImbalance');
+            if (allowObserverImbalanceInput) allowObserverImbalanceInput.value = '0';
+            showTeacherSelection();
+            window.scrollTo({ top: 0, behavior: 'auto' });
+
+            const url = new URL(window.location.href);
+            if (url.searchParams.has('teacher_id')) {
+                url.searchParams.delete('teacher_id');
+                window.history.replaceState({}, '', url.pathname + (url.search ? url.search : ''));
+            }
+        }
+
+        async function confirmObserverImbalanceForCurrentForm() {
+            const item = getSelectedTeacherItem();
+            const allowObserverImbalanceInput = document.getElementById('allowObserverImbalance');
+            if (!item || item.getAttribute('data-observer-imbalance') !== '1') {
+                return true;
+            }
+            if (allowObserverImbalanceInput?.value === '1') {
+                return true;
+            }
+            const proceed = await showObserverImbalanceModal();
+            if (!proceed) {
+                if (allowObserverImbalanceInput) allowObserverImbalanceInput.value = '0';
+                returnToEvaluationSelection();
+                return false;
+            }
+            if (allowObserverImbalanceInput) allowObserverImbalanceInput.value = '1';
+            return true;
+        }
+
         function initializeTeacherSelection() {
-            function confirmObserverImbalanceIfNeeded(item) {
+
+            async function confirmObserverImbalanceIfNeeded(item) {
                 const allowObserverImbalanceInput = document.getElementById('allowObserverImbalance');
                 if (allowObserverImbalanceInput) allowObserverImbalanceInput.value = '0';
                 if (!item || item.getAttribute('data-observer-imbalance') !== '1') {
                     return true;
                 }
-                const proceed = confirm('Only one observer/evaluator remains. Do you still want to proceed with evaluation?');
+                const proceed = await showObserverImbalanceModal();
                 if (proceed && allowObserverImbalanceInput) {
                     allowObserverImbalanceInput.value = '1';
+                }
+                if (!proceed) {
+                    returnToEvaluationSelection();
                 }
                 return proceed;
             }
 
             // Teacher selection
             document.querySelectorAll('.teacher-item').forEach(item => {
-                item.addEventListener('click', function(e) {
+                item.addEventListener('click', async function(e) {
                     // If a "both" button was clicked, let the button handlers deal with it
                     if (e.target.closest('.btn-iso-eval') || e.target.closest('.btn-peac-eval') || e.target.closest('.btn-peac-locked')) {
                         return;
@@ -1846,7 +2026,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                         alert('You can\'t evaluate this teacher yet. ' + blockReason);
                         return;
                     }
-                    if (!confirmObserverImbalanceIfNeeded(this)) {
+                    if (!(await confirmObserverImbalanceIfNeeded(this))) {
                         return;
                     }
                     const teacherId = this.getAttribute('data-teacher-id');
@@ -1879,10 +2059,10 @@ if($_POST && isset($_POST['submit_evaluation'])) {
 
             // "Both" form type: ISO button handler
             document.querySelectorAll('.btn-iso-eval').forEach(btn => {
-                btn.addEventListener('click', function(e) {
+                btn.addEventListener('click', async function(e) {
                     e.stopPropagation();
                     const item = this.closest('.teacher-item');
-                    if (!confirmObserverImbalanceIfNeeded(item)) {
+                    if (!(await confirmObserverImbalanceIfNeeded(item))) {
                         return;
                     }
                     const teacherId = item.getAttribute('data-teacher-id');
@@ -1898,10 +2078,10 @@ if($_POST && isset($_POST['submit_evaluation'])) {
 
             // "Both" form type: PEAC button handler
             document.querySelectorAll('.btn-peac-eval').forEach(btn => {
-                btn.addEventListener('click', function(e) {
+                btn.addEventListener('click', async function(e) {
                     e.stopPropagation();
                     const item = this.closest('.teacher-item');
-                    if (!confirmObserverImbalanceIfNeeded(item)) {
+                    if (!(await confirmObserverImbalanceIfNeeded(item))) {
                         return;
                     }
                     const teacherId = item.getAttribute('data-teacher-id');
@@ -2899,6 +3079,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                 faculty_printed_name: document.getElementById('facultyPrintedName')?.value || '',
                 faculty_signature: document.getElementById('facultySignature').value,
                 faculty_date: document.getElementById('facultyDate').value,
+                allow_observer_imbalance: document.getElementById('allowObserverImbalance')?.value === '1' ? 1 : 0,
                 evaluation_focus: evaluationFocus.length > 0 ? JSON.stringify(evaluationFocus) : '',
                 subject_area: teacherItem?.getAttribute('data-subject-area') || '',
                 observation_room: teacherItem?.getAttribute('data-room') || '',
@@ -2994,10 +3175,14 @@ if($_POST && isset($_POST['submit_evaluation'])) {
         // and immediately see the new row in "Recent Evaluations".
         const evaluationForm = document.getElementById('evaluationForm');
         if (evaluationForm) {
-            evaluationForm.addEventListener('submit', function(e) {
+            evaluationForm.addEventListener('submit', async function(e) {
                 e.preventDefault();
 
                 if (!validateForm()) {
+                    return false;
+                }
+
+                if (!(await confirmObserverImbalanceForCurrentForm())) {
                     return false;
                 }
 
@@ -3067,6 +3252,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         alert('Please select a teacher.');
                                         return;
                                 }
+                                const allowObserverImbalanceInput = document.getElementById('allowObserverImbalance');
+                                payload.allow_observer_imbalance = allowObserverImbalanceInput?.value === '1' ? 1 : 0;
 
                                 const res = await fetch('../controllers/EvaluationController.php?action=submit_evaluation', {
                                         method: 'POST',
@@ -3077,6 +3264,21 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                 const json = await res.json().catch(() => null);
                                 if (!json || !json.success) {
                                         const msg = (json && json.message) ? json.message : ('Submit failed (HTTP ' + res.status + ')');
+                                        if (/Observer imbalance/i.test(msg)) {
+                                                const allowObserverImbalanceInput = document.getElementById('allowObserverImbalance');
+                                                if (allowObserverImbalanceInput?.value === '1') {
+                                                        throw new Error(msg);
+                                                }
+                                                const proceed = await showObserverImbalanceModal();
+                                                if (!proceed) {
+                                                        if (allowObserverImbalanceInput) allowObserverImbalanceInput.value = '0';
+                                                        returnToEvaluationSelection();
+                                                        return;
+                                                }
+                                                if (allowObserverImbalanceInput) allowObserverImbalanceInput.value = '1';
+                                                await submitEvaluationFinal();
+                                                return;
+                                        }
                                         throw new Error(msg);
                                 }
 
