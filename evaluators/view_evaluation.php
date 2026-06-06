@@ -19,10 +19,10 @@ try {
     while ($r = $fsStmt->fetch(PDO::FETCH_ASSOC)) { $_formSettings[$r['setting_key']] = $r['setting_value']; }
 } catch (PDOException $e) {}
 $_fs = [
-    'form_code_no'   => htmlspecialchars($_formSettings['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04'),
-    'issue_status'   => htmlspecialchars($_formSettings['issue_status'] ?? '02'),
-    'revision_no'    => htmlspecialchars($_formSettings['revision_no'] ?? '02'),
-    'date_effective' => htmlspecialchars($_formSettings['date_effective'] ?? '13 September 2023'),
+    'form_code_no'   => htmlspecialchars($_formSettings['form_code_no'] ?? 'FM-DPM-SMCC-CMI-02'),
+    'issue_status'   => htmlspecialchars($_formSettings['issue_status'] ?? '03'),
+    'revision_no'    => htmlspecialchars($_formSettings['revision_no'] ?? '00'),
+    'date_effective' => htmlspecialchars($_formSettings['date_effective'] ?? '5 June 2026'),
     'approved_by'    => htmlspecialchars($_formSettings['approved_by'] ?? 'President'),
 ];
 
@@ -245,7 +245,7 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
                 <a href="dashboard.php" class="btn btn-secondary no-print">
                     <i class="bi bi-arrow-left"></i> Back
                 </a>
-                <h5 class="mb-0 text-center flex-grow-1">CLASSROOM EVALUATION FORM</h5>
+                <h5 class="mb-0 text-center flex-grow-1">CLASSROOM OBSERVATION FORM</h5>
                 <a href="print_evaluation_form.php?id=<?php echo $evaluationId; ?>&auto_print=1" target="_blank" class="btn btn-primary no-print">
                     <i class="fas fa-print me-1"></i> Print
                 </a>
@@ -319,7 +319,7 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
                 <!-- PART 2: Mandatory Requirements -->
                 <div class="evaluation-section">
                     <h5>PART 2: Mandatory Requirements for Teachers</h5>
-                    <p>Check if presented to the observer.</p>
+                    <p>Write (/) if presented to the observer, (x) if not presented.</p>
                     <div class="row">
                         <div class="col-md-4">
                             <div class="form-check">
@@ -429,7 +429,7 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
                                     "Uses current instructional strategies and resources.",
                                     "Designs teaching aids that facilitate understanding of key concepts.",
                                     "Adapts teaching approach in the light of student feedback and reactions.",
-                                    "Aids students using thought provoking questions (Art of Questioning).",
+                                    "Asks students using thought provoking questions (Art of Questioning).",
                                     "Integrate the institutional core values to the lessons.",
                                     "Conduct the lesson using the principle of SMART",
                                 ];
@@ -473,9 +473,9 @@ $overallAvg = avgOrZero($eval['overall_avg'] ?? 0);
                                 $assIndicators = [
                                     "Monitors students' understanding on key concepts discussed.",
                                     "Uses assessment tool that relates specific course competencies stated in the syllabus.",
-                                    "Design test/quarter/assignments and other assessment tasks that are corrector-based.",
+                                    "Design test/quizzes/assignments and other assessment tasks that are competency-based.",
                                     "Introduces varied activities that will answer the differentiated needs to the learners with varied learning style.",
-                                    "Conducts normative assessment before evaluating and grading the learner's performance outcome.",
+                                    "Conducts formative assessment before evaluating and grading the learner's performance outcome.",
                                     "Monitors the formative assessment results and find ways to ensure learning for the learners.",
                                 ];
                                 for ($i = 0; $i < 6; $i++):

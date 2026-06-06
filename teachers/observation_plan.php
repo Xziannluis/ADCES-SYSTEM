@@ -548,6 +548,54 @@ if (!$teacher_data) {
     exit();
 }
 
+// Use the schedule history table when the teacher snapshot was cleared or stale.
+// This keeps the teacher view aligned with schedules set in the department plan.
+try {
+    $schedule_fallback_stmt = $db->prepare(
+        "SELECT
+            ts.evaluation_id,
+            ts.schedule_start,
+            ts.schedule_end,
+            ts.room,
+            ts.focus_json,
+            ts.subject_area,
+            ts.subject,
+            ts.semester,
+            ts.form_type,
+            ts.scheduled_department,
+            ts.scheduled_by,
+            ts.status
+         FROM teacher_schedules ts
+         WHERE ts.teacher_id = :tid
+           AND ts.academic_year = :ay
+           AND ts.semester IN (:sem1, :sem2)
+           AND ts.status NOT IN ('cancelled','canceled','rescheduled')
+         ORDER BY ts.schedule_start DESC, ts.id DESC
+         LIMIT 1"
+    );
+    $schedule_fallback_stmt->execute([
+        ':tid' => (int)$teacher_id,
+        ':ay' => (string)$academic_year,
+        ':sem1' => $semester_variants[0],
+        ':sem2' => $semester_variants[1]
+    ]);
+    $schedule_fallback = $schedule_fallback_stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    if ($schedule_fallback) {
+        $teacher_data['evaluation_schedule'] = $schedule_fallback['schedule_start'] ?? $teacher_data['evaluation_schedule'] ?? null;
+        $teacher_data['evaluation_schedule_end'] = $schedule_fallback['schedule_end'] ?? $teacher_data['evaluation_schedule_end'] ?? null;
+        $teacher_data['evaluation_room'] = $schedule_fallback['room'] ?? $teacher_data['evaluation_room'] ?? null;
+        $teacher_data['evaluation_focus'] = $schedule_fallback['focus_json'] ?? $teacher_data['evaluation_focus'] ?? null;
+        $teacher_data['evaluation_subject_area'] = $schedule_fallback['subject_area'] ?? $teacher_data['evaluation_subject_area'] ?? null;
+        $teacher_data['evaluation_subject'] = $schedule_fallback['subject'] ?? $teacher_data['evaluation_subject'] ?? null;
+        $teacher_data['evaluation_semester'] = $schedule_fallback['semester'] ?? $teacher_data['evaluation_semester'] ?? null;
+        $teacher_data['evaluation_form_type'] = $schedule_fallback['form_type'] ?? $teacher_data['evaluation_form_type'] ?? null;
+        $teacher_data['scheduled_department'] = $schedule_fallback['scheduled_department'] ?? $teacher_data['scheduled_department'] ?? null;
+        $teacher_data['scheduled_by'] = $schedule_fallback['scheduled_by'] ?? $teacher_data['scheduled_by'] ?? null;
+        $teacher_data['_schedule_eval_id'] = (int)($schedule_fallback['evaluation_id'] ?? 0);
+        $teacher_data['_schedule_status'] = (string)($schedule_fallback['status'] ?? '');
+    }
+} catch (Exception $e) {}
+
 // Focus label mapping
 $focus_labels = [
     'communications' => 'Communication Competence',
@@ -579,11 +627,11 @@ $get_observer_names_for_row = static function(PDO $db, int $teacher_id, int $eva
         if ($eval_id > 0) {
             $obs_query .= " AND (
                                 u.department = :dept_match
-                                OR (ta.eval_id = :eval_id_leader AND u.role IN ('president','vice_president'))
+                                OR ta.eval_id = :eval_id_leader
                             )
                             AND (
                                 ta.eval_id = :eval_id
-                                OR (ta.eval_id IS NULL AND u.role NOT IN ('president','vice_president'))
+                                OR (ta.eval_id IS NULL AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('chairperson','subject_coordinator','grade_level_coordinator'))
                             )";
             $params[':dept_match'] = $owning_dept;
             $params[':eval_id_leader'] = $eval_id;
@@ -1370,7 +1418,8 @@ try {
                                 $row_subject = $teacher_data['evaluation_subject'] ?? '';
                                 $row_room = $teacher_data['evaluation_room'] ?? '';
                                 $row_semester_display = ($teacher_data['evaluation_semester'] ?? '') . ' Semester';
-                                $upcoming_observers = $get_observer_names_for_row($db, (int)$teacher_id, 0, $schedule_owning_dept, $self_name);
+                                $upcoming_eval_id = (int)($teacher_data['_schedule_eval_id'] ?? 0);
+                                $upcoming_observers = $get_observer_names_for_row($db, (int)$teacher_id, $upcoming_eval_id, $schedule_owning_dept, $self_name);
                             ?>
                             <tr>
                                 <td>

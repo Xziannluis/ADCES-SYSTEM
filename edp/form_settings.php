@@ -22,23 +22,23 @@ function defaultIsoIndicators(): array {
         'management' => [
             'The TILO (Topic Intended Learning Outcomes) are clearly presented.',
             'Recall and connects previous lessons to the new lessons.',
-            'Uses varied and suitable teaching methods.',
-            'Presents lesson in an organized and logical sequence.',
-            'Uses examples and illustrations to clarify lessons.',
-            'Uses instructional materials/technology effectively.',
-            'Asks thought-provoking questions.',
-            'Encourages students to participate in the discussion.',
-            'Provides opportunities for collaborative/cooperative learning.',
-            'Maintains discipline and a learning-conducive environment.',
-            'Manages class time effectively.',
-            'Summarizes key points before ending the class.'
+            'The topic/lesson is introduced in an interesting & engaging way.',
+            'Uses current issues, real life & local examples to enrich class discussion.',
+            'Focuses class discussion on key concepts of the lesson.',
+            'Encourages active participation among students and ask questions about the topic.',
+            'Uses current instructional strategies and resources.',
+            'Designs teaching aids that facilitate understanding of key concepts.',
+            'Adapts teaching approach in the light of student feedback and reactions.',
+            'Asks students using thought provoking questions (Art of Questioning).',
+            'Integrate the institutional core values to the lessons.',
+            'Conduct the lesson using the principle of SMART'
         ],
         'assessment' => [
-            'Construct test questions and activities that align to intended outcomes.',
+            "Monitors students' understanding on key concepts discussed.",
             'Uses assessment tool that relates specific course competencies stated in the syllabus.',
-            'Design test/quarter/assignments and other assessment tasks that are corrector-based.',
-            'Provides timely feedback to students on their performance.',
-            "Conducts normative assessment before evaluating and grading the learner's performance outcome.",
+            'Design test/quizzes/assignments and other assessment tasks that are competency-based.',
+            'Introduces varied activities that will answer the differentiated needs to the learners with varied learning style.',
+            "Conducts formative assessment before evaluating and grading the learner's performance outcome.",
             'Monitors the formative assessment results and find ways to ensure learning for the learners.'
         ]
     ];
@@ -232,22 +232,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <p class="text-muted mb-3">These values appear only on the ISO Classroom Evaluation Form header.</p>
                             <div class="mb-3">
                                 <label for="form_code_no" class="form-label fw-bold">Form Code No.</label>
-                                <input type="text" class="form-control" id="form_code_no" name="form_code_no" value="<?php echo htmlspecialchars($formSettings['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04'); ?>" required>
+                                <input type="text" class="form-control" id="form_code_no" name="form_code_no" value="<?php echo htmlspecialchars($formSettings['form_code_no'] ?? 'FM-DPM-SMCC-CMI-02'); ?>" required>
                             </div>
                             <div class="row">
                                 <div class="col-md-6 mb-3">
                                     <label for="issue_status" class="form-label fw-bold">Issue Status</label>
-                                    <input type="text" class="form-control" id="issue_status" name="issue_status" value="<?php echo htmlspecialchars($formSettings['issue_status'] ?? '02'); ?>" required>
+                                    <input type="text" class="form-control" id="issue_status" name="issue_status" value="<?php echo htmlspecialchars($formSettings['issue_status'] ?? '03'); ?>" required>
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label for="revision_no" class="form-label fw-bold">Revision No.</label>
-                                    <input type="text" class="form-control" id="revision_no" name="revision_no" value="<?php echo htmlspecialchars($formSettings['revision_no'] ?? '02'); ?>" required>
+                                    <input type="text" class="form-control" id="revision_no" name="revision_no" value="<?php echo htmlspecialchars($formSettings['revision_no'] ?? '00'); ?>" required>
                                 </div>
                             </div>
                             <div class="row">
                                 <div class="col-md-6 mb-3">
                                     <label for="date_effective" class="form-label fw-bold">Date Effective</label>
-                                    <input type="text" class="form-control" id="date_effective" name="date_effective" value="<?php echo htmlspecialchars($formSettings['date_effective'] ?? '13 September 2023'); ?>" required>
+                                    <input type="text" class="form-control" id="date_effective" name="date_effective" value="<?php echo htmlspecialchars($formSettings['date_effective'] ?? '5 June 2026'); ?>" required>
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label for="approved_by" class="form-label fw-bold">Approved By</label>

@@ -18,10 +18,10 @@ try {
     while ($r = $fsStmt->fetch(PDO::FETCH_ASSOC)) { $_formSettings[$r['setting_key']] = $r['setting_value']; }
 } catch (PDOException $e) {}
 $_fs = [
-    'form_code_no'   => htmlspecialchars($_formSettings['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04'),
-    'issue_status'   => htmlspecialchars($_formSettings['issue_status'] ?? '02'),
-    'revision_no'    => htmlspecialchars($_formSettings['revision_no'] ?? '02'),
-    'date_effective' => htmlspecialchars($_formSettings['date_effective'] ?? '13 September 2023'),
+    'form_code_no'   => htmlspecialchars($_formSettings['form_code_no'] ?? 'FM-DPM-SMCC-CMI-02'),
+    'issue_status'   => htmlspecialchars($_formSettings['issue_status'] ?? '03'),
+    'revision_no'    => htmlspecialchars($_formSettings['revision_no'] ?? '00'),
+    'date_effective' => htmlspecialchars($_formSettings['date_effective'] ?? '5 June 2026'),
     'approved_by'    => htmlspecialchars($_formSettings['approved_by'] ?? 'President'),
 ];
 
@@ -129,23 +129,22 @@ function defaultIsoPrintIndicators(): array {
         'management' => [
             'The TILO (Topic Intended Learning Outcomes) are clearly presented.',
             'Recall and connects previous lessons to the new lessons.',
-            'Uses varied and suitable teaching methods.',
-            'Presents lesson in an organized and logical sequence.',
-            'Uses examples and illustrations to clarify lessons.',
-            'Uses instructional materials/technology effectively.',
-            'Asks thought-provoking questions.',
-            'Encourages students to participate in the discussion.',
-            'Provides opportunities for collaborative/cooperative learning.',
-            'Maintains discipline and a learning-conducive environment.',
-            'Manages class time effectively.',
-            'Summarizes key points before ending the class.',
+            'The topic/lesson is introduced in an interesting & engaging way.',
+            'Uses current issues, real life & local examples to enrich class discussion.',
+            'Focuses class discussion on key concepts of the lesson.',
+            'Encourages active participation among students and ask questions about the topic.',
+            'Uses current instructional strategies and resources.',
+            'Designs teaching aids that facilitate understanding of key concepts.',
+            'Adapts teaching approach in the light of student feedback and reactions.',
+            'Asks students using thought provoking questions (Art of Questioning).',
+            'Integrate the institutional core values to the lessons.',
+            'Conduct the lesson using the principle of SMART',
         ],
         'assessment' => [
-            'Construct test questions and activities that align to intended outcomes.',
             'Uses assessment tool that relates specific course competencies stated in the syllabus.',
-            'Design test/quarter/assignments and other assessment tasks that are corrector-based.',
-            'Provides timely feedback to students on their performance.',
-            "Conducts normative assessment before evaluating and grading the learner's performance outcome.",
+            'Design test/quizzes/assignments and other assessment tasks that are competency-based.',
+            'Introduces varied activities that will answer the differentiated needs to the learners with varied learning style.',
+            "Conducts formative assessment before evaluating and grading the learner's performance outcome.",
             'Monitors the formative assessment results and find ways to ensure learning for the learners.',
         ],
     ];
@@ -194,53 +193,56 @@ $autoPrint = !empty($_GET['auto_print']);
     <meta charset="UTF-8">
     <title>Evaluation Form - <?php echo h($eval['teacher_name']); ?></title>
     <style>
-        @page { size: A4 portrait; margin: 6mm 10mm 8mm; }
+        @page { size: A4 portrait; margin: 5mm 11mm 7mm; }
         * { box-sizing: border-box; }
-        body { font-family: 'Times New Roman', Times, serif; font-size: 11px; color: #000; margin: 0; padding: 10px; background: #fff; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+        body { font-family: Arial, Helvetica, sans-serif; font-size: 11.5px; color: #000; margin: 0; padding: 0 0 24mm; background: #fff; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
 
         /* Header */
-        .print-header { text-align: center; margin-bottom: 6px; }
-        .print-header table.header-layout { margin: 0 auto; border-collapse: collapse; }
-        .print-header table.header-layout td { border: none; vertical-align: middle; padding: 0; }
-        .print-header table.header-layout td.logo-cell { padding-right: 14px; }
-        .print-header img { width: 68px; height: 68px; }
-        .print-header .header-text { text-align: center; }
-        .print-header h4 { margin: 0; font-size: 16px; font-weight: 700; }
-        .print-header p { margin: 1px 0; font-size: 9px; }
-        .print-header a { color: #000; text-decoration: underline; font-size: 9px; }
-        .eval-title { text-align: center !important; font-weight: 700; font-size: 13px; margin: 6px auto 4px; letter-spacing: 0.5px; clear: both; }
+        .school-header { display: grid; grid-template-columns: 78px 1fr 96px; align-items: center; column-gap: 10px; margin: 0 auto 34px; max-width: 760px; min-height: 72px; }
+        .school-header .main-logo { width: 64px; height: 64px; object-fit: contain; justify-self: center; }
+        .school-header .cert-logo { width: 86px; max-height: 58px; object-fit: contain; justify-self: start; }
+        .school-header .header-text { text-align: center; color: #1f4f8f; line-height: 1.15; }
+        .school-header .school-name { margin: 0; font-size: 27px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
+        .school-header .school-line { margin: 1px 0; font-size: 11px; color: #222; }
+        .school-header a { color: #1f4f8f; text-decoration: underline; font-size: 11px; }
+        .eval-title { text-align: center !important; font-weight: 800; font-size: 19px; margin: 0 auto 22px; letter-spacing: 0; clear: both; }
+        .print-page { page-break-after: always; break-after: page; }
+        .print-page:last-of-type { page-break-after: auto; break-after: auto; }
 
         /* Section titles */
-        .section-title { font-weight: 700; font-size: 11px; margin: 5px 0 2px; }
+        .section-title { font-weight: 800; font-size: 16px; margin: 7px 0 4px; }
 
         /* PART 1 info table */
-        .info-table { width: 100%; border-collapse: collapse; margin-bottom: 4px; font-size: 10px; }
-        .info-table td { border: 1px solid #000; padding: 3px 6px; }
-        .info-table td.label { font-weight: 600; white-space: nowrap; }
+        .info-table { width: 100%; border-collapse: collapse; margin-bottom: 9px; font-size: 12px; table-layout: fixed; }
+        .info-table td { border: 1.3px solid #000; padding: 4.5px 6px; line-height: 1.18; vertical-align: middle; overflow-wrap: anywhere; }
+        .info-table td.label { font-weight: 700; }
+        .info-table td.nowrap { white-space: nowrap; overflow-wrap: normal; }
+        .info-table .split-cell { display: flex; justify-content: space-between; align-items: center; gap: 14px; white-space: nowrap; overflow-wrap: normal; }
+        .info-table .split-label { font-weight: 700; }
 
         /* PART 2 mandatory */
-        .mandatory-box { border: 1px solid #000; padding: 4px 8px; margin-bottom: 6px; font-size: 10px; }
+        .mandatory-box { border: 1.3px solid #000; padding: 7px 10px; margin-bottom: 11px; font-size: 13px; line-height: 1.25; }
         .mandatory-box p { margin: 2px 0; }
+        .specify-line { display: inline-block; width: 190px; border-bottom: 1px solid #000; padding: 0 4px 1px; vertical-align: baseline; }
+        .mandatory-line { display: block; border-bottom: 1px solid #000; height: 13px; margin: 0 120px 0 22px; }
 
         /* Rating scale detailed */
-        .rating-scale-box { border: 1px solid #000; padding: 4px 8px; margin-bottom: 4px; font-size: 9.5px; }
+        .rating-scale-box { border: 1.3px solid #000; padding: 5px 10px; margin-bottom: 10px; font-size: 12.5px; }
         .rating-scale-box table { width: 100%; }
         .rating-scale-box td { padding: 1px 4px; vertical-align: top; }
-        .rating-scale-box td:first-child { font-weight: 700; white-space: nowrap; width: 165px; }
+        .rating-scale-box td:first-child { font-weight: 700; white-space: nowrap; width: 180px; }
 
         /* Evaluation tables */
-        .eval-table { width: 100%; border-collapse: collapse; margin-bottom: 2px; }
-        .eval-table th, .eval-table td { border: 1px solid #000; padding: 2px 4px; font-size: 9.5px; }
+        .eval-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; table-layout: fixed; }
+        .eval-table th, .eval-table td { border: 1.3px solid #000; padding: 4.8px 6px; font-size: 12px; line-height: 1.24; }
         .eval-table th { background: #f5f5f5; font-weight: 700; text-align: center; }
         .eval-table td.indicator { text-align: left; }
-        .eval-table td.num { text-align: center; width: 18px; font-weight: 600; }
-        .eval-table td.rating-cell { text-align: center; width: 22px; }
-        .eval-table td.comments-cell { width: 16%; font-size: 9px; }
+        .eval-table td.num { text-align: center; width: 30px; font-weight: 600; }
+        .eval-table td.rating-cell { text-align: center; width: 30px; }
+        .eval-table td.comments-cell { width: 145px; font-size: 11px; }
         .eval-table .cat-header td { font-weight: 700; background: #f5f5f5; }
-        .eval-table .avg-row td { padding: 3px 6px; font-weight: 700; font-size: 10px; border-top: 1px solid #000; border-bottom: none; border-left: none; border-right: none; text-align: center; }
-        .eval-table .avg-row td.avg-left { border-left: 1.5px solid #000; text-align: left; width: 18px; }
-        .eval-table .avg-row td.avg-right { border-right: 1.5px solid #000; }
-        .avg-line { display: inline-block; width: 60px; border-bottom: 1px solid #000; text-align: center; margin-left: 6px; }
+        .eval-table .avg-row td { padding: 4px 6px; font-weight: 700; font-size: 12px; text-align: center; }
+        .avg-line { display: inline-block; width: 75px; border-bottom: 1px solid #000; text-align: center; margin-left: 6px; }
 
         /* Total average row in table */
         .total-avg-table { width: 100%; border-collapse: collapse; margin: 4px 0; }
@@ -252,11 +254,11 @@ $autoPrint = !empty($_GET['auto_print']);
         .interpretation-box td:first-child { font-weight: 600; white-space: nowrap; }
 
         /* Narrative table */
-        .narrative-table { width: 100%; border-collapse: collapse; margin-bottom: 4px; table-layout: fixed; }
-        .narrative-table td { border: 1.5px solid #000; padding: 5px 8px; font-size: 10px; vertical-align: top; width: 50%; }
+        .narrative-table { width: 100%; border-collapse: collapse; margin-bottom: 26px; table-layout: fixed; }
+        .narrative-table td { border: 1.5px solid #000; padding: 7px 8px; font-size: 10.5px; vertical-align: top; width: 50%; }
         .narrative-table td[colspan="2"] { width: 100%; }
         .narrative-table .n-label { font-weight: 700; font-size: 11px; margin-bottom: 4px; }
-        .narrative-table .n-content { min-height: 30px; font-size: 10px; line-height: 1.45; text-align: justify; overflow-wrap: break-word; word-break: normal; white-space: normal; }
+        .narrative-table .n-content { min-height: 78px; font-size: 10px; line-height: 1.45; text-align: justify; overflow-wrap: break-word; word-break: normal; white-space: normal; }
 
         /* Signature section */
         .sig-section { margin-top: 6px; page-break-inside: avoid; font-size: 10px; }
@@ -277,12 +279,16 @@ $autoPrint = !empty($_GET['auto_print']);
         /* Footer */
         .page-footer { margin-top: 6px; }
         .page-footer img { width: 100%; height: auto; }
-
+        .form-code-box { border: 1px solid #000; width: 260px; margin: 12px 0 10px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .form-code-box table { width: 100%; border-collapse: collapse; }
+        .form-code-box td { border: none; padding: 2px 6px; font-size: 7.8px; line-height: 1.15; vertical-align: middle; }
+        .form-code-box td:first-child { background-color: #1f4f8f !important; color: #fff !important; font-weight: 700; width: 42%; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        .form-code-box td:last-child { font-weight: 700; }
         /* Print controls */
         .no-print { }
         @media print {
             .no-print { display: none !important; }
-            body { padding: 0 0 35px 0; margin: 0; }
+            body { padding: 0 0 22mm 0; margin: 0; }
             .eval-table { page-break-inside: avoid; }
             .narrative-table { page-break-inside: avoid; }
             .sig-section { page-break-inside: avoid; }
@@ -294,10 +300,10 @@ $autoPrint = !empty($_GET['auto_print']);
             pointer-events: none;
             -webkit-appearance: none;
             appearance: none;
-            width: 12px;
-            height: 12px;
+            width: 15px;
+            height: 15px;
             margin: 0;
-            border: 1.6px solid #000;
+            border: 1.4px solid #000;
             border-radius: 50%;
             background: #fff;
             display: inline-grid;
@@ -306,8 +312,8 @@ $autoPrint = !empty($_GET['auto_print']);
         }
         input[type="radio"]::before {
             content: "";
-            width: 6px;
-            height: 6px;
+            width: 7px;
+            height: 7px;
             border-radius: 50%;
             background: #000;
             transform: scale(0);
@@ -329,65 +335,65 @@ $autoPrint = !empty($_GET['auto_print']);
     </button>
 </div>
 
-<!-- Print Header with Logo -->
-<div style="position:relative; margin-bottom:6px; min-height:68px;">
-    <img src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo" style="width:68px; height:68px; position:absolute; left:60px; top:0;">
-    <div style="text-align:center; padding-top:2px;">
-        <div style="font-size:16px; font-weight:700; margin:0;">Saint Michael College of Caraga</div>
-        <div style="font-size:9px; margin:1px 0;">Brgy. 4, Nasipit, Agusan del Norte, Philippines</div>
-        <div style="font-size:9px; margin:1px 0;">District 8, Brgy. Triangulo, Nasipit, Agusan del Norte, Philippines</div>
-        <div style="font-size:9px; margin:1px 0;">Tel. Nos. +63 085 343-3251 / +63 085 283-3113</div>
-        <a href="http://www.smccnasipit.edu.ph" style="font-size:9px; color:#0d6efd; text-decoration:underline;">www.smccnasipit.edu.ph</a>
+<div class="print-page">
+<div class="school-header">
+    <img class="main-logo" src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo">
+    <div class="header-text">
+        <div class="school-name">Saint Michael College of Caraga</div>
+        <div class="school-line">Atupan St., Brgy. 4, Nasipit, Agusan del Norte 8602, Philippines</div>
+        <div class="school-line">Website: <a href="http://www.smccnasipit.edu.ph">www.smccnasipit.edu.ph</a> ; Tel. Nos. 085 300-2932</div>
     </div>
+    <img class="cert-logo" src="../assets/img/socotec.jpg" alt="Certification Logo">
 </div>
 
-<div style="text-align:center; font-weight:700; font-size:13px; margin:6px 0 4px; letter-spacing:0.5px;">CLASSROOM EVALUATION FORM</div>
+<div class="eval-title">CLASSROOM OBSERVATION FORM</div>
 
 <!-- PART 1: Faculty Information -->
 <div class="section-title">PART 1: Faculty Information</div>
-<table class="info-table">
-    <colgroup>
-        <col style="width:12%;">
-        <col style="width:22%;">
-        <col style="width:16%;">
-        <col style="width:22%;">
-        <col style="width:28%;">
-    </colgroup>
-    <tr>
-        <td class="label">Name of Faculty:</td>
-        <td><?php echo h($eval['teacher_name']); ?></td>
-        <td class="label">Academic Year:</td>
-        <td><?php echo h($eval['academic_year'] ?? ''); ?></td>
-        <td style="font-size:9px; white-space:nowrap;">Semester: ( <?php echo ($eval['semester'] ?? '') === '1st' ? '✓' : '&nbsp;'; ?> ) 1st ( <?php echo ($eval['semester'] ?? '') === '2nd' ? '✓' : '&nbsp;'; ?> ) 2nd</td>
-    </tr>
-    <tr>
-        <td class="label">Department:</td>
-        <td><?php echo h($eval['teacher_department'] ?? ''); ?></td>
-        <td class="label">Subject/Time of Observation:</td>
-        <td colspan="2"><?php echo h($eval['subject_observed'] ?? ''); ?></td>
-    </tr>
-    <tr>
-        <td colspan="2"></td>
-        <td class="label">Date of Observation:</td>
-        <td colspan="2"><?php echo h($eval['observation_date'] ?? ''); ?></td>
-    </tr>
-    <tr>
-        <td colspan="5">Type of Classroom Observation: &nbsp;Please check the appropriate box. ( <?php echo ($eval['observation_type'] ?? '') === 'Formal' ? '✓' : '&nbsp;'; ?> ) Formal &nbsp; , &nbsp; ( <?php echo ($eval['observation_type'] ?? '') === 'Informal' ? '✓' : '&nbsp;'; ?> ) Informal</td>
-    </tr>
-</table>
-
-<!-- PART 2: Mandatory Requirements -->
-<div class="section-title">PART 2: Mandatory Requirements for Teachers</div>
 <div class="mandatory-box">
     <p>Write (/) if presented to the observer, (x) if not presented.</p>
     <p>
         ( <?php echo !empty($eval['seat_plan']) ? '/' : '&nbsp;'; ?> ) seat plan &nbsp;&nbsp;
         ( <?php echo !empty($eval['course_syllabi']) ? '/' : '&nbsp;'; ?> ) course syllabi &nbsp;&nbsp;
-        ( <?php echo !empty($eval['others_requirements']) ? '/' : '&nbsp;'; ?> ) others, please specify: <?php echo h($eval['others_specify'] ?? ''); ?>
+        ( <?php echo !empty($eval['others_requirements']) ? '/' : '&nbsp;'; ?> ) others, please specify:<span class="specify-line"><?php echo h($eval['others_specify'] ?? ''); ?></span>
     </p>
+    <span class="mandatory-line"></span>
 </div>
+<table class="info-table">
+    <colgroup>
+        <col style="width:20%;">
+        <col style="width:30%;">
+        <col style="width:24%;">
+        <col style="width:26%;">
+    </colgroup>
+    <tr>
+        <td class="label">Name of Faculty:</td>
+        <td><?php echo h($eval['teacher_name']); ?></td>
+        <td colspan="2">
+            <div class="split-cell">
+                <span><span class="split-label">Academic Year:</span> <?php echo h($eval['academic_year'] ?? ''); ?></span>
+                <span>Semester: ( <?php echo strpos((string)($eval['semester'] ?? ''), '1st') !== false ? '/' : '&nbsp;'; ?> ) 1st &nbsp; ( <?php echo strpos((string)($eval['semester'] ?? ''), '2nd') !== false ? '/' : '&nbsp;'; ?> ) 2nd</span>
+            </div>
+        </td>
+    </tr>
+    <tr>
+        <td class="label">Department:</td>
+        <td><?php echo h($eval['teacher_department'] ?? ''); ?></td>
+        <td class="label">Subject/Time of Observation:</td>
+        <td><?php echo h($eval['subject_observed'] ?? ''); ?></td>
+    </tr>
+    <tr>
+        <td colspan="2"></td>
+        <td class="label">Date of Observation:</td>
+        <td><?php echo h($eval['observation_date'] ?? ''); ?></td>
+    </tr>
+    <tr>
+        <td colspan="4">Type of Classroom Observation: &nbsp;Please check the appropriate box. ( <?php echo ($eval['observation_type'] ?? '') === 'Formal' ? '/' : '&nbsp;'; ?> ) Formal &nbsp; , &nbsp; ( <?php echo ($eval['observation_type'] ?? '') === 'Informal' ? '/' : '&nbsp;'; ?> ) Informal</td>
+    </tr>
+</table>
 
 <!-- PART 3: Domains -->
+<div class="section-title">PART 2: Mandatory Requirements for Teachers</div>
 <div class="section-title">PART 3: Domains of Teaching Performance</div>
 
 <!-- Rating Scale with full descriptions -->
@@ -423,19 +429,35 @@ foreach ($domains as &$domain) {
 }
 unset($domain);
 
-foreach ($domains as $domain):
+function renderIsoDomainPrintTable(array $domain, array $detailMap, int $start = 0, ?int $length = null, bool $showAverage = true, bool $showHeader = true): void {
+    $indicators = array_values($domain['indicators']);
+    $slice = $length === null ? array_slice($indicators, $start) : array_slice($indicators, $start, $length);
+    if (empty($slice)) return;
 ?>
 <table class="eval-table">
-    <tr class="cat-header">
-        <td colspan="2" style="text-align:left;"><?php echo h($domain['title']); ?></td>
-        <td style="text-align:center; font-weight:700;">5</td>
-        <td style="text-align:center; font-weight:700;">4</td>
-        <td style="text-align:center; font-weight:700;">3</td>
-        <td style="text-align:center; font-weight:700;">2</td>
-        <td style="text-align:center; font-weight:700;">1</td>
-        <td style="text-align:center; font-weight:700;">Comments</td>
-    </tr>
-    <?php foreach ($domain['indicators'] as $i => $indicator):
+    <colgroup>
+        <col style="width:30px;">
+        <col>
+        <col style="width:30px;">
+        <col style="width:30px;">
+        <col style="width:30px;">
+        <col style="width:30px;">
+        <col style="width:30px;">
+        <col style="width:145px;">
+    </colgroup>
+    <?php if ($showHeader): ?>
+        <tr class="cat-header">
+            <td colspan="2" style="text-align:left;"><?php echo h($domain['title']); ?></td>
+            <td style="text-align:center; font-weight:700;">5</td>
+            <td style="text-align:center; font-weight:700;">4</td>
+            <td style="text-align:center; font-weight:700;">3</td>
+            <td style="text-align:center; font-weight:700;">2</td>
+            <td style="text-align:center; font-weight:700;">1</td>
+            <td style="text-align:center; font-weight:700;">Comments</td>
+        </tr>
+    <?php endif; ?>
+    <?php foreach ($slice as $offset => $indicator):
+        $i = $start + $offset;
         $row = $detailMap[$domain['key']][$i] ?? null;
         $rating = $row['rating'] ?? '';
         $comment = $row['comments'] ?? '';
@@ -451,13 +473,34 @@ foreach ($domains as $domain):
         <td class="comments-cell"><?php echo h($comment); ?></td>
     </tr>
     <?php endforeach; ?>
+    <?php if ($showAverage): ?>
     <tr class="avg-row">
-        <td class="avg-left">Average:</td>
-        <td colspan="6"><span class="avg-line"><?php echo number_format($domain['avg'], 1); ?></span></td>
-        <td class="avg-right"></td>
+        <td colspan="8">Average:<span class="avg-line"><?php echo number_format($domain['avg'], 1); ?></span></td>
     </tr>
+    <?php endif; ?>
 </table>
-<?php endforeach; ?>
+<?php
+}
+
+renderIsoDomainPrintTable($domains[0], $detailMap, 0, null, true);
+renderIsoDomainPrintTable($domains[1], $detailMap, 0, 6, false);
+?>
+</div>
+
+<div class="print-page">
+<div class="school-header">
+    <img class="main-logo" src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo">
+    <div class="header-text">
+        <div class="school-name">Saint Michael College of Caraga</div>
+        <div class="school-line">Atupan St., Brgy. 4, Nasipit, Agusan del Norte 8602, Philippines</div>
+        <div class="school-line">Website: <a href="http://www.smccnasipit.edu.ph">www.smccnasipit.edu.ph</a> ; Tel. Nos. 085 300-2932</div>
+    </div>
+    <img class="cert-logo" src="../assets/img/socotec.jpg" alt="Certification Logo">
+</div>
+<?php
+renderIsoDomainPrintTable($domains[1], $detailMap, 6, null, true, false);
+renderIsoDomainPrintTable($domains[2], $detailMap, 0, null, true);
+?>
 
 <!-- Total Average + Interpretation -->
 <table class="total-avg-table">
@@ -474,6 +517,20 @@ foreach ($domains as $domain):
         <tr><td>1.6-2.5 – Below Satisfactory</td></tr>
         <tr><td>1.0-1.5 – Needs Improvement</td></tr>
     </table>
+</div>
+
+<!-- Narrative Fields in table layout -->
+</div>
+
+<div class="print-page">
+<div class="school-header">
+    <img class="main-logo" src="../assets/img/SMCC_LOGO.webp" alt="SMCC Logo">
+    <div class="header-text">
+        <div class="school-name">Saint Michael College of Caraga</div>
+        <div class="school-line">Atupan St., Brgy. 4, Nasipit, Agusan del Norte 8602, Philippines</div>
+        <div class="school-line">Website: <a href="http://www.smccnasipit.edu.ph">www.smccnasipit.edu.ph</a> ; Tel. Nos. 085 300-2932</div>
+    </div>
+    <img class="cert-logo" src="../assets/img/socotec.jpg" alt="Certification Logo">
 </div>
 
 <!-- Narrative Fields in table layout -->
@@ -556,27 +613,27 @@ foreach ($domains as $domain):
 </div>
 
 <!-- Form Code Box -->
-<div style="border: 1.5px solid #000; border-radius: 4px; padding: 0; margin-top: 12px; margin-bottom: 12px; max-width: 300px; font-size: 8.5px; page-break-inside: avoid; overflow: hidden; -webkit-print-color-adjust: exact; print-color-adjust: exact;">
-    <table style="width: 100%; border-collapse: collapse;">
+<div class="form-code-box">
+    <table>
         <tr>
-            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; width: 40%; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Form Code No.</td>
-            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['form_code_no']; ?></td>
+            <td>Form Code No.</td>
+            <td>: <?php echo $_fs['form_code_no']; ?></td>
         </tr>
         <tr>
-            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Issue Status</td>
-            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['issue_status']; ?></td>
+            <td>Issue Status</td>
+            <td>: <?php echo $_fs['issue_status']; ?></td>
         </tr>
         <tr>
-            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Revision No.</td>
-            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['revision_no']; ?></td>
+            <td>Revision No.</td>
+            <td>: <?php echo $_fs['revision_no']; ?></td>
         </tr>
         <tr>
-            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Date Effective</td>
-            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['date_effective']; ?></td>
+            <td>Date Effective</td>
+            <td>: <?php echo $_fs['date_effective']; ?></td>
         </tr>
         <tr>
-            <td style="background-color: #1a237e !important; color: #fff !important; font-weight: bold; padding: 2px 6px; font-size: 8.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; border: none;">Approved By</td>
-            <td style="padding: 2px 6px; font-size: 8.5px; border: none;">: <?php echo $_fs['approved_by']; ?></td>
+            <td>Approved By</td>
+            <td>: <?php echo $_fs['approved_by']; ?></td>
         </tr>
     </table>
 </div>
@@ -584,6 +641,7 @@ foreach ($domains as $domain):
 <!-- Footer -->
 <div class="page-footer">
     <img src="../assets/img/footer_member.png" alt="Member Footer" style="width:100%; height:auto;">
+</div>
 </div>
 
 <?php if ($autoPrint): ?>

@@ -95,26 +95,6 @@ try {
             $db->exec("ALTER TABLE teacher_assignments ADD COLUMN eval_id INT NULL AFTER teacher_id");
             $db->exec("CREATE INDEX idx_teacher_assignments_eval_id ON teacher_assignments (eval_id)");
         }
-        $db->exec("
-            CREATE TABLE IF NOT EXISTS observer_unavailable_slots (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                teacher_id INT NOT NULL,
-                eval_id INT NOT NULL,
-                evaluator_id INT NOT NULL,
-                academic_year VARCHAR(20) NOT NULL,
-                semester VARCHAR(10) NOT NULL,
-                observation_date DATE NOT NULL,
-                observation_time TIME NULL,
-                department VARCHAR(100) NULL,
-                reason TEXT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY uniq_observer_unavailable_eval (eval_id, evaluator_id),
-                INDEX idx_observer_unavailable_slot (teacher_id, academic_year, semester, observation_date, observation_time),
-                INDEX idx_observer_unavailable_eval (eval_id),
-                INDEX idx_observer_unavailable_evaluator (evaluator_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        ");
         $statusCol = $db->query("SHOW COLUMNS FROM evaluations LIKE 'status'")->fetch(PDO::FETCH_ASSOC);
         $statusType = strtolower(trim((string)($statusCol['Type'] ?? '')));
         if ($statusType !== '' && strpos($statusType, "enum(") === 0 && strpos($statusType, "'rescheduled'") === false) {
@@ -337,9 +317,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
 // Handle schedule setting
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'join_observer') {
-    $is_observer_role = in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true);
-    if (!$is_observer_role) {
-        $_SESSION['error'] = 'Only authorized observer roles can accept as observer.';
+    $is_leader_role = in_array($_SESSION['role'] ?? '', ['president', 'vice_president'], true);
+    if (!$is_leader_role) {
+        $_SESSION['error'] = 'Only president/vice president can accept as observer.';
     } else {
         $raw_ids = $_POST['eval_ids'] ?? '[]';
         $eval_ids = [];
@@ -377,7 +357,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 WHERE e.teacher_id = :tid
                   AND e.academic_year = :ay
                   AND e.semester = :sem
-                ORDER BY CASE WHEN e.status = 'completed' THEN 1 ELSE 0 END, e.id DESC
+                  AND e.status <> 'completed'
+                ORDER BY e.id DESC
                 LIMIT 1
             ");
             $resolve_eval_stmt_loose = $db->prepare("
@@ -385,7 +366,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 FROM evaluations e
                 WHERE e.teacher_id = :tid
                   AND e.semester = :sem
-                ORDER BY CASE WHEN e.status = 'completed' THEN 1 ELSE 0 END, e.id DESC
+                  AND e.status <> 'completed'
+                ORDER BY e.id DESC
                 LIMIT 1
             ");
             foreach ($teacher_ids_fallback as $tidfb) {
@@ -416,42 +398,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $insert_query = "INSERT INTO teacher_assignments (evaluator_id, teacher_id, eval_id, assigned_at)
                              VALUES (:evaluator_id, :teacher_id, :eval_id, NOW())";
             $insert_stmt = $db->prepare($insert_query);
-            $clear_unavailable_stmt = $db->prepare("DELETE FROM observer_unavailable_slots WHERE evaluator_id = :uid AND eval_id = :eid");
-            $eval_teacher_stmt = $db->prepare(
-                "SELECT teacher_id
-                 FROM (
-                    SELECT teacher_id, 1 AS priority
-                    FROM evaluations
-                    WHERE id = :eid_eval
-                    UNION ALL
-                    SELECT teacher_id, 2 AS priority
-                    FROM teacher_schedules
-                    WHERE evaluation_id = :eid_schedule
-                 ) src
-                 ORDER BY priority
-                 LIMIT 1"
-            );
-            $legacy_assign_stmt = $db->prepare(
-                "SELECT id, eval_id
-                 FROM teacher_assignments
-                 WHERE evaluator_id = :eid
-                   AND teacher_id = :tid
-                   AND (eval_id = :eval_id OR eval_id IS NULL)
-                 ORDER BY CASE WHEN eval_id = :eval_id THEN 0 ELSE 1 END, id DESC
-                 LIMIT 1"
-            );
-            $upgrade_legacy_assign_stmt = $db->prepare(
-                "UPDATE teacher_assignments
-                 SET eval_id = :eval_id, assigned_at = NOW()
-                 WHERE id = :id"
-            );
-            $restore_any_assign_stmt = $db->prepare(
-                "UPDATE teacher_assignments
-                 SET eval_id = :eval_id, assigned_at = NOW()
-                 WHERE evaluator_id = :eid
-                   AND teacher_id = :tid
-                 LIMIT 1"
-            );
+            $eval_teacher_stmt = $db->prepare("SELECT teacher_id FROM evaluations WHERE id = :eid LIMIT 1");
             $eval_source_stmt = $db->prepare(
                 "SELECT e.id, e.teacher_id, e.faculty_name, e.department, e.academic_year, e.semester,
                         e.subject_observed, e.observation_date, e.observation_time, e.observation_type,
@@ -494,7 +441,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                    AND semester = :sem
                    AND observation_date = :od
                    AND COALESCE(observation_time, '') = COALESCE(:ot, '')
-                   AND status NOT IN ('completed','observer_unbalanced','cancelled','canceled','rescheduled')"
+                   AND status <> 'completed'"
             );
             $restore_balanced_slot_stmt = $db->prepare(
                 "UPDATE evaluations
@@ -516,61 +463,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                    AND COALESCE(DATE_FORMAT(schedule_start, '%H:%i'), '00:00') = :ot_min
                    AND status = 'observer_unbalanced'"
             );
+            $schedule_guard_stmt = $db->prepare(
+                "SELECT e.id,
+                        COALESCE(
+                            NULLIF(t.evaluation_schedule_end, ''),
+                            NULLIF(CONCAT(e.observation_date, ' ', COALESCE(NULLIF(e.observation_time, ''), '00:00:00')), ''),
+                            NULLIF(t.evaluation_schedule, '')
+                        ) AS cutoff_raw
+                 FROM evaluations e
+                 LEFT JOIN teachers t ON t.id = e.teacher_id
+                 WHERE e.id = :eid
+                 LIMIT 1"
+            );
             $added_count = 0;
-            $restored_count = 0;
             $skipped_past_count = 0;
             foreach ($eval_ids as $eid) {
-                $eval_teacher_stmt->execute([
-                    ':eid_eval' => $eid,
-                    ':eid_schedule' => $eid
-                ]);
+                // Past schedules can no longer be accepted as observer.
+                $schedule_guard_stmt->execute([':eid' => $eid]);
+                $guard_row = $schedule_guard_stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+                if ($guard_row) {
+                    $cutoff_raw = trim((string)($guard_row['cutoff_raw'] ?? ''));
+                    if ($cutoff_raw !== '') {
+                        try {
+                            $tz = new DateTimeZone('Asia/Manila');
+                            $cutoff_at = new DateTime($cutoff_raw, $tz);
+                            $now_at = new DateTime('now', $tz);
+                            if ($now_at > $cutoff_at) {
+                                $skipped_past_count++;
+                                continue;
+                            }
+                        } catch (Exception $e) {}
+                    }
+                }
+
+                $eval_teacher_stmt->execute([':eid' => $eid]);
                 $tid = (int)$eval_teacher_stmt->fetchColumn();
                 if ($tid <= 0) continue;
-                $legacy_assign_stmt->execute([
-                    ':eid' => (int)($_SESSION['user_id'] ?? 0),
-                    ':tid' => $tid,
-                    ':eval_id' => $eid
-                ]);
-                $existing_assignment = $legacy_assign_stmt->fetch(PDO::FETCH_ASSOC) ?: null;
-                if ($existing_assignment) {
-                    try {
-                        if ((int)($existing_assignment['eval_id'] ?? 0) !== $eid) {
-                            $upgrade_legacy_assign_stmt->execute([
-                                ':eval_id' => $eid,
-                                ':id' => (int)$existing_assignment['id']
-                            ]);
-                        }
-                        $clear_unavailable_stmt->execute([
-                            ':uid' => (int)($_SESSION['user_id'] ?? 0),
-                            ':eid' => $eid
-                        ]);
-                        if ($clear_unavailable_stmt->rowCount() > 0 || (int)($existing_assignment['eval_id'] ?? 0) !== $eid) {
-                            $restored_count++;
-                        }
-                    } catch (Exception $e) {}
+                $exists_stmt = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :eid AND teacher_id = :tid AND eval_id = :eval_id LIMIT 1");
+                $exists_stmt->execute([':eid' => $_SESSION['user_id'], ':tid' => $tid, ':eval_id' => $eid]);
+                if ($exists_stmt->fetchColumn()) {
                     continue;
                 }
-                $inserted_assignment = false;
-                try {
-                    $inserted_assignment = $insert_stmt->execute([':evaluator_id' => $_SESSION['user_id'], ':teacher_id' => $tid, ':eval_id' => $eid]);
-                } catch (Exception $e) {
-                    try {
-                        $restore_any_assign_stmt->execute([
-                            ':eval_id' => $eid,
-                            ':eid' => (int)($_SESSION['user_id'] ?? 0),
-                            ':tid' => $tid
-                        ]);
-                        $inserted_assignment = ($restore_any_assign_stmt->rowCount() > 0);
-                    } catch (Exception $ignored) {}
-                }
-                if ($inserted_assignment) {
+                if ($insert_stmt->execute([':evaluator_id' => $_SESSION['user_id'], ':teacher_id' => $tid, ':eval_id' => $eid])) {
                     $added_count++;
-                    try {
-                        $clear_unavailable_stmt->execute([
-                            ':uid' => (int)($_SESSION['user_id'] ?? 0),
-                            ':eid' => $eid
-                        ]);
-                    } catch (Exception $e) {}
 
                     // Auto-create pending evaluation row(s) for the accepted observer
                     // so teacher "My Evaluations" immediately shows pending completion.
@@ -715,9 +650,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             }
 
-            if ($added_count > 0 || $restored_count > 0) {
-                $total_observed = $added_count + $restored_count;
-                $msg = $total_observed . ' teacher(s) accepted as observer.';
+            if ($added_count > 0) {
+                $msg = $added_count . ' teacher(s) accepted as observer.';
                 if ($skipped_past_count > 0) {
                     $msg .= ' ' . $skipped_past_count . ' skipped because the schedule already passed.';
                 }
@@ -772,7 +706,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $_SESSION['error'] = 'No valid schedule selected.';
         } else {
             $removed_count = 0;
-            $src_stmt = $db->prepare("SELECT id, teacher_id, department, academic_year, semester, observation_date, observation_time, evaluation_form_type
+            $src_stmt = $db->prepare("SELECT id, teacher_id, academic_year, semester, observation_date, observation_time, evaluation_form_type
                                       FROM evaluations
                                       WHERE id = :eid
                                       LIMIT 1");
@@ -785,20 +719,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                              WHERE evaluator_id = :uid
                                                AND teacher_id = :tid
                                                AND eval_id = :eid");
-            $mark_observer_unavailable_stmt = $db->prepare(
-                "INSERT INTO observer_unavailable_slots
-                    (teacher_id, eval_id, evaluator_id, academic_year, semester, observation_date, observation_time, department, reason)
-                 VALUES
-                    (:tid, :eid, :uid, :ay, :sem, :od, :ot, :dept, :reason)
-                 ON DUPLICATE KEY UPDATE
-                    reason = VALUES(reason),
-                    academic_year = VALUES(academic_year),
-                    semester = VALUES(semester),
-                    observation_date = VALUES(observation_date),
-                    observation_time = VALUES(observation_time),
-                    department = VALUES(department),
-                    updated_at = NOW()"
-            );
             $del_pending_slot_stmt = $db->prepare("DELETE FROM evaluations
                                                    WHERE evaluator_id = :uid
                                                      AND teacher_id = :tid
@@ -815,7 +735,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                                          AND semester = :sem
                                                          AND observation_date = :od
                                                          AND COALESCE(observation_time, '') = COALESCE(:ot, '')
-                                                         AND status NOT IN ('completed','observer_unbalanced','cancelled','canceled','rescheduled')");
+                                                         AND status <> 'completed'");
             $count_remaining_observers_stmt = $db->prepare("SELECT COUNT(DISTINCT evaluator_id)
                                                             FROM evaluations
                                                             WHERE teacher_id = :tid
@@ -823,7 +743,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                                               AND semester = :sem
                                                               AND observation_date = :od
                                                               AND COALESCE(observation_time, '') = COALESCE(:ot, '')
-                                                              AND status NOT IN ('completed','observer_unbalanced','cancelled','canceled','rescheduled')");
+                                                              AND status <> 'completed'");
             $balance_remaining_observers_stmt = $db->prepare(
                 "SELECT
                     COUNT(DISTINCT e.evaluator_id) AS observer_count,
@@ -837,7 +757,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                    AND e.observation_date = :od
                    AND COALESCE(e.observation_time, '') = COALESCE(:ot, '')
                    AND (:dept = '' OR e.department = :dept_match)
-                   AND e.status NOT IN ('completed','observer_unbalanced','cancelled','canceled','rescheduled')"
+                   AND e.status <> 'completed'"
             );
             $mark_unbalanced_slot_stmt = $db->prepare("UPDATE evaluations
                                                        SET status = 'observer_unbalanced', updated_at = NOW()
@@ -883,18 +803,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
                 $tid = (int)($src['teacher_id'] ?? 0);
                 if ($tid <= 0) continue;
-
-                $mark_observer_unavailable_stmt->execute([
-                    ':tid' => $tid,
-                    ':eid' => $eid,
-                    ':uid' => (int)($_SESSION['user_id'] ?? 0),
-                    ':ay' => (string)($src['academic_year'] ?? ''),
-                    ':sem' => (string)($src['semester'] ?? ''),
-                    ':od' => (string)($src['observation_date'] ?? ''),
-                    ':ot' => (string)($src['observation_time'] ?? ''),
-                    ':dept' => trim((string)($src['department'] ?? '')),
-                    ':reason' => $observer_reason
-                ]);
 
                 $del_assign_stmt->execute([
                     ':uid' => (int)($_SESSION['user_id'] ?? 0),
@@ -1361,7 +1269,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $target_eval_status = 'draft';
         $eval_id = null;
         $debug_action = null;
-        $reschedule_missing_eval_schedule_id = 0;
         
         if ($is_reschedule) {
 
@@ -1378,26 +1285,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $eval_row = $find_eval->fetch(PDO::FETCH_ASSOC);
                 if ($eval_row && $eval_row['status'] !== 'completed') {
                     $eval_id = (int)$eval_row['id'];
-                } else {
-                    $find_schedule = $db->prepare(
-                        "SELECT id
-                         FROM teacher_schedules
-                         WHERE evaluation_id = :eid
-                           AND teacher_id = :tid
-                           AND status NOT IN ('completed','cancelled','canceled','rescheduled')
-                         ORDER BY id DESC
-                         LIMIT 1"
-                    );
-                    $find_schedule->execute([
-                        ':eid' => $reschedule_eval_id,
-                        ':tid' => $teacher_id
-                    ]);
-                    $reschedule_missing_eval_schedule_id = (int)($find_schedule->fetchColumn() ?: 0);
                 }
             }
             // For accepted reschedule flow: never create a duplicate row when
             // selected evaluation id is missing/completed.
-            if ($eval_id <= 0 && $reschedule_missing_eval_schedule_id <= 0) {
+            if ($eval_id <= 0) {
                 $_SESSION['error'] = 'Selected schedule row was not found (or already completed). Please refresh and try again.';
                 $redirect = 'observation_plan.php?semester=' . urlencode($_GET['semester'] ?? '1st') . '&academic_year=' . urlencode($_GET['academic_year'] ?? '');
                 if (!empty($_GET['department'])) $redirect .= '&department=' . urlencode($_GET['department']);
@@ -1470,28 +1362,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         // Persist schedule history row (one row per scheduled slot).
         // Reschedule updates existing linked row when available; otherwise inserts.
         try {
-            $slot_status = 'scheduled';
+            $slot_status = $is_reschedule ? 'rescheduled' : 'scheduled';
             if ($is_reschedule) {
-                if ($reschedule_missing_eval_schedule_id > 0) {
-                    $sched_upd_missing = $db->prepare("UPDATE teacher_schedules
-                                                       SET evaluation_id = :evaluation_id,
-                                                           academic_year = :academic_year,
-                                                           semester = :semester,
-                                                           schedule_start = :schedule_start,
-                                                           schedule_end = :schedule_end,
-                                                           room = :room,
-                                                           focus_json = :focus_json,
-                                                           subject_area = :subject_area,
-                                                           subject = :subject,
-                                                           form_type = :form_type,
-                                                           scheduled_department = :scheduled_department,
-                                                           scheduled_by = :scheduled_by,
-                                                           status = :status,
-                                                           updated_at = NOW()
-                                                       WHERE id = :schedule_id
-                                                         AND teacher_id = :teacher_id
-                                                       LIMIT 1");
-                    $sched_upd_missing->execute([
+                $sched_upd = $db->prepare("UPDATE teacher_schedules
+                                           SET schedule_start = :schedule_start,
+                                               schedule_end = :schedule_end,
+                                               room = :room,
+                                               focus_json = :focus_json,
+                                               subject_area = :subject_area,
+                                               subject = :subject,
+                                               form_type = :form_type,
+                                               scheduled_department = :scheduled_department,
+                                               scheduled_by = :scheduled_by,
+                                               status = :status,
+                                               updated_at = NOW()
+                                           WHERE evaluation_id = :evaluation_id
+                                             AND teacher_id = :teacher_id
+                                           LIMIT 1");
+                $sched_upd->execute([
+                    ':schedule_start' => $schedule,
+                    ':schedule_end' => ($schedule_end !== '' ? $schedule_end : null),
+                    ':room' => $room,
+                    ':focus_json' => $focus_json,
+                    ':subject_area' => $subject_area,
+                    ':subject' => $subject,
+                    ':form_type' => $form_type,
+                    ':scheduled_department' => ($scheduled_department !== '' ? $scheduled_department : null),
+                    ':scheduled_by' => (int)($_SESSION['user_id'] ?? 0),
+                    ':status' => $slot_status,
+                    ':evaluation_id' => (int)$eval_id,
+                    ':teacher_id' => (int)$teacher_id
+                ]);
+                if ((int)$sched_upd->rowCount() === 0) {
+                    $sched_ins = $db->prepare("INSERT INTO teacher_schedules
+                        (teacher_id, evaluation_id, academic_year, semester, schedule_start, schedule_end, room, focus_json, subject_area, subject, form_type, scheduled_department, scheduled_by, status)
+                        VALUES
+                        (:teacher_id, :evaluation_id, :academic_year, :semester, :schedule_start, :schedule_end, :room, :focus_json, :subject_area, :subject, :form_type, :scheduled_department, :scheduled_by, :status)");
+                    $sched_ins->execute([
+                        ':teacher_id' => (int)$teacher_id,
                         ':evaluation_id' => (int)$eval_id,
                         ':academic_year' => (string)$academic_year_for_insert,
                         ':semester' => (string)($post_semester ?: $filter_semester),
@@ -1504,39 +1412,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         ':form_type' => $form_type,
                         ':scheduled_department' => ($scheduled_department !== '' ? $scheduled_department : null),
                         ':scheduled_by' => (int)($_SESSION['user_id'] ?? 0),
-                        ':status' => $slot_status,
-                        ':schedule_id' => $reschedule_missing_eval_schedule_id,
-                        ':teacher_id' => (int)$teacher_id
-                    ]);
-                } else {
-                    $sched_upd = $db->prepare("UPDATE teacher_schedules
-                                               SET schedule_start = :schedule_start,
-                                                   schedule_end = :schedule_end,
-                                                   room = :room,
-                                                   focus_json = :focus_json,
-                                                   subject_area = :subject_area,
-                                                   subject = :subject,
-                                                   form_type = :form_type,
-                                                   scheduled_department = :scheduled_department,
-                                                   scheduled_by = :scheduled_by,
-                                                   status = :status,
-                                                   updated_at = NOW()
-                                               WHERE evaluation_id = :evaluation_id
-                                                 AND teacher_id = :teacher_id
-                                               LIMIT 1");
-                    $sched_upd->execute([
-                        ':schedule_start' => $schedule,
-                        ':schedule_end' => ($schedule_end !== '' ? $schedule_end : null),
-                        ':room' => $room,
-                        ':focus_json' => $focus_json,
-                        ':subject_area' => $subject_area,
-                        ':subject' => $subject,
-                        ':form_type' => $form_type,
-                        ':scheduled_department' => ($scheduled_department !== '' ? $scheduled_department : null),
-                        ':scheduled_by' => (int)($_SESSION['user_id'] ?? 0),
-                        ':status' => $slot_status,
-                        ':evaluation_id' => (int)$eval_id,
-                        ':teacher_id' => (int)$teacher_id
+                        ':status' => $slot_status
                     ]);
                 }
             } else {
@@ -1676,23 +1552,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         // New schedule/reschedule requires fresh observer acceptance for President/VP.
         // Keep teacher/evaluator signatures intact; clear only President/VP observer assignments.
-        if ($is_reschedule && $reschedule_eval_id > 0 && (int)$eval_id > 0 && (int)$eval_id !== (int)$reschedule_eval_id) {
-            try {
-                $carry_observers = $db->prepare("
-                    UPDATE teacher_assignments ta
-                    JOIN users u ON u.id = ta.evaluator_id
-                    SET ta.eval_id = :new_eval_id
-                    WHERE ta.teacher_id = :tid
-                      AND ta.eval_id = :old_eval_id
-                      AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) NOT IN ('president','vice_president')
-                ");
-                $carry_observers->execute([
-                    ':new_eval_id' => (int)$eval_id,
-                    ':tid' => (int)$teacher_id,
-                    ':old_eval_id' => (int)$reschedule_eval_id
-                ]);
-            } catch (Exception $e) {}
-        }
         try {
             $clr_pvp = $db->prepare("
                 DELETE ta
@@ -1705,24 +1564,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         } catch (Exception $e) {}
 
         // Rescheduled rows need a fresh teacher signature for the new slot.
-        // Do not carry an old acknowledgment forward on the same evaluation_id
-        // or from a schedule-only/upcoming signature for this teacher.
+        // Do not carry an old acknowledgment forward on the same evaluation_id.
         if ($is_reschedule && (int)$eval_id > 0) {
             try {
-                $clear_ack = $db->prepare(
-                    "DELETE FROM observation_plan_acknowledgments
-                     WHERE teacher_id = :tid
-                       AND academic_year = :ay
-                       AND semester IN (:sem, :sem_alt)
-                       AND (evaluation_id = :eval_id OR evaluation_id IS NULL)"
-                );
-                $clear_ack->execute([
-                    ':tid' => (int)$teacher_id,
-                    ':ay' => (string)$academic_year_for_insert,
-                    ':sem' => (string)($post_semester ?: $filter_semester),
-                    ':sem_alt' => (string)(($post_semester ?: $filter_semester) . ' Semester'),
-                    ':eval_id' => (int)$eval_id
-                ]);
+                $clear_ack = $db->prepare("DELETE FROM observation_plan_acknowledgments WHERE evaluation_id = :eval_id");
+                $clear_ack->execute([':eval_id' => (int)$eval_id]);
             } catch (Exception $e) {}
         }
 
@@ -2775,9 +2621,9 @@ $eval_dates_by_teacher = [];
 // suppressed when the teacher already has a completed row on that date.
 $completed_dates_by_teacher = [];
 
-// Build a set of evaluation IDs the current observer has opted into.
+// For leaders: build a set of evaluation IDs they have opted into as observer
 $leader_opted_evals = [];
-if ($is_observer_role) {
+if ($is_leader) {
     $opt_stmt = $db->prepare("SELECT eval_id FROM teacher_assignments WHERE evaluator_id = :eid AND eval_id IS NOT NULL");
     $opt_stmt->execute([':eid' => $_SESSION['user_id']]);
     while ($opt_row = $opt_stmt->fetch(PDO::FETCH_ASSOC)) {
@@ -2878,24 +2724,24 @@ $get_required_observers = function(int $teacher_id, int $eval_id, string $dept, 
         } catch (Exception $e) {}
     }
 
-    // Include any observer role that explicitly accepted this schedule row.
+    // Include President/VP only when they explicitly accepted this schedule row.
     if ($teacher_id > 0 && $eval_id > 0) {
         try {
-            $accepted_observer_stmt = $db->prepare(
+            $pvp_stmt = $db->prepare(
                 "SELECT DISTINCT u.name
                  FROM teacher_assignments ta
                  JOIN users u ON u.id = ta.evaluator_id
                  WHERE ta.teacher_id = :teacher_id
                    AND ta.eval_id = :eval_id
                    AND u.status = 'active'
-                   AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator','president','vice_president')
+                   AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('president','vice_president')
                  ORDER BY u.name"
             );
-            $accepted_observer_stmt->execute([
+            $pvp_stmt->execute([
                 ':teacher_id' => $teacher_id,
                 ':eval_id' => $eval_id
             ]);
-            while ($pn = $accepted_observer_stmt->fetchColumn()) {
+            while ($pn = $pvp_stmt->fetchColumn()) {
                 $pn = trim((string)$pn);
                 if ($pn !== '' && !in_array($pn, $required, true)) {
                     $required[] = $pn;
@@ -2904,31 +2750,9 @@ $get_required_observers = function(int $teacher_id, int $eval_id, string $dept, 
         } catch (Exception $e) {}
     }
 
-    $unavailable_names = [];
-    if ($teacher_id > 0 && $eval_id > 0) {
-        try {
-            $unavailable_stmt = $db->prepare(
-                "SELECT DISTINCT u.name
-                 FROM observer_unavailable_slots ous
-                 JOIN users u ON u.id = ous.evaluator_id
-                 WHERE ous.teacher_id = :teacher_id
-                   AND ous.eval_id = :eval_id"
-            );
-            $unavailable_stmt->execute([
-                ':teacher_id' => $teacher_id,
-                ':eval_id' => $eval_id
-            ]);
-            while ($un = $unavailable_stmt->fetchColumn()) {
-                $un = trim((string)$un);
-                if ($un !== '') $unavailable_names[strtolower($un)] = true;
-            }
-        } catch (Exception $e) {}
-    }
-
-    return array_values(array_filter($required, function($n) use ($teacher_name, $current_user_name, $exclude_current_user, $unavailable_names) {
+    return array_values(array_filter($required, function($n) use ($teacher_name, $current_user_name, $exclude_current_user) {
         $name = trim((string)$n);
         if ($name === '') return false;
-        if (isset($unavailable_names[strtolower($name)])) return false;
         if (strcasecmp($name, trim((string)$teacher_name)) === 0) return false;
         if ($exclude_current_user && $current_user_name !== '' && strcasecmp($name, trim((string)$current_user_name)) === 0) return false;
         return true;
@@ -4631,34 +4455,6 @@ try {
                                 $slot_has_rescheduled = (bool)($slot_group['has_rescheduled'] ?? false);
                                 $slot_has_scheduled = (bool)($slot_group['has_scheduled'] ?? false);
                                 $slot_ids = $slot_group['ids'] ?? [];
-                                if (!empty($slot_ids)) {
-                                    $slot_ids_clean = array_values(array_unique(array_filter(array_map('intval', $slot_ids), function($id) {
-                                        return $id > 0;
-                                    })));
-                                    if (!empty($slot_ids_clean)) {
-                                        try {
-                                            $ph_unavailable = implode(',', array_fill(0, count($slot_ids_clean), '?'));
-                                            $unavailable_slot_stmt = $db->prepare(
-                                                "SELECT DISTINCT u.name
-                                                 FROM observer_unavailable_slots ous
-                                                 JOIN users u ON u.id = ous.evaluator_id
-                                                 WHERE ous.teacher_id = ?
-                                                   AND ous.eval_id IN ($ph_unavailable)"
-                                            );
-                                            $unavailable_slot_stmt->execute(array_merge([(int)$my_teacher_id], $slot_ids_clean));
-                                            $unavailable_slot_names = [];
-                                            while ($un = $unavailable_slot_stmt->fetchColumn()) {
-                                                $un = trim((string)$un);
-                                                if ($un !== '') $unavailable_slot_names[strtolower($un)] = true;
-                                            }
-                                            if (!empty($unavailable_slot_names)) {
-                                                $ev_observers = array_values(array_filter($ev_observers, function($name) use ($unavailable_slot_names) {
-                                                    return !isset($unavailable_slot_names[strtolower(trim((string)$name))]);
-                                                }));
-                                            }
-                                        } catch (Exception $e) {}
-                                    }
-                                }
                                 // Conducted only when every evaluator record for this slot is completed.
                                 $all_evaluators_done = (!empty($slot_ids) && !$slot_has_rescheduled && !$slot_has_scheduled);
                             ?>
@@ -4896,9 +4692,6 @@ try {
                                     // Strict per-row signature ownership: use only the row's evaluation_id.
                                     // This prevents old/general signatures from auto-signing new rows.
                                     $ack_eval = ($row_eval_id_for_sig > 0) ? ($ack_eval_map[$row_eval_id_for_sig] ?? null) : ($ack_upcoming_map[$tid] ?? null);
-                                    if (empty($ack_eval) && $row_eval_id_for_sig > 0 && isset($ack_upcoming_map[$tid])) {
-                                        $ack_eval = $ack_upcoming_map[$tid];
-                                    }
                                     // Only use per-schedule signatures (per eval_id or upcoming).
                                     // Do not fall back to teacher-level acknowledgments from previous schedules.
                                     $is_schedule_signed = $has_schedule && !empty($ack_eval);
@@ -4961,13 +4754,17 @@ try {
                                 <tr>
                                     <td>
                                         <?php if ($can_reschedule): ?>
-                                            <?php if ($is_observer_role): ?>
+                                            <?php if ($is_leader): ?>
                                                 <?php
                                                     $is_opted = ($eval_id > 0) ? isset($leader_opted_evals[$eval_id]) : false;
                                                     $scheduled_by_me = ((int)($t['scheduled_by'] ?? 0) === (int)($_SESSION['user_id'] ?? 0));
-                                                    $observer_opt_title = $is_opted ? 'You are an observer' : ($scheduled_by_me ? 'Scheduled by you; check to observe' : 'Check to join as observer');
                                                 ?>
-                                                <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo $eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo htmlspecialchars($observer_opt_title, ENT_QUOTES); ?>">
+                                                <?php if (!$is_observer_only && $scheduled_by_me): ?>
+                                                    <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;" title="Scheduled by you">
+                                                <?php else: ?>
+                                                    <?php $disable_observer_opt = $is_schedule_past_for_observer && !$is_opted; ?>
+                                                    <input type="checkbox" class="form-check-input reschedule-check observer-opt-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo $eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" <?php echo $is_opted ? 'checked' : ''; ?> data-opted="<?php echo $is_opted ? '1' : '0'; ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;accent-color:green;" title="<?php echo $disable_observer_opt ? 'Schedule already passed; cannot accept as observer.' : ($is_opted ? 'You are an observer' : 'Check to join as observer'); ?>" <?php echo $disable_observer_opt ? 'disabled' : ''; ?>>
+                                                <?php endif; ?>
                                             <?php else: ?>
                                                 <input type="checkbox" class="form-check-input reschedule-check no-print" value="<?php echo (int)$tid; ?>" data-eval-id="<?php echo (int)$eval_id; ?>" data-owning-department="<?php echo htmlspecialchars($row_owning_dept_filter, ENT_QUOTES); ?>" data-has-pending-req="<?php echo $has_pending_req ? '1' : '0'; ?>" data-has-pending-req-strict="<?php echo $has_pending_req_strict ? '1' : '0'; ?>" data-pending-notif-id="<?php echo $pending_req_id; ?>" style="width:16px;height:16px;cursor:pointer;margin-right:6px;vertical-align:middle;">
                                             <?php endif; ?>

@@ -22,10 +22,10 @@ try {
     while ($r = $fsStmt->fetch(PDO::FETCH_ASSOC)) { $_formSettings[$r['setting_key']] = $r['setting_value']; }
 } catch (PDOException $e) {}
 $_fs = [
-    'form_code_no'   => htmlspecialchars($_formSettings['form_code_no'] ?? 'FM-DPM-SMCC-CMI-02'),
-    'issue_status'   => htmlspecialchars($_formSettings['issue_status'] ?? '03'),
-    'revision_no'    => htmlspecialchars($_formSettings['revision_no'] ?? '00'),
-    'date_effective' => htmlspecialchars($_formSettings['date_effective'] ?? '5 June 2026'),
+    'form_code_no'   => htmlspecialchars($_formSettings['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04'),
+    'issue_status'   => htmlspecialchars($_formSettings['issue_status'] ?? '02'),
+    'revision_no'    => htmlspecialchars($_formSettings['revision_no'] ?? '02'),
+    'date_effective' => htmlspecialchars($_formSettings['date_effective'] ?? '13 September 2023'),
     'approved_by'    => htmlspecialchars($_formSettings['approved_by'] ?? 'President'),
 ];
 
@@ -41,23 +41,23 @@ $defaultIsoCriteria = [
     'management' => [
         'The TILO (Topic Intended Learning Outcomes) are clearly presented.',
         'Recall and connects previous lessons to the new lessons.',
-        'The topic/lesson is introduced in an interesting & engaging way.',
-        'Uses current issues, real life & local examples to enrich class discussion.',
-        'Focuses class discussion on key concepts of the lesson.',
-        'Encourages active participation among students and ask questions about the topic.',
-        'Uses current instructional strategies and resources.',
-        'Designs teaching aids that facilitate understanding of key concepts.',
-        'Adapts teaching approach in the light of student feedback and reactions.',
-        'Asks students using thought provoking questions (Art of Questioning).',
-        'Integrate the institutional core values to the lessons.',
-        'Conduct the lesson using the principle of SMART'
+        'Uses varied and suitable teaching methods.',
+        'Presents lesson in an organized and logical sequence.',
+        'Uses examples and illustrations to clarify lessons.',
+        'Uses instructional materials/technology effectively.',
+        'Asks thought-provoking questions.',
+        'Encourages students to participate in the discussion.',
+        'Provides opportunities for collaborative/cooperative learning.',
+        'Maintains discipline and a learning-conducive environment.',
+        'Manages class time effectively.',
+        'Summarizes key points before ending the class.'
     ],
     'assessment' => [
-        "Monitors students' understanding on key concepts discussed.",
+        'Construct test questions and activities that align to intended outcomes.',
         'Uses assessment tool that relates specific course competencies stated in the syllabus.',
-        'Design test/quizzes/assignments and other assessment tasks that are competency-based.',
-        'Introduces varied activities that will answer the differentiated needs to the learners with varied learning style.',
-        "Conducts formative assessment before evaluating and grading the learner's performance outcome.",
+        'Design test/quarter/assignments and other assessment tasks that are corrector-based.',
+        'Provides timely feedback to students on their performance.',
+        "Conducts normative assessment before evaluating and grading the learner's performance outcome.",
         'Monitors the formative assessment results and find ways to ensure learning for the learners.'
     ]
 ];
@@ -260,7 +260,6 @@ $pendingScheduleStmt = null;
 // Fallback for dean/principal: closest pending slot for the teacher in the
 // same department even when evaluator-specific row is missing.
 $pendingScheduleAnyStmt = null;
-$teacherScheduleStmt = null;
 try {
     $pendingScheduleStmt = $db->prepare(
         "SELECT e.id, e.observation_date, e.observation_time, e.observation_room, e.subject_area, e.subject_observed,
@@ -321,40 +320,9 @@ try {
             )
          ORDER BY e.observation_date ASC, COALESCE(e.observation_time, '00:00:00') ASC, e.id ASC"
     );
-    $teacherScheduleStmt = $db->prepare(
-        "SELECT
-                ts.evaluation_id AS id,
-                DATE(ts.schedule_start) AS observation_date,
-                TIME(ts.schedule_start) AS observation_time,
-                ts.room AS observation_room,
-                ts.subject_area,
-                ts.subject AS subject_observed,
-                ts.focus_json AS evaluation_focus,
-                ts.semester,
-                ts.form_type AS evaluation_form_type,
-                ts.status,
-                ts.schedule_end
-         FROM teacher_schedules ts
-         JOIN teachers t ON t.id = ts.teacher_id
-         WHERE ts.teacher_id = :tid
-           AND ts.status IN ('scheduled','observer_unbalanced')
-           AND (
-                t.department = :dept
-                OR ts.scheduled_department = :dept2
-                OR EXISTS (
-                    SELECT 1
-                    FROM teacher_assignments ta
-                    WHERE ta.teacher_id = ts.teacher_id
-                      AND ta.evaluator_id = :assigned_evaluator_id
-                      AND (ta.eval_id = ts.evaluation_id OR ta.eval_id IS NULL)
-                )
-           )
-         ORDER BY ts.schedule_start ASC, ts.id ASC"
-    );
 } catch (Exception $e) {
     $pendingScheduleStmt = null;
     $pendingScheduleAnyStmt = null;
-    $teacherScheduleStmt = null;
 }
 
 // Handle form submission
@@ -585,43 +553,6 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                             if ($bestDiff === null || $diff < $bestDiff) {
                                                 $bestDiff = $diff;
                                                 $bestRow = $pr;
-                                            }
-                                        }
-                                        if ($bestRow) {
-                                            $effective_schedule_row = $bestRow;
-                                        }
-                                    }
-                                } catch (Exception $e) {
-                                    // keep null, guarded below
-                                }
-                            }
-
-                            // Final fallback: some schedules exist only in teacher_schedules
-                            // (for example when the linked evaluation row was removed).
-                            if (!$effective_schedule_row && $sched_for_this_dept && $teacherScheduleStmt) {
-                                try {
-                                    $teacherScheduleStmt->execute([
-                                        ':tid' => (int)$teacher_row['id'],
-                                        ':dept' => (string)$viewer_dept_eval,
-                                        ':dept2' => (string)$viewer_dept_eval,
-                                        ':assigned_evaluator_id' => (int)$_SESSION['user_id']
-                                    ]);
-                                    $scheduleRows = $teacherScheduleStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-                                    if (!empty($scheduleRows)) {
-                                        $tz_eval = new DateTimeZone('Asia/Manila');
-                                        $now_eval = new DateTime('now', $tz_eval);
-                                        $bestRow = null;
-                                        $bestDiff = null;
-                                        foreach ($scheduleRows as $sr) {
-                                            $od = trim((string)($sr['observation_date'] ?? ''));
-                                            if ($od === '') continue;
-                                            $ot = trim((string)($sr['observation_time'] ?? ''));
-                                            if ($ot === '' || $ot === '00:00:00') $ot = '00:00:00';
-                                            $dtObj = new DateTime($od . ' ' . $ot, $tz_eval);
-                                            $diff = abs($dtObj->getTimestamp() - $now_eval->getTimestamp());
-                                            if ($bestDiff === null || $diff < $bestDiff) {
-                                                $bestDiff = $diff;
-                                                $bestRow = $sr;
                                             }
                                         }
                                         if ($bestRow) {
@@ -900,7 +831,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                     <input type="hidden" name="teacher_id" id="selected_teacher_id">
                     <div class="card">
                         <div class="card-header">
-                                <h5 class="mb-0 text-center">CLASSROOM OBSERVATION FORM</h5>
+                                <h5 class="mb-0 text-center">CLASSROOM EVALUATION FORM</h5>
                             <div class="row">
                                 <div class="col-12 text-start">
                                     <a href="evaluation.php" class="btn btn-secondary">
@@ -979,7 +910,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                             <!-- PART 2: Mandatory Requirements -->
                             <div class="evaluation-section">
                                 <h5>PART 2: Mandatory Requirements for Teachers</h5>
-                                <p>Write (/) if presented to the observer, (x) if not presented.</p>
+                                <p>Check if presented to the observer.</p>
                                 <div class="row">
                                     <div class="col-md-4">
                                         <div class="form-check">
@@ -1204,7 +1135,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                                 <td><input type="text" class="form-control form-control-sm" name="management_comment8" placeholder="Comments"></td>
                                             </tr>
                                             <tr>
-                                                <td>Asks students using thought provoking questions (Art of Questioning).</td>
+                                                <td>Aids students using thought provoking questions (Art of Questioning).</td>
                                                 <td><input type="radio" name="management9" value="5" required></td>
                                                 <td><input type="radio" name="management9" value="4"></td>
                                                 <td><input type="radio" name="management9" value="3"></td>
@@ -1274,7 +1205,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                                 <td><input type="text" class="form-control form-control-sm" name="assessment_comment1" placeholder="Comments"></td>
                                             </tr>
                                             <tr>
-                                                <td>Design test/quizzes/assignments and other assessment tasks that are competency-based.</td>
+                                                <td>Design test/quarter/assignments and other assessment tasks that are corrector-based.</td>
                                                 <td><input type="radio" name="assessment2" value="5" required></td>
                                                 <td><input type="radio" name="assessment2" value="4"></td>
                                                 <td><input type="radio" name="assessment2" value="3"></td>
@@ -1292,7 +1223,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                                 <td><input type="text" class="form-control form-control-sm" name="assessment_comment3" placeholder="Comments"></td>
                                             </tr>
                                             <tr>
-                                                <td>Conducts formative assessment before evaluating and grading the learner's performance outcome.</td>
+                                                <td>Conducts normative assessment before evaluating and grading the learner's performance outcome.</td>
                                                 <td><input type="radio" name="assessment4" value="5" required></td>
                                                 <td><input type="radio" name="assessment4" value="4"></td>
                                                 <td><input type="radio" name="assessment4" value="3"></td>

@@ -407,10 +407,10 @@ $get_required_observers = function(int $teacher_id, int $eval_id, string $dept, 
         } catch (Exception $e) {}
     }
 
-    // Include President/VP only when they explicitly accepted as observer.
+    // Include any observer role that explicitly accepted this schedule row.
     if ($teacher_id > 0) {
         try {
-            $pvp_stmt = $db->prepare(
+            $accepted_observer_stmt = $db->prepare(
                 "SELECT DISTINCT u.name
                  FROM teacher_assignments ta
                  JOIN users u ON u.id = ta.evaluator_id
@@ -420,14 +420,14 @@ $get_required_observers = function(int $teacher_id, int $eval_id, string $dept, 
                         OR (:eval_id = 0 AND ta.eval_id IS NULL)
                    )
                    AND u.status = 'active'
-                   AND u.role IN ('president','vice_president')
+                   AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('dean','principal','chairperson','subject_coordinator','grade_level_coordinator','president','vice_president')
                  ORDER BY u.name"
             );
-            $pvp_stmt->execute([
+            $accepted_observer_stmt->execute([
                 ':teacher_id' => $teacher_id,
                 ':eval_id' => $eval_id
             ]);
-            while ($pn = $pvp_stmt->fetchColumn()) {
+            while ($pn = $accepted_observer_stmt->fetchColumn()) {
                 $pn = trim((string)$pn);
                 if ($pn !== '' && !in_array($pn, $required, true)) {
                     $required[] = $pn;
@@ -436,8 +436,30 @@ $get_required_observers = function(int $teacher_id, int $eval_id, string $dept, 
         } catch (Exception $e) {}
     }
 
-    return array_values(array_filter($required, function($n) use ($teacher_name) {
+    $unavailable_names = [];
+    if ($teacher_id > 0 && $eval_id > 0) {
+        try {
+            $unavailable_stmt = $db->prepare(
+                "SELECT DISTINCT u.name
+                 FROM observer_unavailable_slots ous
+                 JOIN users u ON u.id = ous.evaluator_id
+                 WHERE ous.teacher_id = :teacher_id
+                   AND ous.eval_id = :eval_id"
+            );
+            $unavailable_stmt->execute([
+                ':teacher_id' => $teacher_id,
+                ':eval_id' => $eval_id
+            ]);
+            while ($un = $unavailable_stmt->fetchColumn()) {
+                $un = trim((string)$un);
+                if ($un !== '') $unavailable_names[strtolower($un)] = true;
+            }
+        } catch (Exception $e) {}
+    }
+
+    return array_values(array_filter($required, function($n) use ($teacher_name, $unavailable_names) {
         $name = trim((string)$n);
+        if (isset($unavailable_names[strtolower($name)])) return false;
         return $name !== '' && strcasecmp($name, trim((string)$teacher_name)) !== 0;
     }));
 };
@@ -778,16 +800,22 @@ if (!empty($filter_status)) {
     $teachers_list = array_values($teachers_list);
 }
 
-// Teacher signature in print comes from the exact observation acknowledgment row.
+// Teacher signature in print comes from the exact observation acknowledgment row,
+// with a schedule-only fallback for rows whose linked evaluation was removed.
 $ack_eval_map = [];
+$ack_upcoming_map = [];
 try {
     $eval_ids_for_ack = [];
+    $teacher_ids_for_ack = [];
     foreach ($teachers_list as $tt) {
         $rk = $tt['_row_key'] ?? ($tt['id'] ?? null);
         $eid = (int)($eval_data[$rk]['eval_id'] ?? 0);
         if ($eid > 0) $eval_ids_for_ack[$eid] = true;
+        $tid_ack = (int)($tt['id'] ?? 0);
+        if ($tid_ack > 0) $teacher_ids_for_ack[$tid_ack] = true;
     }
     $eval_ids_for_ack = array_keys($eval_ids_for_ack);
+    $teacher_ids_for_ack = array_keys($teacher_ids_for_ack);
     if (!empty($eval_ids_for_ack)) {
         $ph = implode(',', array_fill(0, count($eval_ids_for_ack), '?'));
         $sem_alt = $semester . ' Semester';
@@ -803,6 +831,25 @@ try {
             $aeid = (int)($ack['evaluation_id'] ?? 0);
             if ($aeid > 0 && !isset($ack_eval_map[$aeid])) {
                 $ack_eval_map[$aeid] = $ack;
+            }
+        }
+    }
+    if (!empty($teacher_ids_for_ack)) {
+        $ph_teacher = implode(',', array_fill(0, count($teacher_ids_for_ack), '?'));
+        $sem_alt = $semester . ' Semester';
+        $ack_upcoming_sql = "SELECT teacher_id, evaluation_id, signature, acknowledged_at, id
+                             FROM observation_plan_acknowledgments
+                             WHERE academic_year = ?
+                               AND semester IN (?, ?)
+                               AND evaluation_id IS NULL
+                               AND teacher_id IN ($ph_teacher)
+                             ORDER BY acknowledged_at DESC, id DESC";
+        $ack_upcoming_stmt = $db->prepare($ack_upcoming_sql);
+        $ack_upcoming_stmt->execute(array_merge([$academic_year, $semester, $sem_alt], $teacher_ids_for_ack));
+        while ($ack = $ack_upcoming_stmt->fetch(PDO::FETCH_ASSOC)) {
+            $atid = (int)($ack['teacher_id'] ?? 0);
+            if ($atid > 0 && !isset($ack_upcoming_map[$atid])) {
+                $ack_upcoming_map[$atid] = $ack;
             }
         }
     }
@@ -1056,6 +1103,9 @@ try {
                             <?php 
                             $row_eval_id = (int)($eval_data[$rk]['eval_id'] ?? 0);
                             $ack_sig = ($row_eval_id > 0) ? trim((string)($ack_eval_map[$row_eval_id]['signature'] ?? '')) : '';
+                            if ($ack_sig === '') {
+                                $ack_sig = trim((string)($ack_upcoming_map[(int)$tid]['signature'] ?? ''));
+                            }
                             if ($ack_sig !== ''): ?>
                                 <img src="<?php echo htmlspecialchars($ack_sig); ?>" alt="Teacher Signature" style="max-height: 35px; max-width: 80px;">
                             <?php endif; ?>

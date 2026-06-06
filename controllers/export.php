@@ -22,10 +22,10 @@ try {
     while ($r = $fsStmt->fetch(PDO::FETCH_ASSOC)) { $_formSettings[$r['setting_key']] = $r['setting_value']; }
 } catch (PDOException $e) {}
 $_fs = [
-    'form_code_no'   => htmlspecialchars($_formSettings['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04'),
-    'issue_status'   => htmlspecialchars($_formSettings['issue_status'] ?? '02'),
-    'revision_no'    => htmlspecialchars($_formSettings['revision_no'] ?? '02'),
-    'date_effective' => htmlspecialchars($_formSettings['date_effective'] ?? '13 September 2023'),
+    'form_code_no'   => htmlspecialchars($_formSettings['form_code_no'] ?? 'FM-DPM-SMCC-CMI-02'),
+    'issue_status'   => htmlspecialchars($_formSettings['issue_status'] ?? '03'),
+    'revision_no'    => htmlspecialchars($_formSettings['revision_no'] ?? '00'),
+    'date_effective' => htmlspecialchars($_formSettings['date_effective'] ?? '5 June 2026'),
     'approved_by'    => htmlspecialchars($_formSettings['approved_by'] ?? 'President'),
 ];
 
@@ -135,7 +135,7 @@ function exportEvaluationForm($evaluation_id, $academic_year, $semester) {
                 </div>
             </div>
 
-            <h2 class="text-center text-base font-bold mb-6">CLASSROOM EVALUATION FORM</h2>
+            <h2 class="text-center text-base font-bold mb-6">CLASSROOM OBSERVATION FORM</h2>
 
             <!-- Part 1: Faculty Information -->
             <div class="mb-6">

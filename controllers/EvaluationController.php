@@ -741,10 +741,10 @@ class EvaluationController {
         $u->bindValue(':course_syllabi', $course_syllabi);
         $u->bindValue(':others_requirements', $others_requirements);
         $u->bindValue(':others_specify', $others_specify);
-        $u->bindValue(':fs_form_code_no', $_fsSnap['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04');
-        $u->bindValue(':fs_issue_status', $_fsSnap['issue_status'] ?? '02');
-        $u->bindValue(':fs_revision_no', $_fsSnap['revision_no'] ?? '02');
-        $u->bindValue(':fs_date_effective', $_fsSnap['date_effective'] ?? '13 September 2023');
+        $u->bindValue(':fs_form_code_no', $_fsSnap['form_code_no'] ?? 'FM-DPM-SMCC-CMI-02');
+        $u->bindValue(':fs_issue_status', $_fsSnap['issue_status'] ?? '03');
+        $u->bindValue(':fs_revision_no', $_fsSnap['revision_no'] ?? '00');
+        $u->bindValue(':fs_date_effective', $_fsSnap['date_effective'] ?? '5 June 2026');
         $u->bindValue(':fs_approved_by', $_fsSnap['approved_by'] ?? 'President');
         $u->bindValue(':id', $slotDraftId, PDO::PARAM_INT);
         if ($u->execute()) {
@@ -788,10 +788,10 @@ class EvaluationController {
         $stmt->bindValue(':course_syllabi', $course_syllabi);
         $stmt->bindValue(':others_requirements', $others_requirements);
         $stmt->bindValue(':others_specify', $others_specify);
-        $stmt->bindValue(':fs_form_code_no', $_fsSnap['form_code_no'] ?? 'FM-DPM-SMCC-RTH-04');
-        $stmt->bindValue(':fs_issue_status', $_fsSnap['issue_status'] ?? '02');
-        $stmt->bindValue(':fs_revision_no', $_fsSnap['revision_no'] ?? '02');
-        $stmt->bindValue(':fs_date_effective', $_fsSnap['date_effective'] ?? '13 September 2023');
+        $stmt->bindValue(':fs_form_code_no', $_fsSnap['form_code_no'] ?? 'FM-DPM-SMCC-CMI-02');
+        $stmt->bindValue(':fs_issue_status', $_fsSnap['issue_status'] ?? '03');
+        $stmt->bindValue(':fs_revision_no', $_fsSnap['revision_no'] ?? '00');
+        $stmt->bindValue(':fs_date_effective', $_fsSnap['date_effective'] ?? '5 June 2026');
         $stmt->bindValue(':fs_approved_by', $_fsSnap['approved_by'] ?? 'President');
 
         if ($stmt->execute()) {
