@@ -12,15 +12,37 @@
             // Resolve dashboard link depending on role to avoid duplicate dashboards for coordinators
             $role = $_SESSION['role'] ?? '';
             $teacher_observer_sidebar_access = false;
+            $teacher_completed_report_access = false;
             if ($role === 'teacher') {
                 try {
                     if (isset($db) && $db instanceof PDO) {
-                        $sidebarAccessStmt = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :uid LIMIT 1");
-                        $sidebarAccessStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+                        $sidebarAccessStmt = $db->prepare("
+                            SELECT CASE WHEN
+                                EXISTS (SELECT 1 FROM teacher_assignments WHERE evaluator_id = :uid_assign)
+                                OR EXISTS (SELECT 1 FROM notifications WHERE user_id = :uid_request AND type = 'observer_request' AND is_read = 0)
+                            THEN 1 ELSE 0 END
+                        ");
+                        $sidebarAccessStmt->execute([
+                            ':uid_assign' => (int)($_SESSION['user_id'] ?? 0),
+                            ':uid_request' => (int)($_SESSION['user_id'] ?? 0)
+                        ]);
                         $teacher_observer_sidebar_access = (bool)$sidebarAccessStmt->fetchColumn();
+
+                        $teacherReportStmt = $db->prepare("
+                            SELECT 1
+                            FROM evaluations
+                            WHERE evaluator_id = :uid
+                              AND status = 'completed'
+                              AND overall_avg IS NOT NULL
+                              AND overall_avg > 0
+                            LIMIT 1
+                        ");
+                        $teacherReportStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+                        $teacher_completed_report_access = (bool)$teacherReportStmt->fetchColumn();
                     }
                 } catch (Exception $e) {
                     $teacher_observer_sidebar_access = false;
+                    $teacher_completed_report_access = false;
                 }
             }
             $dashboard_link = 'dashboard.php';
@@ -44,39 +66,42 @@
             <li><a href="users.php" class="nav-link"><i class="fas fa-users"></i> User Management</a></li>
             <li><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></li>
         <?php elseif(in_array($_SESSION['role'], ['president', 'vice_president'])): ?>
-            <li><a href="../evaluators/evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluation</a></li>
+            <li><a href="../evaluators/evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluate</a></li>
             <li><a href="../evaluators/teachers.php" class="nav-link"><i class="fas fa-chalkboard-teacher"></i> Teachers</a></li>
-            <li><a href="../evaluators/observation_plan.php" class="nav-link"><i class="fas fa-clipboard-list"></i> Observation Plan</a></li>
+            <li><a href="../evaluators/observation_plan.php" class="nav-link"><i class="fas fa-clipboard-list"></i> Schedule</a></li>
             <li><a href="../evaluators/reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></li>
         <?php elseif($_SESSION['role'] === 'teacher'): ?>
             <!-- Teacher only sees My Evaluations (added below) -->
         <?php else: ?>
-            <li><a href="evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluation</a></li>
+            <li><a href="evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluate</a></li>
             <li><a href="teachers.php" class="nav-link"><i class="fas fa-chalkboard-teacher"></i> Teachers</a></li>
             <?php if(in_array($_SESSION['role'], ['dean', 'principal'])): ?>
                 <li><a href="assign_coordinators.php" class="nav-link"><i class="fas fa-users-cog"></i> Coordinators</a></li>
             <?php endif; ?>
-                <li><a href="observation_plan.php" class="nav-link"><i class="fas fa-clipboard-list"></i> Observation Plan</a></li>
+                <li><a href="observation_plan.php" class="nav-link"><i class="fas fa-clipboard-list"></i> Schedule</a></li>
             <?php if(in_array($_SESSION['role'], ['dean', 'principal'])): ?>
-                <li><a href="deactivated_teachers.php" class="nav-link"><i class="fas fa-user-slash"></i> Deactivated Teachers</a></li>
+                <li><a href="deactivated_teachers.php" class="nav-link"><i class="fas fa-user-slash"></i> Inactive</a></li>
             <?php endif; ?>
             <li><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></li>
         <?php endif; ?>
 
         <?php if ($_SESSION['role'] === 'teacher'): ?>
             <?php if ($teacher_observer_sidebar_access): ?>
-                <li><a href="../evaluators/evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluation</a></li>
+                <li><a href="../evaluators/evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluate</a></li>
             <?php endif; ?>
-            <li><a href="../teachers/dashboard.php" class="nav-link"><i class="fas fa-file-alt"></i> My Evaluations</a></li>
+            <?php if ($teacher_completed_report_access): ?>
+                <li><a href="../evaluators/reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></li>
+            <?php endif; ?>
+            <li><a href="../teachers/dashboard.php" class="nav-link"><i class="fas fa-file-alt"></i> My Records</a></li>
                 <li><a href="../teachers/observation_plan.php" class="nav-link"><i class="fas fa-clipboard-list"></i> Schedule</a></li>
         <?php elseif(in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'])): ?>
-            <li><a href="my_evaluations.php" class="nav-link"><i class="fas fa-file-alt"></i> My Evaluations</a></li>
+            <li><a href="my_evaluations.php" class="nav-link"><i class="fas fa-file-alt"></i> My Records</a></li>
         <?php elseif(in_array($_SESSION['role'], ['president', 'vice_president'])): ?>
-            <li><a href="../evaluators/my_evaluations.php" class="nav-link"><i class="fas fa-file-alt"></i> My Evaluations</a></li>
+            <li><a href="../evaluators/my_evaluations.php" class="nav-link"><i class="fas fa-file-alt"></i> My Records</a></li>
         <?php endif; ?>
 
         <?php if (in_array($_SESSION['role'] ?? '', ['edp', 'dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president', 'teacher'], true)): ?>
-            <li class="mt-3"><a href="../auth/logout.php" class="nav-link"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
+            <li class="mt-3"><a href="../auth/logout.php" class="nav-link"><i class="fas fa-sign-out-alt"></i> Sign Out</a></li>
         <?php endif; ?>
     </ul>
 </nav>

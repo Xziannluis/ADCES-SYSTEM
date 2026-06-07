@@ -11,8 +11,16 @@ if ($currentRole !== '') {
 $teacherObserverAccess = false;
 if ($currentRole === 'teacher') {
     try {
-        $accessStmt = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :uid LIMIT 1");
-        $accessStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+        $accessStmt = $db->prepare("
+            SELECT CASE WHEN
+                EXISTS (SELECT 1 FROM teacher_assignments WHERE evaluator_id = :uid_assign)
+                OR EXISTS (SELECT 1 FROM notifications WHERE user_id = :uid_request AND type = 'observer_request' AND is_read = 0)
+            THEN 1 ELSE 0 END
+        ");
+        $accessStmt->execute([
+            ':uid_assign' => (int)($_SESSION['user_id'] ?? 0),
+            ':uid_request' => (int)($_SESSION['user_id'] ?? 0)
+        ]);
         $teacherObserverAccess = (bool)$accessStmt->fetchColumn();
     } catch (Exception $e) {
         $teacherObserverAccess = false;
@@ -93,17 +101,52 @@ if (!$teacher_data) {
     header("Location: evaluation.php");
     exit();
 }
-if ($currentRole === 'teacher') {
-    $teacherAssignedStmt = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :uid AND teacher_id = :tid LIMIT 1");
+
+$hasAcceptedObserverAssignment = false;
+$hasAnyTeacherAssignment = false;
+try {
+    $teacherAssignedStmt = $db->prepare("
+        SELECT
+            MAX(CASE WHEN eval_id IS NOT NULL THEN 1 ELSE 0 END) AS accepted_slot,
+            COUNT(*) AS assignment_count
+        FROM teacher_assignments
+        WHERE evaluator_id = :uid
+          AND teacher_id = :tid
+    ");
     $teacherAssignedStmt->execute([
         ':uid' => (int)($_SESSION['user_id'] ?? 0),
         ':tid' => (int)$teacher_id
     ]);
-    if (!$teacherAssignedStmt->fetchColumn()) {
+    $assignmentRow = $teacherAssignedStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $hasAcceptedObserverAssignment = !empty($assignmentRow['accepted_slot']);
+    $hasAnyTeacherAssignment = ((int)($assignmentRow['assignment_count'] ?? 0) > 0);
+} catch (Exception $e) {}
+
+$peac_owner_department = trim((string)($teacher_data['scheduled_department'] ?? ''));
+if ($peac_owner_department === '') {
+    $peac_owner_department = trim((string)($teacher_data['department'] ?? ''));
+}
+$viewerDepartment = trim((string)($_SESSION['department'] ?? ''));
+$isLeaderRole = in_array($currentRole, ['president', 'vice_president'], true);
+$isCoordinatorRole = in_array($currentRole, ['chairperson', 'subject_coordinator', 'grade_level_coordinator'], true);
+$isDepartmentHeadRole = in_array($currentRole, ['dean', 'principal'], true);
+
+if ($currentRole === 'teacher') {
+    if (!$hasAcceptedObserverAssignment) {
         $_SESSION['error'] = "You are not assigned to evaluate this teacher.";
         header("Location: evaluation.php");
         exit();
     }
+} elseif ($isCoordinatorRole && !$hasAnyTeacherAssignment && !$hasAcceptedObserverAssignment) {
+    $_SESSION['error'] = "You are not assigned to evaluate this teacher.";
+    header("Location: evaluation.php");
+    exit();
+}
+
+if (!$isLeaderRole && ($isDepartmentHeadRole || $isCoordinatorRole) && $peac_owner_department !== '' && strcasecmp($peac_owner_department, $viewerDepartment) !== 0 && !$hasAcceptedObserverAssignment) {
+    $_SESSION['error'] = "This schedule belongs to another department. Only that department or accepted observers can evaluate it.";
+    header("Location: evaluation.php");
+    exit();
 }
 
 // Verify the schedule is set and form type is PEAC
@@ -194,7 +237,7 @@ $department_map = [
     'JHS'   => 'Junior High School Department',
     'SHS'   => 'Senior High School Department',
 ];
-$dept_display = $department_map[$teacher_data['department']] ?? $teacher_data['department'];
+$dept_display = $department_map[$peac_owner_department] ?? ($peac_owner_department ?: ($teacher_data['department'] ?? ''));
 
 $m = (int)date('n'); $y = (int)date('Y');
 $currentAY = ($m >= 6) ? "$y-" . ($y+1) : ($y-1) . "-$y";
@@ -400,7 +443,7 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
                             <div>Name of Observer: <strong><u><?php echo htmlspecialchars($_SESSION['name']); ?></u></strong></div>
                             <input type="hidden" name="academic_year" value="<?php echo $currentAY; ?>">
                             <input type="hidden" name="semester" value="<?php echo htmlspecialchars($teacher_data['evaluation_semester'] ?? '1st'); ?>">
-                            <input type="hidden" name="department" value="<?php echo htmlspecialchars($teacher_data['department']); ?>">
+                            <input type="hidden" name="department" value="<?php echo htmlspecialchars($peac_owner_department ?: ($teacher_data['department'] ?? '')); ?>">
                             <input type="hidden" name="observation_type" value="Formal">
                             <input type="hidden" name="observation_time" value="<?php echo htmlspecialchars($peac_observation_time); ?>">
                             <input type="hidden" name="observation_room" value="<?php echo htmlspecialchars($teacher_data['evaluation_room'] ?? ''); ?>">
@@ -934,6 +977,7 @@ if ($peac_sched_start_raw !== '' && strtotime($peac_sched_start_raw) !== false) 
             }
 
             return {
+                teacher_id: document.querySelector('input[name="teacher_id"]')?.value || '',
                 faculty_name: document.getElementById('facultyName')?.value || '',
                 department: document.querySelector('input[name="department"]')?.value || '',
                 subject_observed: document.getElementById('subjectObserved')?.value || '',

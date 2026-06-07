@@ -5,18 +5,42 @@
  * printable content with self-contained CSS.  No sidebar, no topbar.
  */
 require_once '../auth/session-check.php';
-if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'])) {
+require_once '../config/database.php';
+
+$database = new Database();
+$db = $database->getConnection();
+$currentRole = strtolower(str_replace(' ', '_', trim((string)($_SESSION['role'] ?? ''))));
+if ($currentRole !== '') {
+    $_SESSION['role'] = $currentRole;
+}
+
+$is_teacher_report = false;
+if ($currentRole === 'teacher') {
+    try {
+        $teacherReportAccessStmt = $db->prepare("
+            SELECT 1
+            FROM evaluations
+            WHERE evaluator_id = :uid
+              AND status = 'completed'
+              AND overall_avg IS NOT NULL
+              AND overall_avg > 0
+            LIMIT 1
+        ");
+        $teacherReportAccessStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+        $is_teacher_report = (bool)$teacherReportAccessStmt->fetchColumn();
+    } catch (Exception $e) {
+        $is_teacher_report = false;
+    }
+}
+
+if(!in_array($currentRole, ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true) && !$is_teacher_report) {
     header("Location: ../login.php");
     exit();
 }
 
-require_once '../config/database.php';
 require_once '../models/Evaluation.php';
 require_once '../models/Teacher.php';
 require_once '../includes/program_assignments.php';
-
-$database = new Database();
-$db = $database->getConnection();
 
 $evaluation = new Evaluation($db);
 $teacher = new Teacher($db);
@@ -40,7 +64,10 @@ $all_departments = array_keys($department_map);
 $session_department = trim((string)($_SESSION['department'] ?? ''));
 $requested_department = trim((string)($_GET['department'] ?? ''));
 $available_filter_departments = [];
-if ($is_leader) {
+if ($is_teacher_report) {
+    $available_filter_departments = [];
+    $raw_department = '';
+} elseif ($is_leader) {
     $available_filter_departments = $all_departments;
     $raw_department = in_array($requested_department, $available_filter_departments, true) ? $requested_department : '';
 } elseif ($is_coordinator) {
@@ -60,11 +87,11 @@ if ($is_leader) {
     $available_filter_departments = $session_department !== '' ? [$session_department] : [];
     $raw_department = $session_department;
 }
-$department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
+$department_display = $is_teacher_report ? 'My Completed Evaluations' : ($department_map[$raw_department] ?? ($raw_department ?: 'All Departments'));
 
 // Keep print output aligned with reports.php and include all observer entries
 // in the selected scope.
-$scoped_evaluator_id = null;
+$scoped_evaluator_id = $is_teacher_report ? (int)($_SESSION['user_id'] ?? 0) : null;
 $report_scope_observer_id = $is_coordinator ? (int)($_SESSION['user_id'] ?? 0) : null;
 $coordinator_report_scope_sql = "";
 if ($report_scope_observer_id) {
@@ -110,7 +137,18 @@ $bind_report_scope = static function(PDOStatement $stmt) use ($report_scope_obse
 // Available teachers (for label lookup)
 $available_teachers = [];
 try {
-    if ($is_leader && $raw_department === '') {
+    if ($is_teacher_report) {
+        $teachersQuery = "SELECT DISTINCT t.id, t.name
+                          FROM evaluations e
+                          INNER JOIN teachers t ON e.teacher_id = t.id
+                          WHERE e.evaluator_id = :evaluator_id
+                            AND e.status = 'completed'
+                            AND e.overall_avg IS NOT NULL
+                            AND e.overall_avg > 0
+                          ORDER BY t.name ASC";
+        $teachersStmt = $db->prepare($teachersQuery);
+        $teachersStmt->bindValue(':evaluator_id', $scoped_evaluator_id, PDO::PARAM_INT);
+    } elseif ($is_leader && $raw_department === '') {
         $teachersQuery = "SELECT DISTINCT t.id, t.name
                           FROM evaluations e
                           INNER JOIN teachers t ON e.teacher_id = t.id
@@ -164,7 +202,7 @@ foreach ($available_teachers as $teacher_option) {
 }
 
 // Get evaluations
-$report_department = $raw_department;
+$report_department = $is_teacher_report ? '' : $raw_department;
 $evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', '', null, $report_scope_observer_id);
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 

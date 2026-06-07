@@ -125,6 +125,7 @@ CREATE TABLE `teacher_assignments` (
   `id` INT PRIMARY KEY AUTO_INCREMENT,
   `evaluator_id` INT NOT NULL,
   `teacher_id` INT NOT NULL,
+  `eval_id` INT DEFAULT NULL,
   `subject` VARCHAR(255),
   `grade_level` VARCHAR(50),
   `assigned_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -132,6 +133,7 @@ CREATE TABLE `teacher_assignments` (
   FOREIGN KEY (`teacher_id`) REFERENCES `teachers`(`id`) ON DELETE CASCADE,
   KEY `evaluator_idx` (`evaluator_id`),
   KEY `teacher_idx` (`teacher_id`),
+  KEY `idx_teacher_assignments_eval_id` (`eval_id`),
   KEY `subject_idx` (`subject`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -283,12 +285,15 @@ CREATE TABLE `notifications` (
   `title` VARCHAR(255) NOT NULL,
   `message` TEXT,
   `link` VARCHAR(255) DEFAULT NULL,
+  `request_eval_id` INT DEFAULT NULL,
+  `request_schedule_key` VARCHAR(255) DEFAULT NULL,
   `is_read` TINYINT(1) NOT NULL DEFAULT 0,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
   KEY `user_read_idx` (`user_id`, `is_read`),
   KEY `created_at_idx` (`created_at`),
-  KEY `idx_notif_teacher` (`teacher_id`)
+  KEY `idx_notif_teacher` (`teacher_id`),
+  KEY `idx_notifications_resched_match` (`type`, `user_id`, `teacher_id`, `request_eval_id`, `is_read`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ========================================

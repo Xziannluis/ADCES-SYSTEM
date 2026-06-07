@@ -1,17 +1,41 @@
 <?php
 require_once '../auth/session-check.php';
-if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'])) {
+require_once '../config/database.php';
+
+$database = new Database();
+$db = $database->getConnection();
+$currentRole = strtolower(str_replace(' ', '_', trim((string)($_SESSION['role'] ?? ''))));
+if ($currentRole !== '') {
+    $_SESSION['role'] = $currentRole;
+}
+
+$is_teacher_report = false;
+if ($currentRole === 'teacher') {
+    try {
+        $teacherReportAccessStmt = $db->prepare("
+            SELECT 1
+            FROM evaluations
+            WHERE evaluator_id = :uid
+              AND status = 'completed'
+              AND overall_avg IS NOT NULL
+              AND overall_avg > 0
+            LIMIT 1
+        ");
+        $teacherReportAccessStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+        $is_teacher_report = (bool)$teacherReportAccessStmt->fetchColumn();
+    } catch (Exception $e) {
+        $is_teacher_report = false;
+    }
+}
+
+if(!in_array($currentRole, ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true) && !$is_teacher_report) {
     header("Location: ../login.php");
     exit();
 }
 
-require_once '../config/database.php';
 require_once '../models/Evaluation.php';
 require_once '../models/Teacher.php';
 require_once '../includes/program_assignments.php';
-
-$database = new Database();
-$db = $database->getConnection();
 
 $evaluation = new Evaluation($db);
 $teacher = new Teacher($db);
@@ -72,7 +96,10 @@ $all_departments = array_keys($department_map);
 $session_department = trim((string)($_SESSION['department'] ?? ''));
 $requested_department = trim((string)($_GET['department'] ?? ''));
 $available_filter_departments = [];
-if ($is_leader) {
+if ($is_teacher_report) {
+    $available_filter_departments = [];
+    $raw_department = '';
+} elseif ($is_leader) {
     $available_filter_departments = $all_departments;
     $raw_department = in_array($requested_department, $available_filter_departments, true) ? $requested_department : '';
 } elseif ($is_coordinator) {
@@ -92,11 +119,11 @@ if ($is_leader) {
     $available_filter_departments = $session_department !== '' ? [$session_department] : [];
     $raw_department = $session_department;
 }
-$department_display = $department_map[$raw_department] ?? ($raw_department ?: 'All Departments');
+$department_display = $is_teacher_report ? 'My Completed Evaluations' : ($department_map[$raw_department] ?? ($raw_department ?: 'All Departments'));
 
 // Report should include all observer/evaluator entries within the selected scope
 // so schedules show complete observer comments.
-$scoped_evaluator_id = null;
+$scoped_evaluator_id = $is_teacher_report ? (int)($_SESSION['user_id'] ?? 0) : null;
 $report_scope_observer_id = $is_coordinator ? (int)($_SESSION['user_id'] ?? 0) : null;
 $coordinator_report_scope_sql = "";
 if ($report_scope_observer_id) {
@@ -143,7 +170,34 @@ $bind_report_scope = static function(PDOStatement $stmt) use ($report_scope_obse
 $available_years = [];
 $available_teachers = [];
 try {
-    if ($is_leader && $raw_department === '') {
+    if ($is_teacher_report) {
+        $yearsQuery = "SELECT DISTINCT academic_year
+                       FROM evaluations
+                       WHERE evaluator_id = :evaluator_id
+                         AND academic_year IS NOT NULL
+                         AND academic_year <> ''
+                         AND status = 'completed'
+                         AND overall_avg IS NOT NULL
+                         AND overall_avg > 0
+                       ORDER BY academic_year DESC";
+        $yearsStmt = $db->prepare($yearsQuery);
+        $yearsStmt->bindValue(':evaluator_id', $scoped_evaluator_id, PDO::PARAM_INT);
+        $yearsStmt->execute();
+        $available_years = $yearsStmt->fetchAll(PDO::FETCH_COLUMN);
+
+        $teachersQuery = "SELECT DISTINCT t.id, t.name
+                          FROM evaluations e
+                          INNER JOIN teachers t ON e.teacher_id = t.id
+                          WHERE e.evaluator_id = :evaluator_id
+                            AND e.status = 'completed'
+                            AND e.overall_avg IS NOT NULL
+                            AND e.overall_avg > 0
+                          ORDER BY t.name ASC";
+        $teachersStmt = $db->prepare($teachersQuery);
+        $teachersStmt->bindValue(':evaluator_id', $scoped_evaluator_id, PDO::PARAM_INT);
+        $teachersStmt->execute();
+        $available_teachers = $teachersStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } elseif ($is_leader && $raw_department === '') {
         // Leaders with no department filter: show all years and teachers
         $yearsQuery = "SELECT DISTINCT academic_year
                        FROM evaluations
@@ -251,7 +305,7 @@ foreach ($available_teachers as $teacher_option) {
 // Department filter MUST be applied to all users to prevent cross-department visibility
 // Leaders see all evaluations in the selected department
 // Non-leaders see only their own evaluations in their department
-$report_department = $raw_department;
+$report_department = $is_teacher_report ? '' : $raw_department;
 // Exclude the current user from appearing as an observed teacher (dean/principal see department reports)
 $exclude_self = ($scoped_evaluator_id === null) ? $_SESSION['user_id'] : null;
 $evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', $form_type_filter, $exclude_self, $report_scope_observer_id);
@@ -777,9 +831,11 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                     <button class="btn btn-primary" onclick="openPrintReport()">
                         <i class="fas fa-print me-2"></i>Print Report
                     </button>
+                    <?php if (!$is_teacher_report): ?>
                     <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#evalFormModal">
                         <i class="fas fa-file-alt me-2"></i>Print Evaluation Form
                     </button>
+                    <?php endif; ?>
                 </div>
                 <div class="dropdown">
                     <button class="btn user-menu-btn dropdown-toggle" type="button" id="evaluatorMenu" data-bs-toggle="dropdown" aria-expanded="false">

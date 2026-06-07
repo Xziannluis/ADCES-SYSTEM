@@ -4,7 +4,12 @@ require_once '../config/database.php';
 
 header('Content-Type: application/json');
 
-if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true)) {
+$currentRole = strtolower(str_replace(' ', '_', trim((string)($_SESSION['role'] ?? ''))));
+if ($currentRole !== '') {
+    $_SESSION['role'] = $currentRole;
+}
+
+if (!in_array($currentRole, ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president', 'teacher'], true)) {
     http_response_code(403);
     echo json_encode(['ok' => false, 'message' => 'Unauthorized']);
     exit();
@@ -35,11 +40,37 @@ try {
     exit();
 }
 
+$canAccessProofEvaluation = static function(PDO $db, int $evaluationId) use ($currentRole): bool {
+    if ($evaluationId <= 0) return false;
+    if ($currentRole !== 'teacher') return true;
+
+    $stmt = $db->prepare("
+        SELECT 1
+        FROM evaluations
+        WHERE id = :eid
+          AND evaluator_id = :uid
+          AND status = 'completed'
+          AND overall_avg IS NOT NULL
+          AND overall_avg > 0
+        LIMIT 1
+    ");
+    $stmt->execute([
+        ':eid' => $evaluationId,
+        ':uid' => (int)($_SESSION['user_id'] ?? 0)
+    ]);
+    return (bool)$stmt->fetchColumn();
+};
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $evaluationId = (int)($_GET['evaluation_id'] ?? 0);
     if ($evaluationId <= 0) {
         http_response_code(422);
         echo json_encode(['ok' => false, 'message' => 'Missing evaluation_id']);
+        exit();
+    }
+    if (!$canAccessProofEvaluation($db, $evaluationId)) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'message' => 'Unauthorized']);
         exit();
     }
 
@@ -114,6 +145,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($evaluationId <= 0) {
         http_response_code(422);
         echo json_encode(['ok' => false, 'message' => 'Missing evaluation_id']);
+        exit();
+    }
+    if (!$canAccessProofEvaluation($db, $evaluationId)) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'message' => 'Unauthorized']);
         exit();
     }
 

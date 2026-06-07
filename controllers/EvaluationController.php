@@ -89,6 +89,40 @@ class EvaluationController {
         $this->aiController = new AIController($database);
     }
 
+    private function hasAcceptedObserverAssignment(int $teacherId, int $evaluatorId): bool {
+        if ($teacherId <= 0 || $evaluatorId <= 0) {
+            return false;
+        }
+
+        $stmt = $this->db->prepare(
+            "SELECT 1
+             FROM teacher_assignments
+             WHERE teacher_id = :teacher_id
+               AND evaluator_id = :evaluator_id
+               AND eval_id IS NOT NULL
+             LIMIT 1"
+        );
+        $stmt->execute([
+            ':teacher_id' => $teacherId,
+            ':evaluator_id' => $evaluatorId
+        ]);
+
+        return (bool)$stmt->fetchColumn();
+    }
+
+    private function canUseScheduleDepartment(int $teacherId, int $evaluatorId, string $evaluatorRole, string $evaluatorDept, string $scheduleDept): bool {
+        $scheduleDept = trim($scheduleDept);
+        if ($scheduleDept === '' || in_array($evaluatorRole, ['president', 'vice_president'], true)) {
+            return true;
+        }
+
+        if (strcasecmp(trim($evaluatorDept), $scheduleDept) === 0) {
+            return true;
+        }
+
+        return $this->hasAcceptedObserverAssignment($teacherId, $evaluatorId);
+    }
+
     private function buildScheduleGate(?string $scheduleVal, ?string $roomVal): array {
         $scheduleVal = is_string($scheduleVal) ? trim($scheduleVal) : '';
         $roomVal = is_string($roomVal) ? trim($roomVal) : '';
@@ -187,8 +221,9 @@ class EvaluationController {
             }
 
             // Dean/Principal/Coordinator fallback:
-            // if no evaluator-specific pending slot, use closest pending slot in their
-            // department, or an active slot for a teacher explicitly assigned to them.
+            // if no evaluator-specific pending slot exists, use the closest
+            // pending slot owned by their department, or a slot they explicitly
+            // accepted as observer.
             if ($row === null && in_array($evaluatorRole, ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'], true) && trim($evaluatorDept) !== '') {
                 $stmtAny = $this->db->prepare(
                     "SELECT e.observation_date, e.observation_time, e.observation_room, e.semester, e.academic_year, e.subject_observed, e.subject_area, e.evaluation_focus, e.department
@@ -197,28 +232,35 @@ class EvaluationController {
                      WHERE e.teacher_id = :tid
                        AND e.observation_date IS NOT NULL
                        AND (
-                            e.status IN ('draft','pending','observer_unbalanced','completed')
+                            e.status IN ('draft','pending','observer_unbalanced')
                             OR e.status IS NULL
                             OR e.status = ''
                        )
                         AND (
-                             t.department = :dept
-                             OR t.scheduled_department = :dept2
-                             OR e.department = :dept3
+                             e.department = :dept_eval
+                             OR (
+                                 COALESCE(NULLIF(e.department, ''), '') = ''
+                                 AND t.scheduled_department = :dept_sched
+                             )
+                             OR (
+                                 COALESCE(NULLIF(e.department, ''), NULLIF(t.scheduled_department, '')) IS NULL
+                                 AND t.department = :dept_legacy
+                             )
                              OR EXISTS (
                                  SELECT 1
                                  FROM teacher_assignments ta
                                  WHERE ta.teacher_id = e.teacher_id
                                    AND ta.evaluator_id = :assigned_evaluator_id
+                                   AND ta.eval_id IS NOT NULL
                              )
                         )
                       ORDER BY e.observation_date ASC, COALESCE(e.observation_time, '00:00:00') ASC, e.id ASC"
                 );
                 $stmtAny->execute([
                     ':tid' => $teacherId,
-                    ':dept' => $evaluatorDept,
-                    ':dept2' => $evaluatorDept,
-                    ':dept3' => $evaluatorDept,
+                    ':dept_eval' => $evaluatorDept,
+                    ':dept_sched' => $evaluatorDept,
+                    ':dept_legacy' => $evaluatorDept,
                     ':assigned_evaluator_id' => $evaluatorId
                 ]);
                 $rowsAny = $stmtAny->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -417,16 +459,37 @@ class EvaluationController {
             );
             $scheduleVal = $effectiveSchedule['schedule'] ?? null;
             $roomVal = $effectiveSchedule['room'] ?? null;
+            $effectiveDept = trim((string)($effectiveSchedule['department'] ?? ''));
+            if (($scheduleVal || $roomVal) && $effectiveDept === '') {
+                try {
+                    $deptOwnerStmt = $this->db->prepare("SELECT COALESCE(NULLIF(scheduled_department, ''), department) FROM teachers WHERE id = :id LIMIT 1");
+                    $deptOwnerStmt->execute([':id' => (int)$teacherId]);
+                    $effectiveDept = trim((string)$deptOwnerStmt->fetchColumn());
+                } catch (Exception $e) {}
+            }
+            if (
+                ($scheduleVal || $roomVal)
+                && !$this->canUseScheduleDepartment((int)$teacherId, (int)$evaluatorId, (string)$evaluatorRole, (string)($evaluatorDept ?? ''), $effectiveDept)
+            ) {
+                throw new Exception('This schedule belongs to another department. Only that department or accepted observers can evaluate it.');
+            }
+
             if (empty($scheduleVal) && empty($roomVal)) {
                 // Fallback to legacy teacher snapshot when no pending evaluator slot exists.
                 $scheduleStmt = $this->db->prepare(
-                    "SELECT evaluation_schedule, evaluation_room FROM teachers WHERE id = :id LIMIT 1"
+                    "SELECT evaluation_schedule, evaluation_room, scheduled_department, department FROM teachers WHERE id = :id LIMIT 1"
                 );
                 $scheduleStmt->bindValue(':id', $teacherId);
                 $scheduleStmt->execute();
                 $t = $scheduleStmt->fetch(PDO::FETCH_ASSOC);
-                $scheduleVal = $t['evaluation_schedule'] ?? null;
-                $roomVal = $t['evaluation_room'] ?? null;
+                $fallbackDept = trim((string)($t['scheduled_department'] ?? ''));
+                if ($fallbackDept === '') {
+                    $fallbackDept = trim((string)($t['department'] ?? ''));
+                }
+                if ($this->canUseScheduleDepartment((int)$teacherId, (int)$evaluatorId, (string)$evaluatorRole, (string)($evaluatorDept ?? ''), $fallbackDept)) {
+                    $scheduleVal = $t['evaluation_schedule'] ?? null;
+                    $roomVal = $t['evaluation_room'] ?? null;
+                }
             }
 
             $scheduleGate = $this->buildScheduleGate(
@@ -534,17 +597,26 @@ class EvaluationController {
             // 5. Update evaluation with qualitative data
             $this->updateQualitativeData($evaluationId, $postData);
 
+            // 6. Once a slot is fully completed, return the teacher list to
+            // "Schedule required". Observer-imbalanced slots are intentionally
+            // left visible until they are resolved.
+            try {
+                $this->cleanupCompletedScheduleSlot((int)$evaluationId);
+            } catch (Throwable $cleanupErr) {
+                error_log("Schedule cleanup failed for evaluation {$evaluationId}: " . $cleanupErr->getMessage());
+            }
+
             // Commit transaction
             $this->db->commit();
 
-            // 6. Export completed evaluation to the AI reference corpus (best effort only)
+            // 7. Export completed evaluation to the AI reference corpus (best effort only)
             try {
                 $this->syncEvaluationToAIReferences((int)$evaluationId);
             } catch (Throwable $syncErr) {
                 error_log("AI reference sync failed for evaluation {$evaluationId}: " . $syncErr->getMessage());
             }
 
-            // 7. Notify teacher via email (best effort)
+            // 8. Notify teacher via email (best effort)
             try {
                 $teacherEmailStmt = $this->db->prepare(
                     "SELECT t.name AS teacher_name, COALESCE(t.email, u.email) AS email, COALESCE(t.email_verified, u.is_email_verified) AS verified
@@ -841,6 +913,151 @@ class EvaluationController {
         $fallbackStmt->execute();
 
         return (int)($fallbackStmt->fetchColumn() ?: 0);
+    }
+
+    private function cleanupCompletedScheduleSlot(int $evaluationId): void {
+        if ($evaluationId <= 0) {
+            return;
+        }
+
+        $slotStmt = $this->db->prepare(
+            "SELECT teacher_id, academic_year, semester, observation_date, observation_time, department
+             FROM evaluations
+             WHERE id = :id
+               AND status = 'completed'
+             LIMIT 1"
+        );
+        $slotStmt->execute([':id' => $evaluationId]);
+        $slot = $slotStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        if (!$slot) {
+            return;
+        }
+
+        $teacherId = (int)($slot['teacher_id'] ?? 0);
+        $academicYear = trim((string)($slot['academic_year'] ?? ''));
+        $semester = trim((string)($slot['semester'] ?? ''));
+        $observationDate = trim((string)($slot['observation_date'] ?? ''));
+        $observationTime = trim((string)($slot['observation_time'] ?? ''));
+        $department = trim((string)($slot['department'] ?? ''));
+        if ($teacherId <= 0 || $observationDate === '') {
+            return;
+        }
+        $observationTimeMin = $observationTime !== '' ? substr($observationTime, 0, 5) : '00:00';
+        if ($observationTimeMin === '') {
+            $observationTimeMin = '00:00';
+        }
+
+        $common = [
+            ':teacher_id' => $teacherId,
+            ':academic_year' => $academicYear,
+            ':semester' => $semester,
+            ':observation_date' => $observationDate,
+            ':observation_time' => $observationTimeMin,
+            ':department' => $department,
+            ':department_match' => $department
+        ];
+
+        $remainingStmt = $this->db->prepare(
+            "SELECT COUNT(*)
+             FROM evaluations
+             WHERE teacher_id = :teacher_id
+               AND COALESCE(academic_year, '') = :academic_year
+               AND COALESCE(semester, '') = :semester
+               AND observation_date = :observation_date
+               AND (
+                    CASE
+                        WHEN observation_time IS NULL OR TRIM(observation_time) = '' THEN '00:00'
+                        ELSE LEFT(TRIM(observation_time), 5)
+                    END
+               ) = :observation_time
+               AND (:department = '' OR department = :department_match)
+               AND (
+                    status IN ('draft','pending')
+                    OR status IS NULL
+                    OR status = ''
+               )"
+        );
+        $remainingStmt->execute($common);
+        if ((int)$remainingStmt->fetchColumn() > 0) {
+            return;
+        }
+
+        $imbalanceStmt = $this->db->prepare(
+            "SELECT COUNT(*)
+             FROM evaluations
+             WHERE teacher_id = :teacher_id
+               AND COALESCE(academic_year, '') = :academic_year
+               AND COALESCE(semester, '') = :semester
+               AND observation_date = :observation_date
+               AND (
+                    CASE
+                        WHEN observation_time IS NULL OR TRIM(observation_time) = '' THEN '00:00'
+                        ELSE LEFT(TRIM(observation_time), 5)
+                    END
+               ) = :observation_time
+               AND (:department = '' OR department = :department_match)
+               AND status = 'observer_unbalanced'"
+        );
+        $imbalanceStmt->execute($common);
+        if ((int)$imbalanceStmt->fetchColumn() > 0) {
+            return;
+        }
+
+        $scheduleImbalanceStmt = $this->db->prepare(
+            "SELECT COUNT(*)
+             FROM teacher_schedules
+             WHERE teacher_id = :teacher_id
+               AND COALESCE(academic_year, '') = :academic_year
+               AND COALESCE(semester, '') = :semester
+               AND DATE(schedule_start) = :observation_date
+               AND COALESCE(DATE_FORMAT(schedule_start, '%H:%i'), '00:00') = :observation_time
+               AND (:department = '' OR scheduled_department = :department_match)
+               AND status = 'observer_unbalanced'"
+        );
+        $scheduleImbalanceStmt->execute($common);
+        if ((int)$scheduleImbalanceStmt->fetchColumn() > 0) {
+            return;
+        }
+
+        $scheduleStmt = $this->db->prepare(
+            "UPDATE teacher_schedules
+             SET status = 'completed', updated_at = NOW()
+             WHERE teacher_id = :teacher_id
+               AND COALESCE(academic_year, '') = :academic_year
+               AND COALESCE(semester, '') = :semester
+               AND DATE(schedule_start) = :observation_date
+               AND COALESCE(DATE_FORMAT(schedule_start, '%H:%i'), '00:00') = :observation_time
+               AND (:department = '' OR scheduled_department = :department_match)
+               AND status = 'scheduled'"
+        );
+        $scheduleStmt->execute($common);
+
+        $teacherStmt = $this->db->prepare(
+            "UPDATE teachers
+             SET evaluation_schedule = NULL,
+                 evaluation_schedule_end = NULL,
+                 evaluation_room = NULL,
+                 evaluation_focus = NULL,
+                 evaluation_subject_area = NULL,
+                 evaluation_subject = NULL,
+                 evaluation_semester = NULL,
+                 evaluation_form_type = 'iso',
+                 scheduled_by = NULL,
+                 scheduled_department = NULL,
+                 updated_at = NOW()
+             WHERE id = :teacher_id
+               AND evaluation_schedule IS NOT NULL
+               AND DATE(evaluation_schedule) = :observation_date
+               AND COALESCE(DATE_FORMAT(evaluation_schedule, '%H:%i'), '00:00') = :observation_time
+               AND (:department = '' OR scheduled_department = :department_match)"
+        );
+        $teacherStmt->execute([
+            ':teacher_id' => $teacherId,
+            ':observation_date' => $observationDate,
+            ':observation_time' => $observationTimeMin,
+            ':department' => $department,
+            ':department_match' => $department
+        ]);
     }
 
     private function saveEvaluationDetails($evaluationId, $data) {

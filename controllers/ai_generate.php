@@ -4,11 +4,58 @@
 
 require_once __DIR__ . '/../auth/session-check.php';
 require_once __DIR__ . '/../config/constants.php';
+require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/ai_autostart.php';
 
-// allow evaluators + leaders
-// Keep this in sync with roles that can view evaluations.
-if (!in_array($_SESSION['role'] ?? '', [
+function ai_json_error(int $status, string $message): void {
+    http_response_code($status);
+    header('Content-Type: application/json');
+    echo json_encode(['success' => false, 'message' => $message]);
+    exit();
+}
+
+function teacher_has_ai_access(PDO $db, int $userId, int $teacherId): bool {
+    if ($userId <= 0 || $teacherId <= 0) {
+        return false;
+    }
+
+    $stmt = $db->prepare("
+        SELECT 1
+        FROM teacher_assignments
+        WHERE evaluator_id = :user_id
+          AND teacher_id = :teacher_id
+        LIMIT 1
+    ");
+    $stmt->execute([
+        ':user_id' => $userId,
+        ':teacher_id' => $teacherId
+    ]);
+
+    return (bool)$stmt->fetchColumn();
+}
+
+function teacher_has_any_assignment(PDO $db, int $userId): bool {
+    if ($userId <= 0) {
+        return false;
+    }
+
+    $stmt = $db->prepare("
+        SELECT 1
+        FROM teacher_assignments
+        WHERE evaluator_id = :user_id
+        LIMIT 1
+    ");
+    $stmt->execute([':user_id' => $userId]);
+
+    return (bool)$stmt->fetchColumn();
+}
+
+$currentRole = strtolower(str_replace(' ', '_', trim((string)($_SESSION['role'] ?? ''))));
+if ($currentRole !== '') {
+    $_SESSION['role'] = $currentRole;
+}
+
+$allowedEvaluatorRoles = [
     'dean',
     'principal',
     'chairperson',
@@ -16,12 +63,7 @@ if (!in_array($_SESSION['role'] ?? '', [
     'grade_level_coordinator',
     'president',
     'vice_president',
-], true)) {
-    http_response_code(403);
-    header('Content-Type: application/json');
-    echo json_encode(['success' => false, 'message' => 'Forbidden']);
-    exit();
-}
+];
 
 $aiBase = getenv('AI_SERVICE_URL');
 if (!$aiBase) {
@@ -37,34 +79,48 @@ $mode = $_GET['mode'] ?? '';
 $isDebugGet = ($_SERVER['REQUEST_METHOD'] === 'GET') && in_array($mode, ['health', 'echo'], true);
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && !$isDebugGet) {
-    http_response_code(405);
-    header('Content-Type: application/json');
-    echo json_encode([
-        'success' => false,
-        'message' => 'Method not allowed (use POST). For debugging, use ?mode=health or ?mode=echo',
-    ]);
-    exit();
+    ai_json_error(405, 'Method not allowed (use POST). For debugging, use ?mode=health or ?mode=echo');
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $raw = file_get_contents('php://input');
     if (!$raw) {
-        http_response_code(400);
-        header('Content-Type: application/json');
-        echo json_encode(['success' => false, 'message' => 'Empty request body']);
-        exit();
+        ai_json_error(400, 'Empty request body');
     }
 
     $payload = json_decode($raw, true);
     if (!is_array($payload)) {
-        http_response_code(400);
-        header('Content-Type: application/json');
-        echo json_encode(['success' => false, 'message' => 'Invalid JSON']);
-        exit();
+        ai_json_error(400, 'Invalid JSON');
     }
 } else {
     // Debug GET modes don't need request body
     $payload = [];
+}
+
+if (!in_array($currentRole, $allowedEvaluatorRoles, true)) {
+    if ($currentRole !== 'teacher') {
+        ai_json_error(403, 'Forbidden');
+    }
+
+    try {
+        $database = new Database();
+        $db = $database->getConnection();
+        if (!$db instanceof PDO) {
+            ai_json_error(403, 'Forbidden');
+        }
+        $userId = (int)($_SESSION['user_id'] ?? 0);
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $teacherId = (int)($payload['teacher_id'] ?? 0);
+            if (!teacher_has_ai_access($db, $userId, $teacherId)) {
+                ai_json_error(403, 'Forbidden');
+            }
+        } elseif (!teacher_has_any_assignment($db, $userId)) {
+            ai_json_error(403, 'Forbidden');
+        }
+    } catch (Throwable $e) {
+        ai_json_error(403, 'Forbidden');
+    }
 }
 
 $path = '/generate';

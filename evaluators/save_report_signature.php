@@ -2,7 +2,7 @@
 require_once '../auth/session-check.php';
 header('Content-Type: application/json');
 
-if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true)) {
+if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president', 'teacher'], true)) {
     http_response_code(403);
     echo json_encode(['ok' => false, 'message' => 'Unauthorized']);
     exit();

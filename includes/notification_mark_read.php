@@ -13,12 +13,11 @@ $db = (new Database())->getConnection();
 $notif_id = (int)($_POST['id'] ?? 0);
 
 if ($notif_id > 0) {
-    // Mark single notification as read (only if it belongs to current user)
-    $stmt = $db->prepare("UPDATE notifications SET is_read = 1 WHERE id = :id AND user_id = :uid");
+    // Observer requests stay unread until the recipient accepts or marks unable.
+    $stmt = $db->prepare("UPDATE notifications SET is_read = 1 WHERE id = :id AND user_id = :uid AND type <> 'observer_request'");
     $stmt->execute([':id' => $notif_id, ':uid' => $_SESSION['user_id']]);
 } elseif (isset($_POST['mark_all'])) {
-    // Mark all as read
-    $stmt = $db->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = :uid AND is_read = 0");
+    $stmt = $db->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = :uid AND is_read = 0 AND type <> 'observer_request'");
     $stmt->execute([':uid' => $_SESSION['user_id']]);
 }
 

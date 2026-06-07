@@ -109,7 +109,7 @@ foreach($eval_details as $detail) {
 
             <div class="eval-header">
                 <h3><?php echo htmlspecialchars($evaluation['teacher_name']); ?> - Classroom Evaluation</h3>
-                <p><i class="fas fa-user-tie me-2"></i>Evaluator: <?php echo htmlspecialchars($evaluation['evaluator_name']); ?> (<?php echo ucfirst(str_replace('_', ' ', $evaluation['evaluator_role'])); ?>)</p>
+                <p><i class="fas fa-user-tie me-2"></i>Observer Evaluation</p>
                 <p><i class="fas fa-calendar me-2"></i>Evaluation Date: <?php echo date('F d, Y', strtotime($evaluation['observation_date'])); ?> | <?php 
                     $time_display = $evaluation['observation_time'] ?? null;
                     if (empty($time_display) && !empty($evaluation['created_at'])) {

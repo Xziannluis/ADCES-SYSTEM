@@ -95,6 +95,20 @@ try {
             $db->exec("ALTER TABLE teacher_assignments ADD COLUMN eval_id INT NULL AFTER teacher_id");
             $db->exec("CREATE INDEX idx_teacher_assignments_eval_id ON teacher_assignments (eval_id)");
         }
+        $notifEvalCol = $db->query("SHOW COLUMNS FROM notifications LIKE 'request_eval_id'")->fetch(PDO::FETCH_ASSOC);
+        if (!$notifEvalCol) {
+            $db->exec("ALTER TABLE notifications ADD COLUMN request_eval_id INT NULL AFTER link");
+        }
+        $notifSlotCol = $db->query("SHOW COLUMNS FROM notifications LIKE 'request_schedule_key'")->fetch(PDO::FETCH_ASSOC);
+        if (!$notifSlotCol) {
+            $db->exec("ALTER TABLE notifications ADD COLUMN request_schedule_key VARCHAR(255) NULL AFTER request_eval_id");
+        }
+        try {
+            $notifReqIdx = $db->query("SHOW INDEX FROM notifications WHERE Key_name = 'idx_notifications_resched_match'");
+            if (!$notifReqIdx || $notifReqIdx->rowCount() === 0) {
+                $db->exec("CREATE INDEX idx_notifications_resched_match ON notifications (type, user_id, teacher_id, request_eval_id, is_read)");
+            }
+        } catch (Exception $e) {}
         $db->exec("
             CREATE TABLE IF NOT EXISTS observer_unavailable_slots (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -787,146 +801,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 throw new Exception('The teacher being observed cannot be assigned as their own observer/evaluator.');
             }
 
-            $existing_stmt = $db->prepare("
+            $existing_assign = $db->prepare("
                 SELECT id
                 FROM teacher_assignments
                 WHERE evaluator_id = :evaluator_id
                   AND teacher_id = :teacher_id
                   AND (eval_id = :eval_id OR eval_id IS NULL)
-                ORDER BY CASE WHEN eval_id = :eval_id2 THEN 0 ELSE 1 END, id DESC
                 LIMIT 1
             ");
-            $existing_stmt->execute([
+            $existing_assign->execute([
                 ':evaluator_id' => $requested_observer_id,
                 ':teacher_id' => (int)$src['teacher_id'],
-                ':eval_id' => $eval_id_request,
-                ':eval_id2' => $eval_id_request
+                ':eval_id' => $eval_id_request
             ]);
-            $existing_assignment_id = (int)$existing_stmt->fetchColumn();
-            if ($existing_assignment_id > 0) {
-                $upd_assign = $db->prepare("UPDATE teacher_assignments SET eval_id = :eval_id, assigned_at = NOW() WHERE id = :id");
-                $upd_assign->execute([':eval_id' => $eval_id_request, ':id' => $existing_assignment_id]);
-            } else {
-                $ins_assign = $db->prepare("INSERT INTO teacher_assignments (evaluator_id, teacher_id, eval_id, assigned_at) VALUES (:evaluator_id, :teacher_id, :eval_id, NOW())");
-                $ins_assign->execute([
-                    ':evaluator_id' => $requested_observer_id,
-                    ':teacher_id' => (int)$src['teacher_id'],
-                    ':eval_id' => $eval_id_request
-                ]);
-            }
-
-            $clear_unavailable = $db->prepare("DELETE FROM observer_unavailable_slots WHERE evaluator_id = :uid AND eval_id = :eid");
-            $clear_unavailable->execute([':uid' => $requested_observer_id, ':eid' => $eval_id_request]);
-
-            $pending_exists = $db->prepare("
-                SELECT id
-                FROM evaluations
-                WHERE evaluator_id = :evaluator_id
-                  AND teacher_id = :teacher_id
-                  AND academic_year = :academic_year
-                  AND semester = :semester
-                  AND observation_date = :observation_date
-                  AND COALESCE(observation_time, '') = COALESCE(:observation_time, '')
-                  AND evaluation_form_type = :form_type
-                  AND status <> 'completed'
-                LIMIT 1
-            ");
-            $pending_insert = $db->prepare("
-                INSERT INTO evaluations
-                    (teacher_id, faculty_name, department, evaluator_id, academic_year, semester,
-                     subject_observed, observation_date, observation_time, observation_type,
-                     observation_room, subject_area, evaluation_focus, evaluation_form_type,
-                     seat_plan, course_syllabi, others_requirements, others_specify, status, created_at, updated_at)
-                VALUES
-                    (:teacher_id, :faculty_name, :department, :evaluator_id, :academic_year, :semester,
-                     :subject_observed, :observation_date, :observation_time, :observation_type,
-                     :observation_room, :subject_area, :evaluation_focus, :form_type,
-                     :seat_plan, :course_syllabi, :others_requirements, :others_specify, 'draft', NOW(), NOW())
-            ");
-            $raw_form_type = strtolower(trim((string)($src['evaluation_form_type'] ?? 'iso')));
-            $forms_to_create = ($raw_form_type === 'both') ? ['iso', 'peac'] : [$raw_form_type ?: 'iso'];
-            foreach ($forms_to_create as $form_type) {
-                if (!in_array($form_type, ['iso', 'peac'], true)) $form_type = 'iso';
-                $pending_exists->execute([
-                    ':evaluator_id' => $requested_observer_id,
-                    ':teacher_id' => (int)$src['teacher_id'],
-                    ':academic_year' => (string)($src['academic_year'] ?? ''),
-                    ':semester' => (string)($src['semester'] ?? ''),
-                    ':observation_date' => (string)($src['observation_date'] ?? ''),
-                    ':observation_time' => (string)($src['observation_time'] ?? ''),
-                    ':form_type' => $form_type
-                ]);
-                if ($pending_exists->fetchColumn()) continue;
-                $pending_insert->execute([
-                    ':teacher_id' => (int)$src['teacher_id'],
-                    ':faculty_name' => (string)($src['faculty_name'] ?? ''),
-                    ':department' => (string)($src['department'] ?? ''),
-                    ':evaluator_id' => $requested_observer_id,
-                    ':academic_year' => (string)($src['academic_year'] ?? ''),
-                    ':semester' => (string)($src['semester'] ?? ''),
-                    ':subject_observed' => (string)($src['subject_observed'] ?? ''),
-                    ':observation_date' => (string)($src['observation_date'] ?? ''),
-                    ':observation_time' => (string)($src['observation_time'] ?? ''),
-                    ':observation_type' => (string)($src['observation_type'] ?? ''),
-                    ':observation_room' => (string)($src['observation_room'] ?? ''),
-                    ':subject_area' => (string)($src['subject_area'] ?? ''),
-                    ':evaluation_focus' => (string)($src['evaluation_focus'] ?? ''),
-                    ':form_type' => $form_type,
-                    ':seat_plan' => (int)($src['seat_plan'] ?? 0),
-                    ':course_syllabi' => (int)($src['course_syllabi'] ?? 0),
-                    ':others_requirements' => (int)($src['others_requirements'] ?? 0),
-                    ':others_specify' => (string)($src['others_specify'] ?? '')
-                ]);
-            }
-
-            $count_observers = $db->prepare("
-                SELECT COUNT(DISTINCT evaluator_id)
-                FROM teacher_assignments
-                WHERE teacher_id = :teacher_id
-                  AND (eval_id = :eval_id OR eval_id IS NULL)
-            ");
-            $count_observers->execute([':teacher_id' => (int)$src['teacher_id'], ':eval_id' => $eval_id_request]);
-            if ((int)$count_observers->fetchColumn() >= 2) {
-                $restore_eval = $db->prepare("
-                    UPDATE evaluations
-                    SET status = 'draft', updated_at = NOW()
-                    WHERE teacher_id = :teacher_id
-                      AND academic_year = :academic_year
-                      AND semester = :semester
-                      AND observation_date = :observation_date
-                      AND COALESCE(observation_time, '') = COALESCE(:observation_time, '')
-                      AND status = 'observer_unbalanced'
-                ");
-                $restore_eval->execute([
-                    ':teacher_id' => (int)$src['teacher_id'],
-                    ':academic_year' => (string)($src['academic_year'] ?? ''),
-                    ':semester' => (string)($src['semester'] ?? ''),
-                    ':observation_date' => (string)($src['observation_date'] ?? ''),
-                    ':observation_time' => (string)($src['observation_time'] ?? '')
-                ]);
-                $restore_schedule = $db->prepare("
-                    UPDATE teacher_schedules
-                    SET status = 'scheduled', updated_at = NOW()
-                    WHERE status = 'observer_unbalanced'
-                      AND (
-                         evaluation_id = :eval_id
-                         OR (
-                            teacher_id = :teacher_id
-                            AND academic_year = :academic_year
-                            AND semester = :semester
-                            AND DATE(schedule_start) = :observation_date
-                            AND DATE_FORMAT(schedule_start, '%H:%i') = :observation_time_min
-                         )
-                      )
-                ");
-                $restore_schedule->execute([
-                    ':eval_id' => $eval_id_request,
-                    ':teacher_id' => (int)$src['teacher_id'],
-                    ':academic_year' => (string)($src['academic_year'] ?? ''),
-                    ':semester' => (string)($src['semester'] ?? ''),
-                    ':observation_date' => (string)($src['observation_date'] ?? ''),
-                    ':observation_time_min' => substr((string)($src['observation_time'] ?? '00:00'), 0, 5) ?: '00:00'
-                ]);
+            if ($existing_assign->fetchColumn()) {
+                throw new Exception('Selected user is already an observer/evaluator for this schedule.');
             }
 
             $requester_name = trim((string)($_SESSION['name'] ?? 'Evaluator'));
@@ -937,21 +826,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
             $title = 'Observer Request';
             $message = $requester_name . ' requested you to observe/evaluate ' . $teacher_name . ($schedule_text !== '' ? ' on ' . $schedule_text : '') . '.';
-            $link = '../evaluators/evaluation.php?teacher_id=' . urlencode((string)$src['teacher_id']) . '&allow_observer_imbalance=1';
-            $ins_notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, is_read) VALUES (:uid, :tid, 'observer_request', :title, :msg, :link, 0)");
+            $request_slot_key = implode('|', [
+                (int)$src['teacher_id'],
+                (string)($src['academic_year'] ?? ''),
+                (string)($src['semester'] ?? ''),
+                (string)($src['observation_date'] ?? ''),
+                substr((string)($src['observation_time'] ?? ''), 0, 5)
+            ]);
+            $pending_request = $db->prepare("
+                SELECT id
+                FROM notifications
+                WHERE user_id = :uid
+                  AND teacher_id = :tid
+                  AND type = 'observer_request'
+                  AND is_read = 0
+                  AND (request_eval_id = :eid OR link LIKE :legacy_link)
+                LIMIT 1
+            ");
+            $pending_request->execute([
+                ':uid' => $requested_observer_id,
+                ':tid' => (int)$src['teacher_id'],
+                ':eid' => $eval_id_request,
+                ':legacy_link' => '%request_eval_id=' . $eval_id_request . '%'
+            ]);
+            if ($pending_request->fetchColumn()) {
+                throw new Exception('There is already a pending observer request for this user and schedule.');
+            }
+
+            $link = '../evaluators/evaluation.php?observer_request=1&request_eval_id=' . urlencode((string)$eval_id_request);
+            $ins_notif = $db->prepare("INSERT INTO notifications (user_id, teacher_id, type, title, message, link, request_eval_id, request_schedule_key, is_read) VALUES (:uid, :tid, 'observer_request', :title, :msg, :link, :request_eval_id, :request_schedule_key, 0)");
             $ins_notif->execute([
                 ':uid' => $requested_observer_id,
                 ':tid' => (int)$src['teacher_id'],
                 ':title' => $title,
                 ':msg' => $message,
-                ':link' => $link
+                ':link' => $link,
+                ':request_eval_id' => $eval_id_request,
+                ':request_schedule_key' => $request_slot_key
             ]);
             $observer_email = trim((string)($requested_observer['email'] ?? ''));
             if ($observer_email !== '') {
                 sendGenericNotificationEmail($observer_email, trim((string)$requested_observer['name']), $title, $message);
             }
 
-            $_SESSION['success'] = trim((string)$requested_observer['name']) . ' has been requested and added as observer/evaluator.';
+            $_SESSION['success'] = trim((string)$requested_observer['name']) . ' has been requested as observer/evaluator. They must accept before they can evaluate.';
         } catch (Exception $e) {
             $_SESSION['error'] = $e->getMessage();
         }

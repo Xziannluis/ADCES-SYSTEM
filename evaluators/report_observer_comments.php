@@ -4,7 +4,12 @@ require_once '../config/database.php';
 
 header('Content-Type: application/json');
 
-if (!in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true)) {
+$currentRole = strtolower(str_replace(' ', '_', trim((string)($_SESSION['role'] ?? ''))));
+if ($currentRole !== '') {
+    $_SESSION['role'] = $currentRole;
+}
+
+if (!in_array($currentRole, ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president', 'teacher'], true)) {
     http_response_code(403);
     echo json_encode(['ok' => false, 'message' => 'Unauthorized']);
     exit();
@@ -41,6 +46,28 @@ if ($teacherId <= 0 || $obsDateRaw === '') {
     http_response_code(422);
     echo json_encode(['ok' => false, 'message' => 'Missing parameters']);
     exit();
+}
+
+if ($currentRole === 'teacher') {
+    $teacherAccessStmt = $db->prepare("
+        SELECT 1
+        FROM evaluations
+        WHERE id = :eval_id
+          AND evaluator_id = :uid
+          AND status = 'completed'
+          AND overall_avg IS NOT NULL
+          AND overall_avg > 0
+        LIMIT 1
+    ");
+    $teacherAccessStmt->execute([
+        ':eval_id' => $evalId,
+        ':uid' => (int)($_SESSION['user_id'] ?? 0)
+    ]);
+    if (!$teacherAccessStmt->fetchColumn()) {
+        http_response_code(403);
+        echo json_encode(['ok' => false, 'message' => 'Unauthorized']);
+        exit();
+    }
 }
 
 $dateYmd = date('Y-m-d', strtotime($obsDateRaw));
@@ -95,6 +122,7 @@ $commentsSql = "SELECT e.id, e.strengths, e.improvement_areas, e.recommendations
                   AND (:sem_filter = '' OR e.semester = :sem_match)
                   AND (:dept_filter = '' OR e.department = :dept_match)
                   AND e.status = 'completed'
+                  AND (:teacher_report_uid = 0 OR e.evaluator_id = :teacher_report_uid_match)
                 ORDER BY e.created_at ASC, e.id ASC";
 $stmt = $db->prepare($commentsSql);
 $stmt->execute([
@@ -108,6 +136,8 @@ $stmt->execute([
     ':sem_match' => $slotSemester,
     ':dept_filter' => $slotDepartment,
     ':dept_match' => $slotDepartment,
+    ':teacher_report_uid' => $currentRole === 'teacher' ? (int)($_SESSION['user_id'] ?? 0) : 0,
+    ':teacher_report_uid_match' => $currentRole === 'teacher' ? (int)($_SESSION['user_id'] ?? 0) : 0,
 ]);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 

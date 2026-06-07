@@ -432,7 +432,8 @@ if (empty($display_evaluations)) {
                         <?php if (!empty($notifications)): ?>
                             <div id="notificationList">
                             <?php foreach ($notifications as $notif): ?>
-                            <div class="notif-item <?php echo !$notif['is_read'] ? 'unread' : ''; ?>" id="notif-<?php echo (int)$notif['id']; ?>" <?php if (!empty($notif['link'])): ?>onclick="window.location.href='<?php echo htmlspecialchars($notif['link'], ENT_QUOTES); ?>'" style="cursor:pointer;"<?php endif; ?>>
+                            <?php $isObserverRequest = (($notif['type'] ?? '') === 'observer_request'); ?>
+                            <div class="notif-item <?php echo !$notif['is_read'] ? 'unread' : ''; ?>" id="notif-<?php echo (int)$notif['id']; ?>" data-notif-type="<?php echo htmlspecialchars((string)($notif['type'] ?? ''), ENT_QUOTES); ?>" <?php if (!empty($notif['link'])): ?>onclick="window.location.href='<?php echo htmlspecialchars($notif['link'], ENT_QUOTES); ?>'" style="cursor:pointer;"<?php endif; ?>>
                                 <div class="notif-avatar">
                                     <?php if (!empty($notif['avatar'])): ?>
                                         <img src="<?php echo htmlspecialchars($notif['avatar']); ?>" alt="avatar">
@@ -454,7 +455,7 @@ if (empty($display_evaluations)) {
                                         <small class="text-muted"><i class="far fa-clock me-1"></i><?php echo date('M j, Y g:i A', strtotime($notif['created_at'])); ?></small>
                                         <div class="text-end">
                                             <span class="badge bg-light text-dark me-2"><?php echo htmlspecialchars(ucwords(str_replace('_', ' ', (string)$notif['type']))); ?></span>
-                                            <?php if (!$notif['is_read']): ?>
+                                            <?php if (!$notif['is_read'] && !$isObserverRequest): ?>
                                                 <button class="btn btn-sm btn-outline-primary notif-read-btn" onclick="event.stopPropagation();markRead(<?php echo (int)$notif['id']; ?>)" title="Mark as read">
                                                     <i class="fas fa-check me-1"></i>Read
                                                 </button>
@@ -704,6 +705,7 @@ if (empty($display_evaluations)) {
         }).then(r => r.json()).then(d => {
             if (d.success) {
                 document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
+                    if (el.dataset.notifType === 'observer_request') return;
                     el.style.opacity = '0';
                     el.style.maxHeight = '0';
                     el.style.padding = '0';

@@ -435,7 +435,11 @@ if ($teacher_data) {
                         <div class="row align-items-center">
                             <div class="col-md-8">
                                 <h6 class="card-title">
-                                    Evaluation by <?php echo htmlspecialchars($eval['evaluator_name']); ?>
+                                    <i class="fas fa-calendar me-2"></i>
+                                    Observation Date: <?php
+                                        $obsDate = trim((string)($eval['observation_date'] ?? ''));
+                                        echo $obsDate !== '' ? date('F d, Y', strtotime($obsDate)) : 'Not specified';
+                                    ?>
                                     <span class="ms-2">
                                         <?php if($eval['status'] === 'completed'): ?>
                                             <span class="badge-status badge-completed">
@@ -448,10 +452,6 @@ if ($teacher_data) {
                                         <?php endif; ?>
                                     </span>
                                 </h6>
-                                <p class="text-muted mb-2">
-                                    <i class="fas fa-user-tag me-2"></i>
-                                    Evaluator Role: <strong><?php echo ucfirst(str_replace('_', ' ', $eval['evaluator_role'])); ?></strong>
-                                </p>
                                 <p class="text-muted mb-2">
                                     <i class="fas fa-layer-group me-2"></i>
                                     Form Completion: <strong><?php echo htmlspecialchars($eval['forms_status_text'] ?? ''); ?></strong>
