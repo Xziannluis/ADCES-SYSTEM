@@ -331,6 +331,14 @@ class EvaluationController {
                            AND ta.eval_id IS NOT NULL
                            AND u.status = 'active'
                            AND u.role IN ('president','vice_president')
+                         UNION
+                         SELECT u.id AS observer_id
+                         FROM teacher_assignments ta
+                         JOIN users u ON u.id = ta.evaluator_id
+                         WHERE ta.teacher_id = :teacher_id_requested
+                           AND ta.eval_id IS NOT NULL
+                           AND u.status = 'active'
+                           AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('teacher','dean','principal','chairperson','subject_coordinator','grade_level_coordinator','president','vice_president')
                      ) required_observers"
                 );
                 $requiredObserverStmt->execute([
@@ -339,7 +347,8 @@ class EvaluationController {
                     ':teacher_id_coord' => $teacherId,
                     ':department_coord' => $department,
                     ':department_match_coord' => $department,
-                    ':teacher_id_pvp' => $teacherId
+                    ':teacher_id_pvp' => $teacherId,
+                    ':teacher_id_requested' => $teacherId
                 ]);
                 $observerCount = max($observerCount, (int)$requiredObserverStmt->fetchColumn());
             }

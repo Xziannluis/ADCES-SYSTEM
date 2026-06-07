@@ -1,17 +1,32 @@
 <?php
 require_once '../auth/session-check.php';
-if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'])) {
+require_once '../config/database.php';
+
+$database = new Database();
+$db = $database->getConnection();
+$currentRole = strtolower(str_replace(' ', '_', trim((string)($_SESSION['role'] ?? ''))));
+if ($currentRole !== '') {
+    $_SESSION['role'] = $currentRole;
+}
+$teacherObserverAccess = false;
+if ($currentRole === 'teacher') {
+    try {
+        $accessStmt = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :uid LIMIT 1");
+        $accessStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+        $teacherObserverAccess = (bool)$accessStmt->fetchColumn();
+    } catch (Exception $e) {
+        $teacherObserverAccess = false;
+    }
+}
+
+if(!in_array($currentRole, ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true) && !$teacherObserverAccess) {
     header("Location: ../login.php");
     exit();
 }
 
-require_once '../config/database.php';
 require_once '../models/Teacher.php';
 require_once '../models/Evaluation.php';
 require_once '../controllers/EvaluationController.php';
-
-$database = new Database();
-$db = $database->getConnection();
 
 function defaultPeacIndicators(): array {
     return [
@@ -77,6 +92,18 @@ if (!$teacher_data) {
     $_SESSION['error'] = "Teacher not found.";
     header("Location: evaluation.php");
     exit();
+}
+if ($currentRole === 'teacher') {
+    $teacherAssignedStmt = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :uid AND teacher_id = :tid LIMIT 1");
+    $teacherAssignedStmt->execute([
+        ':uid' => (int)($_SESSION['user_id'] ?? 0),
+        ':tid' => (int)$teacher_id
+    ]);
+    if (!$teacherAssignedStmt->fetchColumn()) {
+        $_SESSION['error'] = "You are not assigned to evaluate this teacher.";
+        header("Location: evaluation.php");
+        exit();
+    }
 }
 
 // Verify the schedule is set and form type is PEAC

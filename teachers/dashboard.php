@@ -90,7 +90,7 @@ $unread_count = 0;
 try {
     $notif_q = "SELECT * FROM notifications
                 WHERE user_id = :user_id
-                  AND type IN ('schedule', 'reschedule_request', 'reschedule_accepted', 'observation_signed')
+                  AND type IN ('schedule', 'reschedule_request', 'reschedule_accepted', 'observation_signed', 'observer_accept', 'observer_request')
                   AND is_read = 0
                 ORDER BY created_at DESC
                 LIMIT 10";

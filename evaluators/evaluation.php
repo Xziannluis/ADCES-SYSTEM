@@ -1,19 +1,33 @@
 <?php
 require_once '../auth/session-check.php';
+require_once '../config/database.php';
+
+$database = new Database();
+$db = $database->getConnection();
+$currentRole = strtolower(str_replace(' ', '_', trim((string)($_SESSION['role'] ?? ''))));
+if ($currentRole !== '') {
+    $_SESSION['role'] = $currentRole;
+}
+$teacherObserverAccess = false;
+if ($currentRole === 'teacher') {
+    try {
+        $accessStmt = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :uid LIMIT 1");
+        $accessStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+        $teacherObserverAccess = (bool)$accessStmt->fetchColumn();
+    } catch (Exception $e) {
+        $teacherObserverAccess = false;
+    }
+}
 // Allow evaluators and leaders (president/vice_president) to access evaluation
-if(!in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'])) {
+if(!in_array($currentRole, ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true) && !$teacherObserverAccess) {
     header("Location: ../login.php");
     exit();
 }
 
-require_once '../config/database.php';
 require_once '../models/Teacher.php';
 require_once '../models/Evaluation.php';
 require_once '../controllers/EvaluationController.php';
 require_once '../includes/program_assignments.php';
-
-$database = new Database();
-$db = $database->getConnection();
 
 // Load form settings from database
 $_formSettings = [];
@@ -100,7 +114,21 @@ $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
 // Evaluators see teachers in their department (+ secondary departments via teacher_departments)
 // plus any teachers assigned to them via teacher_assignments.
 // No role exclusion: deans/principals/coordinators who also teach CAN be evaluated.
-if ($is_leader) {
+if ($teacherObserverAccess && $_SESSION['role'] === 'teacher') {
+    $assigned_query = "SELECT DISTINCT t.*
+                       FROM teachers t
+                       JOIN teacher_assignments ta ON ta.teacher_id = t.id
+                       WHERE ta.evaluator_id = :evaluator_id
+                         AND t.status = 'active'
+                         AND (t.user_id IS NULL OR t.user_id != :current_user_id)
+                       ORDER BY t.name";
+    $stmt = $db->prepare($assigned_query);
+    $stmt->execute([
+        ':evaluator_id' => (int)($_SESSION['user_id'] ?? 0),
+        ':current_user_id' => (int)($_SESSION['user_id'] ?? 0)
+    ]);
+    $teachers = $stmt;
+} elseif ($is_leader) {
     // President/VP see ALL active teachers, but can only evaluate those they've accepted as observer
     $query = "SELECT DISTINCT t.* FROM teachers t WHERE t.status = 'active' AND (t.user_id IS NULL OR t.user_id != :current_user_id) ORDER BY t.department, t.name ASC";
     $stmt = $db->prepare($query);
@@ -483,6 +511,14 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                               AND ta.eval_id IS NOT NULL
                                               AND u.status = 'active'
                                               AND u.role IN ('president','vice_president')
+                                            UNION
+                                            SELECT u.id AS observer_id
+                                            FROM teacher_assignments ta
+                                            JOIN users u ON u.id = ta.evaluator_id
+                                            WHERE ta.teacher_id = :tid_requested
+                                              AND ta.eval_id IS NOT NULL
+                                              AND u.status = 'active'
+                                              AND LOWER(REPLACE(TRIM(u.role), ' ', '_')) IN ('teacher','dean','principal','chairperson','subject_coordinator','grade_level_coordinator','president','vice_president')
                                         ) required_observers
                                     ) ELSE 0 END
                                 )
@@ -806,7 +842,8 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         ':tid_assign' => (int)$teacher_row['id'],
                                         ':balance_dept_coord' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
                                         ':balance_dept_match_coord' => trim((string)($teacher_row['scheduled_department'] ?? $teacher_row['department'] ?? '')),
-                                        ':tid_pvp' => (int)$teacher_row['id']
+                                        ':tid_pvp' => (int)$teacher_row['id'],
+                                        ':tid_requested' => (int)$teacher_row['id']
                                     ]);
                                     $bal = $schedule_balance_stmt->fetch(PDO::FETCH_ASSOC) ?: [];
                                     $observer_count = (int)($bal['observer_count'] ?? 0);

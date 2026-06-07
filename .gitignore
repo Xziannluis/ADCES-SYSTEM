@@ -1,6 +1,9 @@
 # Local editor / OS
 .vscode/
 .idea/
+.history/
+.sixth/
+Microsoft/
 .DS_Store
 Thumbs.db
 

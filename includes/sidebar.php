@@ -11,6 +11,18 @@
         <?php
             // Resolve dashboard link depending on role to avoid duplicate dashboards for coordinators
             $role = $_SESSION['role'] ?? '';
+            $teacher_observer_sidebar_access = false;
+            if ($role === 'teacher') {
+                try {
+                    if (isset($db) && $db instanceof PDO) {
+                        $sidebarAccessStmt = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :uid LIMIT 1");
+                        $sidebarAccessStmt->execute([':uid' => (int)($_SESSION['user_id'] ?? 0)]);
+                        $teacher_observer_sidebar_access = (bool)$sidebarAccessStmt->fetchColumn();
+                    }
+                } catch (Exception $e) {
+                    $teacher_observer_sidebar_access = false;
+                }
+            }
             $dashboard_link = 'dashboard.php';
             if ($role === 'chairperson') {
                 $dashboard_link = 'chairperson.php';
@@ -52,6 +64,9 @@
         <?php endif; ?>
 
         <?php if ($_SESSION['role'] === 'teacher'): ?>
+            <?php if ($teacher_observer_sidebar_access): ?>
+                <li><a href="../evaluators/evaluation.php" class="nav-link"><i class="fas fa-clipboard-check"></i> Evaluation</a></li>
+            <?php endif; ?>
             <li><a href="../teachers/dashboard.php" class="nav-link"><i class="fas fa-file-alt"></i> My Evaluations</a></li>
                 <li><a href="../teachers/observation_plan.php" class="nav-link"><i class="fas fa-clipboard-list"></i> Schedule</a></li>
         <?php elseif(in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'])): ?>
