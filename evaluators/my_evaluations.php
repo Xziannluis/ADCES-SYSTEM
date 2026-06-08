@@ -142,31 +142,66 @@ if ($teacher_data) {
         return strtotime((string)($b['created_at'] ?? '')) <=> strtotime((string)($a['created_at'] ?? ''));
     });
 
-    // 4) Collapse to one card per evaluator per schedule slot and summarize form completion.
+    $normalize_schedule_date = static function($value): string {
+        $value = trim((string)$value);
+        if ($value === '') return '';
+        $ts = strtotime($value);
+        return $ts ? date('Y-m-d', $ts) : $value;
+    };
+
+    $normalize_schedule_time = static function($value): string {
+        $value = trim((string)$value);
+        if ($value === '') return '';
+        $ts = strtotime($value);
+        if ($ts) return date('H:i', $ts);
+        if (preg_match('/^(\d{1,2}):(\d{2})/', $value, $m)) {
+            return sprintf('%02d:%02d', (int)$m[1], (int)$m[2]);
+        }
+        return $value;
+    };
+
+    $normalize_subject_slot = static function($value): string {
+        $value = strtolower(trim((string)$value));
+        if ($value === '') return '';
+        $value = preg_replace('/\s+\d{1,2}:\d{2}\s*(am|pm)(?:\s*-\s*(?:\d{1,2}:\d{2}\s*(am|pm))?)?\s*$/i', '', $value);
+        return trim((string)$value);
+    };
+
+    // 4) Collapse to one card per schedule slot and summarize form completion.
     $grouped = [];
     foreach ($evaluations as $row) {
         $groupKey = implode('|', [
-            (string)($row['evaluator_id'] ?? ''),
             (string)($row['academic_year'] ?? ''),
             (string)($row['semester'] ?? ''),
-            (string)($row['observation_date'] ?? ''),
-            (string)($row['observation_time'] ?? ''),
+            $normalize_schedule_date($row['observation_date'] ?? ''),
+            $normalize_schedule_time($row['observation_time'] ?? ''),
+            $normalize_subject_slot($row['subject_observed'] ?? ''),
         ]);
         $ft = strtolower(trim((string)($row['evaluation_form_type'] ?? 'iso')));
         if (!in_array($ft, ['iso', 'peac'], true)) $ft = 'iso';
         $isCompleted = (strtolower(trim((string)($row['status'] ?? ''))) === 'completed');
+        $isSigned = !empty($row['rater_signature']);
 
         if (!isset($grouped[$groupKey])) {
             $grouped[$groupKey] = [
                 'row' => $row,
                 'forms' => ['iso' => false, 'peac' => false],
-                'has_completed' => false
+                'has_completed' => false,
+                'completed_count' => 0,
+                'signed_count' => 0,
+                'unsigned_eval_id' => 0
             ];
         }
 
         if ($isCompleted) {
             $grouped[$groupKey]['forms'][$ft] = true;
             $grouped[$groupKey]['has_completed'] = true;
+            $grouped[$groupKey]['completed_count']++;
+            if ($isSigned) {
+                $grouped[$groupKey]['signed_count']++;
+            } elseif (empty($grouped[$groupKey]['unsigned_eval_id'])) {
+                $grouped[$groupKey]['unsigned_eval_id'] = (int)($row['id'] ?? 0);
+            }
         }
 
         // Prefer completed row for view button; else keep latest row by id.
@@ -194,6 +229,10 @@ if ($teacher_data) {
         if (!empty($g['has_completed'])) {
             $row['status'] = 'completed';
         }
+        $row['completed_count'] = (int)($g['completed_count'] ?? 0);
+        $row['signed_count'] = (int)($g['signed_count'] ?? 0);
+        $row['has_signed'] = $row['completed_count'] > 0 && $row['signed_count'] >= $row['completed_count'];
+        $row['sign_eval_id'] = !empty($g['unsigned_eval_id']) ? (int)$g['unsigned_eval_id'] : (int)($row['id'] ?? 0);
         $evaluations[] = $row;
     }
 
@@ -463,13 +502,13 @@ if ($teacher_data) {
                             </div>
                             <div class="col-md-4 text-md-end">
                                 <?php if($eval['status'] === 'completed'): ?>
-                                    <?php $hasSigned = !empty($eval['rater_signature']); ?>
+                                    <?php $hasSigned = !empty($eval['has_signed']); ?>
                                     <div class="d-flex gap-2 justify-content-md-end align-items-center flex-wrap">
                                         <a href="view_my_evaluation.php?eval_id=<?php echo $eval['id']; ?>" class="btn-view">
                                             <i class="fas fa-eye me-2"></i>View
                                         </a>
                                         <?php if(!$hasSigned): ?>
-                                        <button type="button" class="btn-sign" data-bs-toggle="modal" data-bs-target="#signModal" onclick="prepareSignModal(<?php echo $eval['id']; ?>)">
+                                        <button type="button" class="btn-sign" data-bs-toggle="modal" data-bs-target="#signModal" onclick="prepareSignModal(<?php echo (int)($eval['sign_eval_id'] ?? $eval['id']); ?>)">
                                             <i class="fas fa-pen me-1"></i>Sign
                                             <span class="sign-badge">!</span>
                                         </button>

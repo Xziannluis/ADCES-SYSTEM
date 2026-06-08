@@ -40,26 +40,90 @@ if($stmt->rowCount() === 0) {
 }
 
 $evaluation = $stmt->fetch(PDO::FETCH_ASSOC);
-$can_use_evaluation_actions = ((int)($evaluation['evaluator_id'] ?? 0) === (int)($_SESSION['user_id'] ?? 0));
 
-// Get evaluation details
-$details_query = "SELECT * FROM evaluation_details 
-                  WHERE evaluation_id = :eval_id 
-                  ORDER BY category, criterion_index";
-$details_stmt = $db->prepare($details_query);
-$details_stmt->bindParam(':eval_id', $_GET['eval_id']);
-$details_stmt->execute();
-$eval_details = $details_stmt->fetchAll(PDO::FETCH_ASSOC);
-
-$categorized_ratings = [
-    'communications' => [],
-    'management' => [],
-    'assessment' => []
-];
-
-foreach($eval_details as $detail) {
-    $categorized_ratings[$detail['category']][] = $detail;
+function h($value): string {
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
+
+$normalize_schedule_date = static function($value): string {
+    $value = trim((string)$value);
+    if ($value === '') return '';
+    $ts = strtotime($value);
+    return $ts ? date('Y-m-d', $ts) : $value;
+};
+
+$normalize_schedule_time = static function($value): string {
+    $value = trim((string)$value);
+    if ($value === '') return '';
+    $ts = strtotime($value);
+    if ($ts) return date('H:i', $ts);
+    if (preg_match('/^(\d{1,2}):(\d{2})/', $value, $m)) {
+        return sprintf('%02d:%02d', (int)$m[1], (int)$m[2]);
+    }
+    return $value;
+};
+
+$normalize_subject_slot = static function($value): string {
+    $value = strtolower(trim((string)$value));
+    if ($value === '') return '';
+    $value = preg_replace('/\s+\d{1,2}:\d{2}\s*(am|pm)(?:\s*-\s*(?:\d{1,2}:\d{2}\s*(am|pm))?)?\s*$/i', '', $value);
+    return trim((string)$value);
+};
+
+$anchor_date = $normalize_schedule_date($evaluation['observation_date'] ?? '');
+$anchor_time = $normalize_schedule_time($evaluation['observation_time'] ?? '');
+$anchor_subject = $normalize_subject_slot($evaluation['subject_observed'] ?? '');
+$anchor_academic_year = (string)($evaluation['academic_year'] ?? '');
+$anchor_semester = (string)($evaluation['semester'] ?? '');
+
+$schedule_query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, u.department as evaluator_department,
+                          t.name as teacher_name, t.evaluation_schedule, t.evaluation_schedule_end
+                   FROM evaluations e
+                   JOIN users u ON e.evaluator_id = u.id
+                   JOIN teachers t ON e.teacher_id = t.id
+                   WHERE e.teacher_id = :teacher_id
+                     AND e.status = 'completed'
+                     AND DATE(e.observation_date) = :observation_date
+                     AND COALESCE(e.academic_year, '') = :academic_year
+                     AND COALESCE(e.semester, '') = :semester
+                   ORDER BY e.created_at ASC, e.id ASC";
+$schedule_stmt = $db->prepare($schedule_query);
+$schedule_stmt->execute([
+    ':teacher_id' => (int)$my_teacher['id'],
+    ':observation_date' => $anchor_date,
+    ':academic_year' => $anchor_academic_year,
+    ':semester' => $anchor_semester,
+]);
+$schedule_candidates = $schedule_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$all_evaluations = [];
+foreach ($schedule_candidates as $candidate) {
+    $candidate_time = $normalize_schedule_time($candidate['observation_time'] ?? '');
+    $candidate_subject = $normalize_subject_slot($candidate['subject_observed'] ?? '');
+    if ($candidate_time === $anchor_time && ($anchor_subject === '' || $candidate_subject === $anchor_subject)) {
+        $all_evaluations[] = $candidate;
+    }
+}
+if (empty($all_evaluations)) {
+    $all_evaluations[] = $evaluation;
+}
+
+$all_evaluations_data = [];
+foreach ($all_evaluations as $eval_row) {
+    $details_query = "SELECT * FROM evaluation_details
+                      WHERE evaluation_id = :eval_id
+                      ORDER BY category, criterion_index";
+    $details_stmt = $db->prepare($details_query);
+    $details_stmt->bindValue(':eval_id', (int)$eval_row['id'], PDO::PARAM_INT);
+    $details_stmt->execute();
+    $all_evaluations_data[] = [
+        'eval' => $eval_row,
+        'details' => $details_stmt->fetchAll(PDO::FETCH_ASSOC),
+    ];
+}
+
+$teacher_name = $all_evaluations[0]['teacher_name'] ?? $evaluation['teacher_name'];
+$observation_date = $all_evaluations[0]['observation_date'] ?? $evaluation['observation_date'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -73,13 +137,19 @@ foreach($eval_details as $detail) {
         .eval-header { background: linear-gradient(135deg, #2c3e50, #3498db); color: white; border-radius: 12px; padding: 25px; margin-bottom: 30px; }
         .eval-header h3 { margin: 0; font-weight: 700; }
         .eval-header p { margin: 8px 0 0 0; opacity: 0.9; }
-        .report-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .report-table th, .report-table td { padding: 12px; text-align: left; border-bottom: 1px solid #dee2e6; vertical-align: top; }
-        .report-table th { background: #f8f9fa; font-weight: 600; color: #2c3e50; white-space: nowrap; }
-        .report-table { min-width: 1100px; }
+        .report-summary { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 10px; padding: 16px; }
+        .report-item { margin-bottom: 10px; color: #2c3e50; }
+        .report-item:last-child { margin-bottom: 0; }
+        .report-item strong { display: inline-block; min-width: 190px; }
+        .observer-section { margin-bottom: 20px; }
+        .observer-section h5 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        .rating-box { background-color: #e3f2fd !important; border-left: 4px solid #3498db !important; }
+        .comment-block h6 { font-weight: 600; margin-bottom: 10px; }
+        .comment-list { list-style-type: disc; padding-left: 20px; }
+        .comment-list li { margin-bottom: 8px; line-height: 1.6; }
         .back-button { display: inline-block; margin-bottom: 20px; color: #3498db; text-decoration: none; border: 1px solid #3498db; padding: 6px 12px; border-radius: 4px; }
         .back-button:hover { color: #2c3e50; transform: translateX(-5px); }
-        @media (max-width: 767.98px) { .report-table { min-width: 920px; } }
+        @media (max-width: 767.98px) { .report-item strong { min-width: 100%; margin-bottom: 4px; } }
     </style>
 </head>
 <body>
@@ -109,96 +179,179 @@ foreach($eval_details as $detail) {
             </a>
 
             <div class="eval-header">
-                <h3><?php echo htmlspecialchars($evaluation['teacher_name']); ?> - Classroom Evaluation</h3>
+                <h3><?php echo h($teacher_name); ?> - Classroom Evaluation</h3>
                 <p><i class="fas fa-user-tie me-2"></i>Observer Evaluation</p>
-                <p><i class="fas fa-calendar me-2"></i>Evaluation Date: <?php echo date('F d, Y', strtotime($evaluation['observation_date'])); ?> | <?php 
+                <p><i class="fas fa-calendar me-2"></i>Evaluation Date: <?php echo date('F d, Y', strtotime($observation_date)); ?> | <?php
                     $time_display = $evaluation['observation_time'] ?? null;
                     if (empty($time_display) && !empty($evaluation['created_at'])) {
                         $time_display = date('h:i A', strtotime($evaluation['created_at']));
                     }
-                    echo htmlspecialchars($time_display ?: 'Time not specified');
+                    echo h($time_display ?: 'Time not specified');
                 ?></p>
-                <p><i class="fas fa-book me-2"></i>Subject: <?php echo htmlspecialchars($evaluation['subject_observed'] ?? 'Not specified'); ?></p>
+                <p><i class="fas fa-book me-2"></i>Subject: <?php echo h($evaluation['subject_observed'] ?? 'Not specified'); ?></p>
             </div>
 
             <div class="content-area">
                 <?php
-                $strengths = [];
-                $areas_for_improvement = [];
-                $recommendations = [];
-                $agreements = [];
-                foreach($eval_details as $detail) {
-                    if (!empty($detail['comments'])) {
-                        $comment = htmlspecialchars($detail['comments']);
-                        if (stripos($comment, 'strength') !== false || stripos($comment, 'good') !== false || stripos($comment, 'excellent') !== false) {
-                            $strengths[] = $comment;
-                        } elseif (stripos($comment, 'improve') !== false || stripos($comment, 'better') !== false || stripos($comment, 'suggestion') !== false) {
-                            $areas_for_improvement[] = $comment;
-                        } elseif (stripos($comment, 'recommend') !== false) {
-                            $recommendations[] = $comment;
-                        } elseif (stripos($comment, 'agree') !== false || stripos($comment, 'acknowledge') !== false) {
-                            $agreements[] = $comment;
-                        } else {
-                            $strengths[] = $comment;
+                    $subject_observed = trim((string)($all_evaluations[0]['subject_observed'] ?? ''));
+                    $schedule_text = h($subject_observed !== '' ? $subject_observed : 'N/A');
+
+                    $start_raw = $all_evaluations[0]['observation_start_time'] ?? '';
+                    $end_raw = $all_evaluations[0]['observation_end_time'] ?? '';
+
+                    if (empty($start_raw) && !empty($all_evaluations[0]['observation_time'])) {
+                        $start_raw = $all_evaluations[0]['observation_time'];
+                    }
+                    if (empty($start_raw) && !empty($all_evaluations[0]['evaluation_schedule'])) {
+                        $start_raw = $all_evaluations[0]['evaluation_schedule'];
+                    }
+                    if (empty($end_raw) && !empty($all_evaluations[0]['evaluation_schedule_end'])) {
+                        $end_raw = $all_evaluations[0]['evaluation_schedule_end'];
+                    }
+
+                    if (!empty($start_raw) && !empty($end_raw)) {
+                        $start_time = date('g:i', strtotime($start_raw));
+                        $end_time = date('g:i A', strtotime($end_raw));
+                        $schedule_text .= ' (' . h($start_time . ' - ' . $end_time) . ')';
+                    } elseif (!empty($start_raw)) {
+                        $time = date('g:i A', strtotime($start_raw));
+                        $schedule_text .= ' (' . h($time) . ')';
+                    }
+
+                    $evaluator_departments = [];
+                    foreach ($all_evaluations_data as $entry) {
+                        $evaluator_department = trim((string)($entry['eval']['evaluator_department'] ?? ''));
+                        if ($evaluator_department !== '') {
+                            $evaluator_departments[] = $evaluator_department;
                         }
                     }
-                }
-                if (!empty($evaluation['strengths'])) { $strengths[] = htmlspecialchars($evaluation['strengths']); }
-                if (!empty($evaluation['improvement_areas'])) { $areas_for_improvement[] = htmlspecialchars($evaluation['improvement_areas']); }
-                if (!empty($evaluation['recommendations'])) { $recommendations[] = htmlspecialchars($evaluation['recommendations']); }
-                if (!empty($evaluation['agreement'])) { $agreements[] = htmlspecialchars($evaluation['agreement']); }
-
-                $rating_text = 'Needs Improvement';
-                $rscore = (int) floor($evaluation['overall_avg']);
-                switch ($rscore) {
-                    case 5: $rating_text = 'Excellent'; break;
-                    case 4: $rating_text = 'Very Satisfactory'; break;
-                    case 3: $rating_text = 'Satisfactory'; break;
-                    case 2: $rating_text = 'Below Satisfactory'; break;
-                    default: $rating_text = 'Needs Improvement'; break;
-                }
+                    $evaluator_departments = array_values(array_unique($evaluator_departments));
                 ?>
 
-                <div class="table-responsive">
-                    <table class="report-table">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Name of Teacher Observed</th>
-                                <th>Subject/Class Schedule</th>
-                                <th>Strength</th>
-                                <th>Areas for Improvement</th>
-                                <th>Recommendation/s</th>
-                                <th>Agreement</th>
-                                <th>Ratings</th>
-                                <?php if ($can_use_evaluation_actions): ?>
-                                <th class="no-print text-center">Action</th>
-                                <?php endif; ?>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td><?php echo date('F j, Y', strtotime($evaluation['observation_date'])); ?></td>
-                                <td><?php echo htmlspecialchars($evaluation['teacher_name']); ?></td>
-                                <td><?php echo htmlspecialchars($evaluation['subject_observed']); ?></td>
-                                <td><?php if(!empty($strengths)): ?><ul><?php foreach($strengths as $s){ ?><li><?php echo $s; ?></li><?php } ?></ul><?php else: ?><em>No specific strengths identified.</em><?php endif; ?></td>
-                                <td><?php if(!empty($areas_for_improvement)): ?><ul><?php foreach($areas_for_improvement as $a){ ?><li><?php echo $a; ?></li><?php } ?></ul><?php else: ?><em>No specific areas for improvement identified.</em><?php endif; ?></td>
-                                <td><?php if(!empty($recommendations)): ?><ul><?php foreach($recommendations as $r){ ?><li><?php echo $r; ?></li><?php } ?></ul><?php else: ?><em>No specific recommendations provided.</em><?php endif; ?></td>
-                                <td><?php if(!empty($agreements)): ?><ul><?php foreach($agreements as $ag){ ?><li><?php echo $ag; ?></li><?php } ?></ul><?php else: ?><em>No specific agreements recorded.</em><?php endif; ?></td>
-                                <td style="white-space:nowrap;"><?php echo htmlspecialchars(number_format($evaluation['overall_avg'],1)) . ' ' . $rating_text; ?></td>
-                                <?php if ($can_use_evaluation_actions): ?>
-                                <td class="no-print text-center" style="white-space:nowrap; vertical-align:top;">
-                                    <a href="<?php echo (($evaluation['evaluation_form_type'] ?? 'iso') === 'peac') ? 'view_evaluation_peac.php' : 'view_evaluation.php'; ?>?id=<?php echo (int)$_GET['eval_id']; ?>" class="btn btn-sm btn-info me-1">
-                                        <i class="fas fa-eye me-1"></i> View
-                                    </a>
-                                    <a href="<?php echo (($evaluation['evaluation_form_type'] ?? 'iso') === 'peac') ? 'print_evaluation_form_peac.php' : 'print_evaluation_form.php'; ?>?id=<?php echo (int)$_GET['eval_id']; ?>&auto_print=1" target="_blank" class="btn btn-sm btn-primary">
-                                        <i class="fas fa-print me-1"></i> Print
-                                    </a>
-                                </td>
-                                <?php endif; ?>
-                            </tr>
-                        </tbody>
-                    </table>
+                <div class="report-summary">
+                    <div class="report-item"><strong>Date:</strong> <?php echo date('F j, Y', strtotime($observation_date)); ?></div>
+                    <div class="report-item"><strong>Department:</strong> <?php echo !empty($evaluator_departments) ? h(implode(', ', $evaluator_departments)) : 'N/A'; ?></div>
+                    <div class="report-item"><strong>Subject/Class Schedule:</strong> <?php echo $schedule_text; ?></div>
+                </div>
+
+                <div class="comments-section mt-5">
+                    <?php
+                    $observer_number = 1;
+                    foreach ($all_evaluations_data as $eval_data):
+                        $eval = $eval_data['eval'];
+                        $details = $eval_data['details'];
+
+                        $strengths = [];
+                        $areas_for_improvement = [];
+                        $recommendations = [];
+                        $agreements = [];
+
+                        foreach ($details as $detail) {
+                            if (!empty($detail['comments'])) {
+                                $comment = (string)$detail['comments'];
+                                if (stripos($comment, 'strength') !== false || stripos($comment, 'good') !== false || stripos($comment, 'excellent') !== false) {
+                                    $strengths[] = $comment;
+                                } elseif (stripos($comment, 'improve') !== false || stripos($comment, 'better') !== false || stripos($comment, 'suggestion') !== false) {
+                                    $areas_for_improvement[] = $comment;
+                                } elseif (stripos($comment, 'recommend') !== false) {
+                                    $recommendations[] = $comment;
+                                } elseif (stripos($comment, 'agree') !== false || stripos($comment, 'acknowledge') !== false) {
+                                    $agreements[] = $comment;
+                                } else {
+                                    $strengths[] = $comment;
+                                }
+                            }
+                        }
+
+                        if (!empty($eval['strengths'])) $strengths[] = $eval['strengths'];
+                        if (!empty($eval['improvement_areas'])) $areas_for_improvement[] = $eval['improvement_areas'];
+                        if (!empty($eval['recommendations'])) $recommendations[] = $eval['recommendations'];
+                        if (!empty($eval['agreement'])) $agreements[] = $eval['agreement'];
+                    ?>
+                    <div class="observer-section mb-5 p-4" style="background: #f8f9fa; border-left: 4px solid #3498db; border-radius: 8px;">
+                        <h5 class="mb-4">
+                            <i class="fas fa-user-circle me-2"></i>
+                            <strong>OBSERVER <?php echo $observer_number; ?></strong>
+                        </h5>
+
+                        <?php if (!empty($eval['overall_avg'])): ?>
+                        <div class="rating-box mb-4 p-3" style="background: white; border-radius: 6px; border: 1px solid #dee2e6;">
+                            <strong>Overall Rating:</strong>
+                            <span style="font-size: 1.2rem; color: #3498db; font-weight: bold;">
+                                <?php
+                                $rscore = (float)$eval['overall_avg'];
+                                $rating_text = 'Needs Improvement';
+                                if ($rscore >= 4.6) {
+                                    $rating_text = 'Excellent';
+                                } elseif ($rscore >= 3.6) {
+                                    $rating_text = 'Very Satisfactory';
+                                } elseif ($rscore >= 2.6) {
+                                    $rating_text = 'Satisfactory';
+                                } elseif ($rscore >= 1.6) {
+                                    $rating_text = 'Below Satisfactory';
+                                }
+                                echo h(number_format((float)$eval['overall_avg'], 1) . ' - ' . $rating_text);
+                                ?>
+                            </span>
+                        </div>
+                        <?php endif; ?>
+
+                        <div class="comment-block mb-4">
+                            <h6 class="text-success mb-2"><i class="fas fa-star me-2"></i>Strengths</h6>
+                            <?php if (!empty($strengths)): ?>
+                                <ul class="comment-list ms-3">
+                                    <?php foreach ($strengths as $s): ?>
+                                        <li><?php echo h($s); ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php else: ?>
+                                <p class="text-muted ms-3"><em>No specific strengths identified.</em></p>
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="comment-block mb-4">
+                            <h6 class="text-warning mb-2"><i class="fas fa-lightbulb me-2"></i>Areas for Improvement</h6>
+                            <?php if (!empty($areas_for_improvement)): ?>
+                                <ul class="comment-list ms-3">
+                                    <?php foreach ($areas_for_improvement as $a): ?>
+                                        <li><?php echo h($a); ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php else: ?>
+                                <p class="text-muted ms-3"><em>No specific areas for improvement identified.</em></p>
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="comment-block mb-4">
+                            <h6 class="text-info mb-2"><i class="fas fa-check me-2"></i>Recommendations</h6>
+                            <?php if (!empty($recommendations)): ?>
+                                <ul class="comment-list ms-3">
+                                    <?php foreach ($recommendations as $r): ?>
+                                        <li><?php echo h($r); ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php else: ?>
+                                <p class="text-muted ms-3"><em>No specific recommendations provided.</em></p>
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="comment-block mb-4">
+                            <h6 class="text-primary mb-2"><i class="fas fa-handshake me-2"></i>Agreements</h6>
+                            <?php if (!empty($agreements)): ?>
+                                <ul class="comment-list ms-3">
+                                    <?php foreach ($agreements as $ag): ?>
+                                        <li><?php echo h($ag); ?></li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            <?php else: ?>
+                                <p class="text-muted ms-3"><em>No specific agreements recorded.</em></p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php
+                    $observer_number++;
+                    endforeach;
+                    ?>
                 </div>
             </div>
 
