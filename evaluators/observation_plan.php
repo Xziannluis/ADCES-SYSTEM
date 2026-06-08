@@ -759,11 +759,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $can_request_observer = in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true);
     $eval_id_request = (int)($_POST['request_eval_id'] ?? 0);
     $requested_observer_id = (int)($_POST['requested_observer_id'] ?? 0);
+    $requested_observer_department = trim((string)($_POST['request_observer_department'] ?? ''));
 
     if (!$can_request_observer) {
         $_SESSION['error'] = 'Only authorized roles can request an observer.';
-    } elseif ($eval_id_request <= 0 || $requested_observer_id <= 0) {
-        $_SESSION['error'] = 'Please select one schedule and one observer/evaluator.';
+    } elseif ($eval_id_request <= 0 || $requested_observer_department === '' || $requested_observer_id <= 0) {
+        $_SESSION['error'] = 'Please select one schedule, department, and observer/evaluator.';
     } else {
         try {
             $observer_stmt = $db->prepare("
@@ -778,6 +779,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $requested_observer = $observer_stmt->fetch(PDO::FETCH_ASSOC) ?: null;
             if (!$requested_observer) {
                 throw new Exception('Selected observer/evaluator was not found or is inactive.');
+            }
+            $observer_department = trim((string)($requested_observer['department'] ?? ''));
+            if ($observer_department === '' || strcasecmp($observer_department, $requested_observer_department) !== 0) {
+                throw new Exception('Selected observer/evaluator does not belong to the selected department.');
             }
 
             $src_stmt = $db->prepare("
@@ -2435,6 +2440,25 @@ if (in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subj
         $requestable_observers = [];
     }
 }
+$requestable_observer_departments = [];
+if (!empty($requestable_observers)) {
+    $requestable_dept_seen = [];
+    foreach ($requestable_observers as $observerOption) {
+        $deptCode = trim((string)($observerOption['department'] ?? ''));
+        if ($deptCode !== '') {
+            $requestable_dept_seen[$deptCode] = true;
+        }
+    }
+    foreach ($all_departments as $deptCode) {
+        if (!empty($requestable_dept_seen[$deptCode])) {
+            $requestable_observer_departments[$deptCode] = $department_map[$deptCode] ?? $deptCode;
+            unset($requestable_dept_seen[$deptCode]);
+        }
+    }
+    foreach (array_keys($requestable_dept_seen) as $deptCode) {
+        $requestable_observer_departments[$deptCode] = $department_map[$deptCode] ?? $deptCode;
+    }
+}
 
 // Normalize department values (code <-> full label) so filters are consistent.
 $department_alias_to_code = [
@@ -3382,7 +3406,15 @@ foreach ($scheduled_teachers as $t) {
     $existing_dates = $eval_dates_by_teacher[$tid] ?? [];
     if (isset($seen_ids[$tid]) && $sched_date !== '' && in_array($sched_date, $existing_dates, true)) continue;
 
-    $row_key = isset($seen_ids[$tid]) ? ('schedule_' . $tid) : $tid;
+    $schedule_row_identity = implode('|', [
+        (string)$tid,
+        (string)$sched_date,
+        strtolower(trim((string)($t['scheduled_department'] ?? ''))),
+        strtolower(trim((string)($t['evaluation_subject_area'] ?? ''))),
+        strtolower(trim((string)normalizeSubjectDisplay((string)($t['evaluation_subject'] ?? '')))),
+        strtolower(trim((string)($t['evaluation_room'] ?? ''))),
+    ]);
+    $row_key = 'schedule_' . md5($schedule_row_identity);
     $seen_ids[$tid] = true;
     $t['_row_key'] = $row_key;
     $teachers_list[] = $t;
@@ -3618,16 +3650,22 @@ if (!empty($filter_month)) {
 
 // Filter by status if selected
 if (!empty($filter_status)) {
-    $teachers_list = array_filter($teachers_list, function($t) use ($eval_data, $filter_status) {
+    $teachers_list = array_filter($teachers_list, function($t) use ($eval_data, $schedule_data, $filter_status) {
         $row_key = $t['_row_key'] ?? $t['id'];
         $is_done = !empty($eval_data[$row_key]['done']);
         $row_status = strtolower(trim((string)($eval_data[$row_key]['status'] ?? '')));
-        $has_sched = !empty($t['evaluation_schedule']);
+        $has_sched =
+            !empty($t['evaluation_schedule']) ||
+            !empty($schedule_data[$row_key]['day_time'] ?? '') ||
+            !empty($eval_data[$row_key]['date'] ?? '');
 
         $is_overdue_not_evaluated = false;
         if (!$is_done) {
             $row_sched_end_raw = trim((string)($eval_data[$row_key]['cutoff'] ?? ''));
             $row_sched_start_raw = trim((string)($t['evaluation_schedule'] ?? ''));
+            if ($row_sched_start_raw === '') {
+                $row_sched_start_raw = trim((string)($eval_data[$row_key]['date'] ?? ''));
+            }
             $cutoff_raw = $row_sched_end_raw !== '' ? $row_sched_end_raw : $row_sched_start_raw;
             if ($cutoff_raw !== '') {
                 try {
@@ -3645,7 +3683,7 @@ if (!empty($filter_status)) {
         if ($filter_status === 'rescheduled') return ($row_status === 'rescheduled');
         if ($filter_status === 'observer_unbalanced') return ($row_status === 'observer_unbalanced');
         if ($filter_status === 'did_not_evaluate') return $is_overdue_not_evaluated;
-        if ($filter_status === 'scheduled') return $has_sched && !$is_done && !in_array($row_status, ['rescheduled', 'observer_unbalanced'], true) && !$is_overdue_not_evaluated;
+        if ($filter_status === 'scheduled') return $has_sched && !$is_done && !in_array($row_status, ['completed', 'rescheduled', 'observer_unbalanced'], true) && !$is_overdue_not_evaluated;
         return true;
     });
     $teachers_list = array_values($teachers_list);
@@ -4227,12 +4265,18 @@ try {
             font-size: 0.9rem;
             margin-top: 0.25rem;
         }
-        #requestObserverSearch,
+        #requestObserverDepartment,
         #requestedObserverId {
             font-size: 0.98rem;
         }
+        #requestObserverDepartment,
         #requestedObserverId {
             min-height: 44px;
+        }
+        #requestedObserverId:disabled {
+            background-color: #f1f5f9;
+            color: #64748b;
+            cursor: not-allowed;
         }
         .request-observer-help {
             color: #6b7280;
@@ -5581,7 +5625,7 @@ try {
 
     <?php if ($is_observer_role): ?>
     <div class="modal fade" id="requestObserverModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-dialog">
             <form method="POST" class="modal-content">
                 <input type="hidden" name="action" value="request_observer">
                 <input type="hidden" name="request_eval_id" id="requestObserverEvalId" value="">
@@ -5594,25 +5638,28 @@ try {
                         <div class="request-observer-card__title" id="requestObserverTeacherLabel">Selected schedule</div>
                         <div class="request-observer-card__meta" id="requestObserverScheduleLabel">Choose one schedule row first.</div>
                     </div>
-                    <label for="requestedObserverId" class="form-label fw-bold">Observer/Evaluator</label>
-                    <div class="input-group mb-2">
-                        <span class="input-group-text"><i class="fas fa-search"></i></span>
-                        <input type="text" class="form-control" id="requestObserverSearch" placeholder="Search name, role, or department">
-                    </div>
-                    <select class="form-select" id="requestedObserverId" name="requested_observer_id" required>
-                        <option value="">Select from any department...</option>
+                    <label for="requestObserverDepartment" class="form-label fw-bold">Department</label>
+                    <select class="form-select mb-3" id="requestObserverDepartment" name="request_observer_department" required>
+                        <option value="">Choose department...</option>
+                        <?php foreach ($requestable_observer_departments as $deptCode => $deptLabel): ?>
+                            <option value="<?php echo htmlspecialchars($deptCode, ENT_QUOTES); ?>"><?php echo htmlspecialchars($deptLabel . ($deptLabel !== $deptCode ? ' (' . $deptCode . ')' : '')); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+
+                    <label for="requestedObserverId" class="form-label fw-bold">Teacher/Observer</label>
+                    <select class="form-select" id="requestedObserverId" name="requested_observer_id" required disabled>
+                        <option value="">Select a department first...</option>
                         <?php foreach ($requestable_observers as $observerOption): ?>
                             <?php
                                 $optRole = ucwords(str_replace('_', ' ', (string)($observerOption['role'] ?? '')));
                                 $optDept = trim((string)($observerOption['department'] ?? ''));
                                 $optName = trim((string)($observerOption['name'] ?? 'Unnamed'));
-                                $optLabel = $optName . ' | ' . $optRole . ($optDept !== '' ? ' | ' . $optDept : '');
-                                $optSearch = strtolower($optName . ' ' . $optRole . ' ' . $optDept);
+                                $optLabel = $optName . ' | ' . $optRole;
                             ?>
-                            <option value="<?php echo (int)$observerOption['id']; ?>" data-search="<?php echo htmlspecialchars($optSearch, ENT_QUOTES); ?>"><?php echo htmlspecialchars($optLabel); ?></option>
+                            <option value="<?php echo (int)$observerOption['id']; ?>" data-department="<?php echo htmlspecialchars($optDept, ENT_QUOTES); ?>" hidden><?php echo htmlspecialchars($optLabel); ?></option>
                         <?php endforeach; ?>
                     </select>
-                    <div class="request-observer-help">Teacher-role users can be requested here and will be allowed to evaluate only this assigned schedule.</div>
+                    <div class="request-observer-help">Choose a department first, then select the teacher or observer who should receive this schedule request.</div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -6683,16 +6730,16 @@ function openRequestObserverModal() {
     var evalInput = document.getElementById('requestObserverEvalId');
     var teacherLabel = document.getElementById('requestObserverTeacherLabel');
     var scheduleLabel = document.getElementById('requestObserverScheduleLabel');
+    var departmentSelect = document.getElementById('requestObserverDepartment');
     var observerSelect = document.getElementById('requestedObserverId');
-    var observerSearch = document.getElementById('requestObserverSearch');
     if (evalInput) evalInput.value = String(evalId);
     if (teacherLabel) teacherLabel.textContent = teacherText || 'Selected schedule';
     if (scheduleLabel) {
         scheduleLabel.textContent = [dateText, timeText, subjectText].filter(Boolean).join(' | ') || 'Schedule selected';
     }
+    if (departmentSelect) departmentSelect.value = '';
     if (observerSelect) observerSelect.value = '';
-    if (observerSearch) observerSearch.value = '';
-    filterRequestObserverOptions('');
+    updateRequestObserverOptions();
 
     var el = document.getElementById('requestObserverModal');
     if (el && window.bootstrap) {
@@ -6700,26 +6747,29 @@ function openRequestObserverModal() {
     }
 }
 
-function filterRequestObserverOptions(term) {
+function updateRequestObserverOptions() {
+    var departmentSelect = document.getElementById('requestObserverDepartment');
     var select = document.getElementById('requestedObserverId');
     if (!select) return;
-    var needle = String(term || '').trim().toLowerCase();
+    var selectedDept = departmentSelect ? String(departmentSelect.value || '').trim() : '';
+    select.disabled = selectedDept === '';
+    select.value = '';
     Array.from(select.options).forEach(function(option, index) {
         if (index === 0) {
             option.hidden = false;
+            option.textContent = selectedDept === '' ? 'Select a department first...' : 'Choose teacher/observer...';
             return;
         }
-        var haystack = option.dataset.search || option.textContent.toLowerCase();
-        option.hidden = needle !== '' && haystack.indexOf(needle) === -1;
+        var optionDept = String(option.dataset.department || '').trim();
+        var showOption = selectedDept !== '' && optionDept === selectedDept;
+        option.hidden = !showOption;
+        option.disabled = !showOption;
     });
-    if (select.selectedOptions.length && select.selectedOptions[0].hidden) {
-        select.value = '';
-    }
 }
 
-document.addEventListener('input', function(e) {
-    if (e.target && e.target.id === 'requestObserverSearch') {
-        filterRequestObserverOptions(e.target.value);
+document.addEventListener('change', function(e) {
+    if (e.target && e.target.id === 'requestObserverDepartment') {
+        updateRequestObserverOptions();
     }
 });
 

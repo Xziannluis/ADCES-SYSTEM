@@ -70,6 +70,8 @@ if (($eval['evaluation_form_type'] ?? 'iso') === 'peac') {
 }
 
 // Check if the current user is the teacher being evaluated
+$currentUserId = (int)($_SESSION['user_id'] ?? 0);
+$isOwnSubmittedEvaluation = ((int)($eval['evaluator_id'] ?? 0) === $currentUserId);
 $isTeacherBeingEvaluated = false;
 $tchkStmt = $db->prepare("SELECT id FROM teachers WHERE user_id = :uid LIMIT 1");
 $tchkStmt->execute([':uid' => $_SESSION['user_id']]);
@@ -78,10 +80,17 @@ if ($myTeacherRec && (int)$myTeacherRec['id'] === (int)$eval['teacher_id']) {
     $isTeacherBeingEvaluated = true;
 }
 
-// Coordinators can only view their own evaluations, evaluations on their assigned teachers, or evaluations about themselves
+// Being the observed teacher is not enough to open the full evaluator form.
+// The observed person can only use this page when they also submitted the evaluation.
+if ($isTeacherBeingEvaluated && !$isOwnSubmittedEvaluation) {
+    http_response_code(403);
+    echo 'Access denied.';
+    exit();
+}
+
+// Coordinators can only view their own evaluations or evaluations on assigned teachers.
 if (!$isTeacherBeingEvaluated && in_array($_SESSION['role'] ?? '', ['subject_coordinator', 'chairperson', 'grade_level_coordinator'])) {
-    $is_own_evaluation = ((int)$eval['evaluator_id'] === (int)($_SESSION['user_id'] ?? 0));
-    if (!$is_own_evaluation) {
+    if (!$isOwnSubmittedEvaluation) {
         // Check if the teacher is assigned to this coordinator
         $assignCheck = $db->prepare("SELECT 1 FROM teacher_assignments WHERE evaluator_id = :eid AND teacher_id = :tid LIMIT 1");
         $assignCheck->execute([':eid' => $_SESSION['user_id'], ':tid' => $eval['teacher_id']]);
@@ -93,9 +102,9 @@ if (!$isTeacherBeingEvaluated && in_array($_SESSION['role'] ?? '', ['subject_coo
     }
 }
 
-// Teachers can only view evaluations about themselves
+// Teacher accounts can open evaluator forms only for evaluations they submitted.
 if (($_SESSION['role'] ?? '') === 'teacher') {
-    if (!$isTeacherBeingEvaluated) {
+    if (!$isOwnSubmittedEvaluation) {
         http_response_code(403);
         echo 'Access denied.';
         exit();

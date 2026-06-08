@@ -92,6 +92,7 @@ $department_map = [
 $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
 $is_department_head = in_array($_SESSION['role'], ['dean', 'principal']);
 $is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
+$can_print_evaluation_forms = (!$is_teacher_report && $currentRole === 'dean');
 $all_departments = array_keys($department_map);
 $session_department = trim((string)($_SESSION['department'] ?? ''));
 $requested_department = trim((string)($_GET['department'] ?? ''));
@@ -456,7 +457,15 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             margin-bottom: 4px;
         }
         #reportPreviewModal .modal-dialog {
-            max-width: min(1180px, calc(100vw - 32px)) !important;
+            width: min(1500px, calc(100vw - 24px));
+            max-width: min(1500px, calc(100vw - 24px)) !important;
+        }
+        #reportPreviewModal .modal-content {
+            max-height: calc(100vh - 24px);
+        }
+        #reportPreviewModal .modal-body {
+            max-height: 82vh;
+            overflow-y: auto;
         }
         .preview-observation-table {
             table-layout: fixed;
@@ -750,6 +759,43 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             padding: 20px;
         }
 
+        #evalFormModal .modal-dialog {
+            width: min(1180px, calc(100vw - 2rem));
+            max-width: min(1180px, calc(100vw - 2rem));
+        }
+        #evalFormModal .modal-body {
+            padding: 1.35rem 1.45rem;
+        }
+        .eval-form-table {
+            min-width: 980px;
+            margin-bottom: 0;
+        }
+        .eval-form-table th,
+        .eval-form-table td {
+            vertical-align: middle;
+        }
+        .eval-form-table th {
+            white-space: nowrap;
+        }
+        .eval-form-table td:nth-child(4),
+        .eval-form-table td:nth-child(5) {
+            white-space: normal;
+        }
+        .eval-form-table td:nth-child(7) {
+            text-align: center;
+            white-space: nowrap;
+        }
+        .eval-form-filters {
+            border-top: 1px solid #e9ecef;
+            border-bottom: 1px solid #e9ecef;
+            padding: 12px 0 14px;
+            margin-bottom: 14px;
+        }
+        .eval-form-filters .form-label {
+            font-size: 0.78rem;
+            margin-bottom: 0.25rem;
+        }
+
         /* Ratings cell layout (screen + print)
            Target print structure like the paper form: "4.0  Very Satisfactory" */
         .ratings-cell {
@@ -831,7 +877,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                     <button class="btn btn-primary" onclick="openPrintReport()">
                         <i class="fas fa-print me-2"></i>Print Report
                     </button>
-                    <?php if (!$is_teacher_report): ?>
+                    <?php if ($can_print_evaluation_forms): ?>
                     <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#evalFormModal">
                         <i class="fas fa-file-alt me-2"></i>Print Evaluation Form
                     </button>
@@ -1566,13 +1612,13 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
     </script>
 
     <div class="modal fade" id="reportPreviewModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered" style="max-width: 960px;">
+        <div class="modal-dialog modal-dialog-centered" style="max-width: 1500px;">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title"><i class="fas fa-eye me-2"></i>Evaluation Preview</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <div class="modal-body" style="max-height:72vh; overflow-y:auto;">
+                <div class="modal-body">
                     <div class="table-responsive">
                         <table class="table table-bordered align-middle mb-0 preview-observation-table">
                             <colgroup>
@@ -1662,9 +1708,10 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         </div>
     </div>
 
+    <?php if ($can_print_evaluation_forms): ?>
     <!-- Evaluation Form Selection Modal -->
     <div class="modal fade" id="evalFormModal" tabindex="-1" aria-labelledby="evalFormModalLabel" aria-hidden="true">
-        <div class="modal-dialog" style="max-width:900px;">
+        <div class="modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="evalFormModalLabel"><i class="fas fa-file-alt me-2"></i>Print Evaluation Form</h5>
@@ -1701,6 +1748,39 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                 <option value="">-- Choose a teacher --</option>
                             </select>
                         </div>
+                        <div id="evalFormFilters" class="eval-form-filters" style="display:none;">
+                            <div class="row g-2 align-items-end">
+                                <div class="col-12 col-md-3">
+                                    <label for="evalFilterYear" class="form-label fw-bold">Academic Year</label>
+                                    <select class="form-select form-select-sm" id="evalFilterYear">
+                                        <option value="">All Years</option>
+                                    </select>
+                                </div>
+                                <div class="col-12 col-md-2">
+                                    <label for="evalFilterSemester" class="form-label fw-bold">Semester</label>
+                                    <select class="form-select form-select-sm" id="evalFilterSemester">
+                                        <option value="">All Semesters</option>
+                                    </select>
+                                </div>
+                                <div class="col-12 col-md-2">
+                                    <label for="evalFilterMonth" class="form-label fw-bold">Month</label>
+                                    <select class="form-select form-select-sm" id="evalFilterMonth">
+                                        <option value="">All Months</option>
+                                    </select>
+                                </div>
+                                <div class="col-12 col-md-3">
+                                    <label for="evalFilterEvaluator" class="form-label fw-bold">Evaluator</label>
+                                    <select class="form-select form-select-sm" id="evalFilterEvaluator">
+                                        <option value="">All Evaluators</option>
+                                    </select>
+                                </div>
+                                <div class="col-12 col-md-2">
+                                    <button type="button" class="btn btn-outline-secondary btn-sm w-100" onclick="clearEvalFormFilters()">
+                                        <i class="fas fa-undo me-1"></i>Clear
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                         <div id="evalFormList" style="display:none;">
                             <label class="form-label fw-bold">Select an Evaluation</label>
                             <div id="evalFormListBody"></div>
@@ -1719,6 +1799,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             </div>
         </div>
     </div>
+    <?php endif; ?>
 
     <script>
     function escapeHtml(str) {
@@ -1728,6 +1809,125 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
     }
 
     var _selectedFormType = '';
+    <?php if ($can_print_evaluation_forms): ?>
+    var _evalFormRows = [];
+
+    function getEvalFormEvaluatorValue(ev) {
+        var id = parseInt(ev.evaluator_id || 0, 10);
+        return id > 0 ? String(id) : (ev.evaluator || '');
+    }
+
+    function resetEvalFormFilters() {
+        _evalFormRows = [];
+        ['evalFilterYear', 'evalFilterSemester', 'evalFilterMonth', 'evalFilterEvaluator'].forEach(function(id) {
+            var select = document.getElementById(id);
+            if (select) select.selectedIndex = 0;
+        });
+        var filters = document.getElementById('evalFormFilters');
+        if (filters) filters.style.display = 'none';
+    }
+
+    function setEvalFormFilterOptions(id, items, allLabel) {
+        var select = document.getElementById(id);
+        if (!select) return;
+        select.innerHTML = '<option value="">' + escapeHtml(allLabel) + '</option>';
+        items.forEach(function(item) {
+            var opt = document.createElement('option');
+            opt.value = item.value;
+            opt.textContent = item.label;
+            select.appendChild(opt);
+        });
+    }
+
+    function populateEvalFormFilters(rows) {
+        var years = Array.from(new Set(rows.map(function(ev) { return ev.academic_year || ''; }).filter(Boolean)))
+            .sort(function(a, b) { return b.localeCompare(a); })
+            .map(function(value) { return { value: value, label: value }; });
+        var semesters = Array.from(new Set(rows.map(function(ev) { return ev.semester || ''; }).filter(Boolean)))
+            .sort(function(a, b) {
+                var order = { '1st': 1, '2nd': 2 };
+                return (order[a] || 99) - (order[b] || 99);
+            })
+            .map(function(value) { return { value: value, label: value }; });
+        var monthMap = {};
+        rows.forEach(function(ev) {
+            if (ev.month) monthMap[String(ev.month)] = ev.month_name || ev.month;
+        });
+        var months = Object.keys(monthMap)
+            .sort(function(a, b) { return parseInt(a, 10) - parseInt(b, 10); })
+            .map(function(value) { return { value: value, label: monthMap[value] }; });
+        var evaluatorMap = {};
+        rows.forEach(function(ev) {
+            var key = getEvalFormEvaluatorValue(ev);
+            if (key) evaluatorMap[key] = ev.evaluator || 'Unknown';
+        });
+        var evaluators = Object.keys(evaluatorMap)
+            .sort(function(a, b) { return evaluatorMap[a].localeCompare(evaluatorMap[b]); })
+            .map(function(value) { return { value: value, label: evaluatorMap[value] }; });
+
+        setEvalFormFilterOptions('evalFilterYear', years, 'All Years');
+        setEvalFormFilterOptions('evalFilterSemester', semesters, 'All Semesters');
+        setEvalFormFilterOptions('evalFilterMonth', months, 'All Months');
+        setEvalFormFilterOptions('evalFilterEvaluator', evaluators, 'All Evaluators');
+
+        var filters = document.getElementById('evalFormFilters');
+        if (filters) filters.style.display = rows.length ? 'block' : 'none';
+    }
+
+    function getFilteredEvalFormRows() {
+        var year = document.getElementById('evalFilterYear')?.value || '';
+        var semester = document.getElementById('evalFilterSemester')?.value || '';
+        var month = document.getElementById('evalFilterMonth')?.value || '';
+        var evaluator = document.getElementById('evalFilterEvaluator')?.value || '';
+        return _evalFormRows.filter(function(ev) {
+            if (year && (ev.academic_year || '') !== year) return false;
+            if (semester && (ev.semester || '') !== semester) return false;
+            if (month && String(ev.month || '') !== month) return false;
+            if (evaluator && getEvalFormEvaluatorValue(ev) !== evaluator) return false;
+            return true;
+        });
+    }
+
+    function renderEvalFormRows() {
+        var listDiv = document.getElementById('evalFormList');
+        var listBody = document.getElementById('evalFormListBody');
+        var empty = document.getElementById('evalFormEmpty');
+        var rows = getFilteredEvalFormRows();
+
+        if (!listDiv || !listBody || !empty) return;
+        empty.style.display = 'none';
+        if (!rows.length) {
+            listDiv.style.display = 'none';
+            empty.style.display = 'block';
+            empty.textContent = _evalFormRows.length ? 'No evaluations match the selected filters.' : 'No evaluations found for this teacher.';
+            return;
+        }
+
+        var html = '<div class="table-responsive"><table class="table table-bordered table-hover table-sm eval-form-table">';
+        html += '<thead><tr><th>Date</th><th>Academic Year</th><th>Semester</th><th>Subject</th><th>Evaluator</th><th>Rating</th><th>Action</th></tr></thead><tbody>';
+        rows.forEach(function(ev) {
+            html += '<tr>';
+            html += '<td>' + escapeHtml(ev.date) + '</td>';
+            html += '<td>' + escapeHtml(ev.academic_year) + '</td>';
+            html += '<td>' + escapeHtml(ev.semester) + '</td>';
+            html += '<td>' + escapeHtml(ev.subject) + '</td>';
+            html += '<td>' + escapeHtml(ev.evaluator) + '</td>';
+            html += '<td>' + escapeHtml(ev.overall_avg) + '</td>';
+            html += '<td><button class="btn btn-sm btn-primary" onclick="openEvalForm(' + parseInt(ev.id, 10) + ')"><i class="fas fa-print me-1"></i>Print</button></td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table></div>';
+        listBody.innerHTML = html;
+        listDiv.style.display = 'block';
+    }
+
+    function clearEvalFormFilters() {
+        ['evalFilterYear', 'evalFilterSemester', 'evalFilterMonth', 'evalFilterEvaluator'].forEach(function(id) {
+            var select = document.getElementById(id);
+            if (select) select.value = '';
+        });
+        renderEvalFormRows();
+    }
 
     function selectFormType(type) {
         _selectedFormType = type;
@@ -1744,6 +1944,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         document.getElementById('evalFormListBody').innerHTML = '';
         document.getElementById('evalFormEmpty').style.display = 'none';
         document.getElementById('evalFormLoading').style.display = 'block';
+        resetEvalFormFilters();
 
         fetch('../includes/get_teachers_by_form_type.php?form_type=' + encodeURIComponent(type))
             .then(function(r) { return r.json(); })
@@ -1789,6 +1990,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         document.getElementById('evalFormListBody').innerHTML = '';
         document.getElementById('evalFormEmpty').style.display = 'none';
         document.getElementById('evalFormLoading').style.display = 'none';
+        resetEvalFormFilters();
         <?php endif; ?>
     });
 
@@ -1798,6 +2000,11 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         selectFormType('iso');
     });
     <?php endif; ?>
+
+    ['evalFilterYear', 'evalFilterSemester', 'evalFilterMonth', 'evalFilterEvaluator'].forEach(function(id) {
+        var select = document.getElementById(id);
+        if (select) select.addEventListener('change', renderEvalFormRows);
+    });
 
     document.getElementById('evalFormTeacher').addEventListener('change', function() {
         var teacherId = this.value;
@@ -1809,6 +2016,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         listDiv.style.display = 'none';
         listBody.innerHTML = '';
         empty.style.display = 'none';
+        resetEvalFormFilters();
 
         if (!teacherId) return;
 
@@ -1823,22 +2031,9 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                     empty.textContent = 'No evaluations found for this teacher.';
                     return;
                 }
-                var html = '<div class="table-responsive"><table class="table table-bordered table-hover table-sm">';
-                html += '<thead><tr><th>Date</th><th>Academic Year</th><th>Semester</th><th>Subject</th><th>Evaluator</th><th>Rating</th><th>Action</th></tr></thead><tbody>';
-                data.forEach(function(ev) {
-                    html += '<tr>';
-                    html += '<td>' + escapeHtml(ev.date) + '</td>';
-                    html += '<td>' + escapeHtml(ev.academic_year) + '</td>';
-                    html += '<td>' + escapeHtml(ev.semester) + '</td>';
-                    html += '<td>' + escapeHtml(ev.subject) + '</td>';
-                    html += '<td>' + escapeHtml(ev.evaluator) + '</td>';
-                    html += '<td>' + escapeHtml(ev.overall_avg) + '</td>';
-                    html += '<td><button class="btn btn-sm btn-primary" onclick="openEvalForm(' + parseInt(ev.id) + ')"><i class="fas fa-print me-1"></i>Print</button></td>';
-                    html += '</tr>';
-                });
-                html += '</tbody></table></div>';
-                listBody.innerHTML = html;
-                listDiv.style.display = 'block';
+                _evalFormRows = data;
+                populateEvalFormFilters(_evalFormRows);
+                renderEvalFormRows();
             })
             .catch(function() {
                 loading.style.display = 'none';
@@ -1850,6 +2045,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
         var page = (_selectedFormType === 'peac') ? 'print_evaluation_form_peac.php' : 'print_evaluation_form.php';
         window.open(page + '?id=' + evalId + '&auto_print=1', '_blank');
     }
+    <?php endif; ?>
     </script>
     </div>
 </body>

@@ -25,12 +25,15 @@ $userId = $_SESSION['user_id'] ?? 0;
 $department = $_SESSION['department'] ?? '';
 
 // Build query based on role
-$query = "SELECT e.id, e.observation_date, e.observation_time, e.academic_year, e.semester, e.subject_observed,
+$query = "SELECT e.id, e.evaluator_id, e.observation_date, e.observation_time, e.academic_year, e.semester, e.subject_observed,
                  e.overall_avg, e.evaluation_form_type, e.status, u.name AS evaluator_name
           FROM evaluations e
+          JOIN teachers t ON t.id = e.teacher_id
           JOIN users u ON u.id = e.evaluator_id
           WHERE e.teacher_id = :teacher_id
-            AND e.status = 'completed'";
+            AND e.status = 'completed'
+            AND e.overall_avg IS NOT NULL
+            AND e.overall_avg > 0";
 $params = [':teacher_id' => $teacher_id];
 
 // Optional form type filter
@@ -50,8 +53,67 @@ elseif (in_array($role, ['president', 'vice_president'])) {
     $query .= " AND e.evaluator_id = :evaluator_id";
     $params[':evaluator_id'] = $userId;
 }
-// Dean/principal see only their own evaluations
-elseif (in_array($role, ['dean', 'principal'])) {
+// Dean account can print completed forms for its department, including
+// evaluations submitted by observers/evaluators requested for a scoped schedule.
+elseif ($role === 'dean') {
+    $query .= " AND (
+        e.department = :department_eval
+        OR ((e.department IS NULL OR e.department = '') AND t.department = :department_teacher)
+        OR e.evaluator_id = :evaluator_id
+        OR EXISTS (
+            SELECT 1
+            FROM teacher_assignments ta
+            JOIN evaluations src ON src.id = ta.eval_id
+            WHERE ta.evaluator_id = e.evaluator_id
+              AND src.teacher_id = e.teacher_id
+              AND COALESCE(src.academic_year, '') = COALESCE(e.academic_year, '')
+              AND COALESCE(src.semester, '') = COALESCE(e.semester, '')
+              AND DATE(src.observation_date) = DATE(e.observation_date)
+              AND COALESCE(NULLIF(LEFT(TRIM(src.observation_time), 5), ''), '00:00') = COALESCE(NULLIF(LEFT(TRIM(e.observation_time), 5), ''), '00:00')
+              AND (
+                  LOWER(COALESCE(NULLIF(src.evaluation_form_type, ''), 'iso')) = LOWER(COALESCE(NULLIF(e.evaluation_form_type, ''), 'iso'))
+                  OR LOWER(COALESCE(src.evaluation_form_type, '')) = 'both'
+              )
+              AND (
+                  src.evaluator_id = :request_src_evaluator_id_assign
+                  OR src.department = :request_department_eval_assign
+                  OR t.department = :request_teacher_department_assign
+              )
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM notifications n
+            JOIN evaluations src ON src.id = n.request_eval_id
+            WHERE n.type = 'observer_request'
+              AND n.user_id = e.evaluator_id
+              AND src.teacher_id = e.teacher_id
+              AND COALESCE(src.academic_year, '') = COALESCE(e.academic_year, '')
+              AND COALESCE(src.semester, '') = COALESCE(e.semester, '')
+              AND DATE(src.observation_date) = DATE(e.observation_date)
+              AND COALESCE(NULLIF(LEFT(TRIM(src.observation_time), 5), ''), '00:00') = COALESCE(NULLIF(LEFT(TRIM(e.observation_time), 5), ''), '00:00')
+              AND (
+                  LOWER(COALESCE(NULLIF(src.evaluation_form_type, ''), 'iso')) = LOWER(COALESCE(NULLIF(e.evaluation_form_type, ''), 'iso'))
+                  OR LOWER(COALESCE(src.evaluation_form_type, '')) = 'both'
+              )
+              AND (
+                  src.evaluator_id = :request_src_evaluator_id_notif
+                  OR src.department = :request_department_eval_notif
+                  OR t.department = :request_teacher_department_notif
+              )
+        )
+    )";
+    $params[':department_eval'] = $department;
+    $params[':department_teacher'] = $department;
+    $params[':evaluator_id'] = $userId;
+    $params[':request_src_evaluator_id_assign'] = $userId;
+    $params[':request_department_eval_assign'] = $department;
+    $params[':request_teacher_department_assign'] = $department;
+    $params[':request_src_evaluator_id_notif'] = $userId;
+    $params[':request_department_eval_notif'] = $department;
+    $params[':request_teacher_department_notif'] = $department;
+}
+// Principal and other non-dean heads keep the narrower existing scope.
+elseif ($role === 'principal') {
     $query .= " AND e.evaluator_id = :evaluator_id";
     $params[':evaluator_id'] = $userId;
 }
@@ -85,11 +147,17 @@ $results = array_values($deduped);
 // Format for display
 $output = [];
 foreach ($results as $row) {
-    $date = $row['observation_date'] ? date('M j, Y', strtotime($row['observation_date'])) : 'N/A';
+    $rawDate = trim((string)($row['observation_date'] ?? ''));
+    $dateTs = $rawDate !== '' ? strtotime($rawDate) : false;
+    $date = $dateTs ? date('M j, Y', $dateTs) : 'N/A';
     $avg = $row['overall_avg'] !== null ? number_format((float)$row['overall_avg'], 1) : 'N/A';
     $output[] = [
         'id'          => (int)$row['id'],
+        'evaluator_id' => (int)($row['evaluator_id'] ?? 0),
         'date'        => $date,
+        'date_raw'    => $rawDate,
+        'month'       => $dateTs ? date('n', $dateTs) : '',
+        'month_name'  => $dateTs ? date('F', $dateTs) : '',
         'academic_year' => $row['academic_year'] ?? '',
         'semester'    => $row['semester'] ?? '',
         'subject'     => $row['subject_observed'] ?? '',

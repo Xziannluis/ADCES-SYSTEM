@@ -40,6 +40,7 @@ if($stmt->rowCount() === 0) {
 }
 
 $evaluation = $stmt->fetch(PDO::FETCH_ASSOC);
+$can_use_evaluation_actions = ((int)($evaluation['evaluator_id'] ?? 0) === (int)($_SESSION['user_id'] ?? 0));
 
 // Get evaluation details
 $details_query = "SELECT * FROM evaluation_details 
@@ -170,7 +171,9 @@ foreach($eval_details as $detail) {
                                 <th>Recommendation/s</th>
                                 <th>Agreement</th>
                                 <th>Ratings</th>
+                                <?php if ($can_use_evaluation_actions): ?>
                                 <th class="no-print text-center">Action</th>
+                                <?php endif; ?>
                             </tr>
                         </thead>
                         <tbody>
@@ -183,6 +186,7 @@ foreach($eval_details as $detail) {
                                 <td><?php if(!empty($recommendations)): ?><ul><?php foreach($recommendations as $r){ ?><li><?php echo $r; ?></li><?php } ?></ul><?php else: ?><em>No specific recommendations provided.</em><?php endif; ?></td>
                                 <td><?php if(!empty($agreements)): ?><ul><?php foreach($agreements as $ag){ ?><li><?php echo $ag; ?></li><?php } ?></ul><?php else: ?><em>No specific agreements recorded.</em><?php endif; ?></td>
                                 <td style="white-space:nowrap;"><?php echo htmlspecialchars(number_format($evaluation['overall_avg'],1)) . ' ' . $rating_text; ?></td>
+                                <?php if ($can_use_evaluation_actions): ?>
                                 <td class="no-print text-center" style="white-space:nowrap; vertical-align:top;">
                                     <a href="<?php echo (($evaluation['evaluation_form_type'] ?? 'iso') === 'peac') ? 'view_evaluation_peac.php' : 'view_evaluation.php'; ?>?id=<?php echo (int)$_GET['eval_id']; ?>" class="btn btn-sm btn-info me-1">
                                         <i class="fas fa-eye me-1"></i> View
@@ -191,6 +195,7 @@ foreach($eval_details as $detail) {
                                         <i class="fas fa-print me-1"></i> Print
                                     </a>
                                 </td>
+                                <?php endif; ?>
                             </tr>
                         </tbody>
                     </table>
