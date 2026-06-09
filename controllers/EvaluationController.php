@@ -79,6 +79,7 @@ class EvaluationController {
     private $aiController;
 
     private const EVALUATION_TIMEZONE = 'Asia/Manila';
+    private const CLOSED_SCHEDULE_RESET_GRACE_MINUTES = 30;
     private const SIGNATURE_DATAURL_PATTERN = '/^data:image\/png;base64,[A-Za-z0-9+\/=]+$/';
     private $reusedEvaluationId = 0;
     private $criterionCountCache = null;
@@ -123,9 +124,29 @@ class EvaluationController {
         return $this->hasAcceptedObserverAssignment($teacherId, $evaluatorId);
     }
 
-    private function buildScheduleGate(?string $scheduleVal, ?string $roomVal): array {
+    private function isSchedulePastRequiredGrace(?string $scheduleEndVal, DateTime $now, DateTimeZone $timezone): bool {
+        $scheduleEndVal = is_string($scheduleEndVal) ? trim($scheduleEndVal) : '';
+        if ($scheduleEndVal === '') {
+            return false;
+        }
+
+        try {
+            $scheduleEnd = new DateTime($scheduleEndVal, $timezone);
+            $scheduleEnd->setTimezone($timezone);
+        } catch (Exception $e) {
+            return false;
+        }
+
+        $resetAt = clone $scheduleEnd;
+        $resetAt->modify('+' . self::CLOSED_SCHEDULE_RESET_GRACE_MINUTES . ' minutes');
+
+        return $now >= $resetAt;
+    }
+
+    private function buildScheduleGate(?string $scheduleVal, ?string $roomVal, ?string $scheduleEndVal = null): array {
         $scheduleVal = is_string($scheduleVal) ? trim($scheduleVal) : '';
         $roomVal = is_string($roomVal) ? trim($roomVal) : '';
+        $scheduleEndVal = is_string($scheduleEndVal) ? trim($scheduleEndVal) : '';
 
         if ($scheduleVal === '' && $roomVal === '') {
             return [
@@ -145,10 +166,21 @@ class EvaluationController {
             ];
         }
 
+        if ($scheduleEndVal === '') {
+            return [
+                'scheduled' => true,
+                'allowed' => false,
+                'reason' => 'missing_end_time',
+                'message' => 'Cannot submit evaluation yet: a complete schedule with start and end time is required.',
+            ];
+        }
+
         try {
             $timezone = new DateTimeZone(self::EVALUATION_TIMEZONE);
             $scheduledAt = new DateTime($scheduleVal, $timezone);
             $scheduledAt->setTimezone($timezone);
+            $scheduleEnd = new DateTime($scheduleEndVal, $timezone);
+            $scheduleEnd->setTimezone($timezone);
             $now = new DateTime('now', $timezone);
         } catch (Exception $e) {
             error_log('Invalid evaluation schedule for teacher gating: ' . $e->getMessage());
@@ -160,12 +192,39 @@ class EvaluationController {
             ];
         }
 
+        if ($scheduleEnd < $scheduledAt) {
+            return [
+                'scheduled' => true,
+                'allowed' => false,
+                'reason' => 'invalid_datetime',
+                'message' => 'Cannot submit evaluation: the evaluation schedule end time is earlier than the start time. Please ask the dean/principal to reschedule it.',
+            ];
+        }
+
         if ($now < $scheduledAt) {
             return [
                 'scheduled' => true,
                 'allowed' => false,
                 'reason' => 'too_early',
                 'message' => 'Cannot submit evaluation yet. Evaluation opens on ' . $scheduledAt->format('F d, Y \a\t h:i A') . '.',
+            ];
+        }
+
+        if ($now > $scheduleEnd) {
+            if ($this->isSchedulePastRequiredGrace($scheduleEndVal, $now, $timezone)) {
+                return [
+                    'scheduled' => false,
+                    'allowed' => false,
+                    'reason' => 'missing_schedule',
+                    'message' => 'Cannot submit evaluation: no evaluation schedule is set for this teacher.',
+                ];
+            }
+
+            return [
+                'scheduled' => true,
+                'allowed' => false,
+                'reason' => 'deadline_passed',
+                'message' => 'Cannot submit evaluation: the evaluation deadline has passed. No further changes are allowed.',
             ];
         }
 
@@ -180,6 +239,7 @@ class EvaluationController {
     private function resolveEffectiveScheduleForEvaluator(int $teacherId, int $evaluatorId, string $evaluatorRole = '', string $evaluatorDept = ''): array {
         $fallback = [
             'schedule' => null,
+            'schedule_end' => null,
             'room' => null,
             'semester' => null,
             'academic_year' => null,
@@ -187,17 +247,28 @@ class EvaluationController {
 
         try {
             $stmt = $this->db->prepare(
-                "SELECT observation_date, observation_time, observation_room, semester, academic_year, subject_observed, subject_area, evaluation_focus, department
-                 FROM evaluations
-                 WHERE teacher_id = :tid
-                   AND evaluator_id = :eid
-                   AND observation_date IS NOT NULL
+                "SELECT e.observation_date, e.observation_time, e.observation_room, e.semester, e.academic_year,
+                        e.subject_observed, e.subject_area, e.evaluation_focus, e.department,
+                        COALESCE(ts.schedule_end, ts_slot.schedule_end) AS schedule_end
+                 FROM evaluations e
+                 LEFT JOIN teacher_schedules ts ON ts.evaluation_id = e.id
+                 LEFT JOIN teacher_schedules ts_slot ON ts_slot.teacher_id = e.teacher_id
+                    AND DATE(ts_slot.schedule_start) = e.observation_date
+                    AND DATE_FORMAT(ts_slot.schedule_start, '%H:%i') = (
+                        CASE
+                            WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                            ELSE LEFT(TRIM(e.observation_time), 5)
+                        END
+                    )
+                 WHERE e.teacher_id = :tid
+                   AND e.evaluator_id = :eid
+                   AND e.observation_date IS NOT NULL
                    AND (
-                        status IN ('draft','pending','observer_unbalanced')
-                        OR status IS NULL
-                        OR status = ''
-                   )
-                 ORDER BY observation_date ASC, COALESCE(observation_time, '00:00:00') ASC, id ASC"
+                        e.status IN ('draft','pending','observer_unbalanced')
+                        OR e.status IS NULL
+                        OR e.status = ''
+                    )
+                  ORDER BY e.observation_date ASC, COALESCE(e.observation_time, '00:00:00') ASC, e.id ASC"
             );
             $stmt->execute([':tid' => $teacherId, ':eid' => $evaluatorId]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -209,6 +280,7 @@ class EvaluationController {
             foreach ($rows as $r) {
                 $d = trim((string)($r['observation_date'] ?? ''));
                 if ($d === '') continue;
+                if ($this->isSchedulePastRequiredGrace($r['schedule_end'] ?? null, $now, $tz)) continue;
                 $t = trim((string)($r['observation_time'] ?? ''));
                 if ($t === '' || $t === '00:00') $t = '00:00:00';
                 $dtCandidate = new DateTime($d . ' ' . $t, $tz);
@@ -226,11 +298,22 @@ class EvaluationController {
             // accepted as observer.
             if ($row === null && in_array($evaluatorRole, ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator'], true) && trim($evaluatorDept) !== '') {
                 $stmtAny = $this->db->prepare(
-                    "SELECT e.observation_date, e.observation_time, e.observation_room, e.semester, e.academic_year, e.subject_observed, e.subject_area, e.evaluation_focus, e.department
+                    "SELECT e.observation_date, e.observation_time, e.observation_room, e.semester, e.academic_year,
+                            e.subject_observed, e.subject_area, e.evaluation_focus, e.department,
+                            COALESCE(ts.schedule_end, ts_slot.schedule_end) AS schedule_end
                      FROM evaluations e
                      INNER JOIN teachers t ON t.id = e.teacher_id
-                     WHERE e.teacher_id = :tid
-                       AND e.observation_date IS NOT NULL
+                     LEFT JOIN teacher_schedules ts ON ts.evaluation_id = e.id
+                     LEFT JOIN teacher_schedules ts_slot ON ts_slot.teacher_id = e.teacher_id
+                        AND DATE(ts_slot.schedule_start) = e.observation_date
+                        AND DATE_FORMAT(ts_slot.schedule_start, '%H:%i') = (
+                            CASE
+                                WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                ELSE LEFT(TRIM(e.observation_time), 5)
+                            END
+                        )
+                      WHERE e.teacher_id = :tid
+                        AND e.observation_date IS NOT NULL
                        AND (
                             e.status IN ('draft','pending','observer_unbalanced')
                             OR e.status IS NULL
@@ -268,6 +351,7 @@ class EvaluationController {
                 foreach ($rowsAny as $rAny) {
                     $dAny = trim((string)($rAny['observation_date'] ?? ''));
                     if ($dAny === '') continue;
+                    if ($this->isSchedulePastRequiredGrace($rAny['schedule_end'] ?? null, $now, $tz)) continue;
                     $tAny = trim((string)($rAny['observation_time'] ?? ''));
                     if ($tAny === '' || $tAny === '00:00') $tAny = '00:00:00';
                     $dtAny = new DateTime($dAny . ' ' . $tAny, $tz);
@@ -283,6 +367,7 @@ class EvaluationController {
             if ($row === null || $dt === null) return $fallback;
             return [
                 'schedule' => $dt->format('Y-m-d H:i:s'),
+                'schedule_end' => trim((string)($row['schedule_end'] ?? '')),
                 'room' => trim((string)($row['observation_room'] ?? '')),
                 'semester' => trim((string)($row['semester'] ?? '')),
                 'academic_year' => trim((string)($row['academic_year'] ?? '')),
@@ -458,8 +543,16 @@ class EvaluationController {
                 (string)($evaluatorDept ?? '')
             );
             $scheduleVal = $effectiveSchedule['schedule'] ?? null;
+            $scheduleEndVal = $effectiveSchedule['schedule_end'] ?? null;
             $roomVal = $effectiveSchedule['room'] ?? null;
             $effectiveDept = trim((string)($effectiveSchedule['department'] ?? ''));
+            if (($scheduleVal || $roomVal) && empty($scheduleEndVal)) {
+                try {
+                    $endFallbackStmt = $this->db->prepare("SELECT evaluation_schedule_end FROM teachers WHERE id = :id LIMIT 1");
+                    $endFallbackStmt->execute([':id' => (int)$teacherId]);
+                    $scheduleEndVal = $endFallbackStmt->fetchColumn() ?: null;
+                } catch (Exception $e) {}
+            }
             if (($scheduleVal || $roomVal) && $effectiveDept === '') {
                 try {
                     $deptOwnerStmt = $this->db->prepare("SELECT COALESCE(NULLIF(scheduled_department, ''), department) FROM teachers WHERE id = :id LIMIT 1");
@@ -477,7 +570,7 @@ class EvaluationController {
             if (empty($scheduleVal) && empty($roomVal)) {
                 // Fallback to legacy teacher snapshot when no pending evaluator slot exists.
                 $scheduleStmt = $this->db->prepare(
-                    "SELECT evaluation_schedule, evaluation_room, scheduled_department, department FROM teachers WHERE id = :id LIMIT 1"
+                    "SELECT evaluation_schedule, evaluation_schedule_end, evaluation_room, scheduled_department, department FROM teachers WHERE id = :id LIMIT 1"
                 );
                 $scheduleStmt->bindValue(':id', $teacherId);
                 $scheduleStmt->execute();
@@ -488,13 +581,16 @@ class EvaluationController {
                 }
                 if ($this->canUseScheduleDepartment((int)$teacherId, (int)$evaluatorId, (string)$evaluatorRole, (string)($evaluatorDept ?? ''), $fallbackDept)) {
                     $scheduleVal = $t['evaluation_schedule'] ?? null;
+                    $scheduleEndVal = $t['evaluation_schedule_end'] ?? null;
                     $roomVal = $t['evaluation_room'] ?? null;
+                    $effectiveDept = $fallbackDept;
                 }
             }
 
             $scheduleGate = $this->buildScheduleGate(
                 isset($scheduleVal) ? (string)$scheduleVal : null,
-                isset($roomVal) ? (string)$roomVal : null
+                isset($roomVal) ? (string)$roomVal : null,
+                isset($scheduleEndVal) ? (string)$scheduleEndVal : null
             );
             if (!$scheduleGate['allowed'] && !in_array($evaluatorRole, ['president', 'vice_president'])) {
                 throw new Exception($scheduleGate['message']);
@@ -529,6 +625,9 @@ class EvaluationController {
             }
             if (empty($postData['academic_year']) && !empty($effectiveSchedule['academic_year'])) {
                 $postData['academic_year'] = (string)$effectiveSchedule['academic_year'];
+            }
+            if ($effectiveDept !== '') {
+                $postData['department'] = $effectiveDept;
             }
 
             $balanceDate = trim((string)($postData['observation_date'] ?? ''));
@@ -705,13 +804,14 @@ class EvaluationController {
                  WHERE evaluator_id = :eid
                    AND teacher_id = :tid
                    AND evaluation_form_type = :ft
-                   AND academic_year = :ay
-                   AND semester = :sem
-                   AND observation_date = :obs_date
-                   AND COALESCE(observation_time, '') = COALESCE(:obs_time, '')
-                   AND status = 'completed'
-                 ORDER BY id DESC
-                 LIMIT 1"
+                    AND academic_year = :ay
+                    AND semester = :sem
+                    AND observation_date = :obs_date
+                    AND COALESCE(observation_time, '') = COALESCE(:obs_time, '')
+                    AND COALESCE(department, '') = COALESCE(:dept, '')
+                    AND status = 'completed'
+                  ORDER BY id DESC
+                  LIMIT 1"
             );
             $dupeStmt->bindValue(':eid', $evaluatorId);
             $dupeStmt->bindValue(':tid', $teacher_id);
@@ -720,6 +820,7 @@ class EvaluationController {
             $dupeStmt->bindValue(':sem', $semester);
             $dupeStmt->bindValue(':obs_date', $observation_date);
             $dupeStmt->bindValue(':obs_time', $observation_time);
+            $dupeStmt->bindValue(':dept', $department);
             $dupeStmt->execute();
             $existingEvalId = (int)($dupeStmt->fetchColumn() ?: 0);
             if ($existingEvalId > 0) {
@@ -738,12 +839,14 @@ class EvaluationController {
                  WHERE evaluator_id = :eid
                    AND teacher_id = :tid
                    AND evaluation_form_type = :ft
-                   AND academic_year = :ay
-                   AND semester = :sem
-                   AND observation_date = :obs_date
-                   AND (status IN ('draft','pending','observer_unbalanced') OR status IS NULL OR status = '')
-                 ORDER BY id DESC
-                 LIMIT 1"
+                    AND academic_year = :ay
+                    AND semester = :sem
+                    AND observation_date = :obs_date
+                    AND COALESCE(observation_time, '') = COALESCE(:obs_time, '')
+                    AND COALESCE(department, '') = COALESCE(:dept, '')
+                    AND (status IN ('draft','pending','observer_unbalanced') OR status IS NULL OR status = '')
+                  ORDER BY id DESC
+                  LIMIT 1"
             );
             $slotStmt->bindValue(':eid', $evaluatorId);
             $slotStmt->bindValue(':tid', $teacher_id);
@@ -751,6 +854,8 @@ class EvaluationController {
             $slotStmt->bindValue(':ay', $academic_year);
             $slotStmt->bindValue(':sem', $semester);
             $slotStmt->bindValue(':obs_date', $observation_date);
+            $slotStmt->bindValue(':obs_time', $observation_time);
+            $slotStmt->bindValue(':dept', $department);
             $slotStmt->execute();
             $slotDraftId = (int)($slotStmt->fetchColumn() ?: 0);
         }

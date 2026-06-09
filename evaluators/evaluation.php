@@ -37,6 +37,27 @@ require_once '../models/Evaluation.php';
 require_once '../controllers/EvaluationController.php';
 require_once '../includes/program_assignments.php';
 
+$closed_schedule_reset_after_minutes = 30;
+
+function isSchedulePastClosedGrace($scheduleEndRaw, DateTime $now, DateTimeZone $timezone, int $graceMinutes): bool {
+    $scheduleEndRaw = trim((string)$scheduleEndRaw);
+    if ($scheduleEndRaw === '') {
+        return false;
+    }
+
+    try {
+        $scheduleEnd = new DateTime($scheduleEndRaw, $timezone);
+        $scheduleEnd->setTimezone($timezone);
+    } catch (Exception $e) {
+        return false;
+    }
+
+    $resetAt = clone $scheduleEnd;
+    $resetAt->modify('+' . max(0, $graceMinutes) . ' minutes');
+
+    return $now >= $resetAt;
+}
+
 // Load form settings from database
 $_formSettings = [];
 try {
@@ -1049,6 +1070,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         foreach ($pendingRows as $pr) {
                                             $od = trim((string)($pr['observation_date'] ?? ''));
                                             if ($od === '') continue;
+                                            if (isSchedulePastClosedGrace($pr['schedule_end'] ?? '', $now_eval, $tz_eval, $closed_schedule_reset_after_minutes)) continue;
                                             $ot = trim((string)($pr['observation_time'] ?? ''));
                                             if ($ot === '' || $ot === '00:00:00') $ot = '00:00:00';
                                             $dtRaw = $od . ' ' . $ot;
@@ -1090,6 +1112,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         foreach ($anyRows as $pr) {
                                             $od = trim((string)($pr['observation_date'] ?? ''));
                                             if ($od === '') continue;
+                                            if (isSchedulePastClosedGrace($pr['schedule_end'] ?? '', $now_eval, $tz_eval, $closed_schedule_reset_after_minutes)) continue;
                                             $ot = trim((string)($pr['observation_time'] ?? ''));
                                             if ($ot === '' || $ot === '00:00:00') $ot = '00:00:00';
                                             $dtObj = new DateTime($od . ' ' . $ot, $tz_eval);
@@ -1128,6 +1151,7 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         foreach ($scheduleRows as $sr) {
                                             $od = trim((string)($sr['observation_date'] ?? ''));
                                             if ($od === '') continue;
+                                            if (isSchedulePastClosedGrace($sr['schedule_end'] ?? '', $now_eval, $tz_eval, $closed_schedule_reset_after_minutes)) continue;
                                             $ot = trim((string)($sr['observation_time'] ?? ''));
                                             if ($ot === '' || $ot === '00:00:00') $ot = '00:00:00';
                                             $dtObj = new DateTime($od . ' ' . $ot, $tz_eval);
@@ -1211,13 +1235,18 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                     $scheduleEndRaw = $teacher_row['evaluation_schedule_end'] ?? '';
                                     $scheduleEndRawEffective = (string)$scheduleEndRaw;
                                     $schedule_ended = false;
+                                    $schedule_reverts_to_required = false;
                                     
                                     if (!empty($scheduleEndRaw)) {
                                         $scheduleEnd = new DateTime($scheduleEndRaw, $timezone);
                                         $scheduleEnd->setTimezone($timezone);
                                         $schedule_is_complete = true;
                                         if ($now > $scheduleEnd) {
-                                            $schedule_ended = true;
+                                            if (isSchedulePastClosedGrace($scheduleEndRaw, $now, $timezone, $closed_schedule_reset_after_minutes)) {
+                                                $schedule_reverts_to_required = true;
+                                            } else {
+                                                $schedule_ended = true;
+                                            }
                                         }
                                     }
                                     
@@ -1226,6 +1255,18 @@ if($_POST && isset($_POST['submit_evaluation'])) {
                                         $schedule_badge_class = 'bg-secondary';
                                         $schedule_badge_text = 'Schedule required';
                                         $schedule_block_message = 'A complete schedule with start and end time is required before evaluation can proceed.';
+                                    } elseif ($schedule_reverts_to_required) {
+                                        $scheduleRaw = '';
+                                        $scheduleRoom = '';
+                                        $has_schedule = false;
+                                        $can_evaluate_now = false;
+                                        $schedule_is_complete = false;
+                                        $schedule_badge_class = 'bg-secondary';
+                                        $schedule_badge_text = 'Schedule required';
+                                        $schedule_display = '';
+                                        $scheduleEndRawEffective = '';
+                                        $schedule_message = 'No schedule set';
+                                        $schedule_block_message = 'No schedule is set. Please ask the dean/principal to set one first.';
                                     } elseif ($schedule_ended) {
                                         // Schedule end time has passed - evaluation window closed
                                         $can_evaluate_now = false;

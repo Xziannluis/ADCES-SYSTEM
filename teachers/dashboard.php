@@ -156,9 +156,70 @@ if (!empty($filter_department)) {
     $params[':department'] = $filter_department;
 }
 
-$query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, u.department as evaluator_department
+$query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, u.department as evaluator_department,
+                 COALESCE(
+                    (
+                        SELECT NULLIF(ts.scheduled_department, '')
+                        FROM teacher_schedules ts
+                        WHERE ts.evaluation_id = e.id
+                        ORDER BY ts.id DESC
+                        LIMIT 1
+                    ),
+                    (
+                        SELECT NULLIF(ts2.scheduled_department, '')
+                        FROM teacher_schedules ts2
+                        WHERE ts2.teacher_id = e.teacher_id
+                          AND DATE(ts2.schedule_start) = e.observation_date
+                          AND DATE_FORMAT(ts2.schedule_start, '%H:%i') = (
+                              CASE
+                                  WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                  ELSE LEFT(TRIM(e.observation_time), 5)
+                              END
+                          )
+                        ORDER BY ts2.id DESC
+                        LIMIT 1
+                    ),
+                    NULLIF(e.department, ''),
+                    NULLIF(u.department, '')
+                 ) AS schedule_department,
+                 COALESCE(
+                    (
+                        SELECT ts.schedule_end
+                        FROM teacher_schedules ts
+                        WHERE ts.evaluation_id = e.id
+                        ORDER BY ts.id DESC
+                        LIMIT 1
+                    ),
+                    (
+                        SELECT ts2.schedule_end
+                        FROM teacher_schedules ts2
+                        WHERE ts2.teacher_id = e.teacher_id
+                          AND DATE(ts2.schedule_start) = e.observation_date
+                          AND DATE_FORMAT(ts2.schedule_start, '%H:%i') = (
+                              CASE
+                                  WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                  ELSE LEFT(TRIM(e.observation_time), 5)
+                              END
+                          )
+                        ORDER BY ts2.id DESC
+                        LIMIT 1
+                    ),
+                    CASE
+                        WHEN t.evaluation_schedule IS NOT NULL
+                          AND DATE(t.evaluation_schedule) = e.observation_date
+                          AND DATE_FORMAT(t.evaluation_schedule, '%H:%i') = (
+                              CASE
+                                  WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                  ELSE LEFT(TRIM(e.observation_time), 5)
+                              END
+                          )
+                        THEN t.evaluation_schedule_end
+                        ELSE NULL
+                    END
+                 ) AS schedule_end_at
           FROM evaluations e
           JOIN users u ON e.evaluator_id = u.id
+          LEFT JOIN teachers t ON t.id = e.teacher_id
           WHERE " . implode(' AND ', $where_clauses) . "
           ORDER BY e.created_at DESC";
 $stmt = $db->prepare($query);
@@ -188,6 +249,29 @@ $normalize_schedule_time = static function($value): string {
     return $value;
 };
 
+$is_schedule_past_cutoff = static function($row): bool {
+    $cutoffRaw = trim((string)($row['schedule_end_at'] ?? ''));
+    if ($cutoffRaw === '') {
+        $obsDate = trim((string)($row['observation_date'] ?? ''));
+        $obsTime = trim((string)($row['observation_time'] ?? ''));
+        if ($obsDate !== '' && $obsTime !== '') {
+            $cutoffRaw = $obsDate . ' ' . $obsTime;
+        }
+    }
+    if ($cutoffRaw === '') {
+        return false;
+    }
+    try {
+        $tz = new DateTimeZone('Asia/Manila');
+        $cutoffAt = new DateTime($cutoffRaw, $tz);
+        $cutoffAt->setTimezone($tz);
+        $nowAt = new DateTime('now', $tz);
+        return $nowAt > $cutoffAt;
+    } catch (Exception $e) {
+        return false;
+    }
+};
+
 // Group evaluations by schedule slot. Different departments on the same date
 // must stay as separate cards for multi-department teachers.
 $display_evaluations = [];
@@ -201,7 +285,7 @@ try {
         $dateKey = date('Y-m-d', strtotime($obs_date));
         $timeKey = $normalize_schedule_time($row['observation_time'] ?? '');
         $subjectKey = $normalize_subject_slot((string)($row['subject_observed'] ?? ''));
-        $departmentKey = trim((string)($row['department'] ?? $row['evaluator_department'] ?? ''));
+        $departmentKey = trim((string)($row['schedule_department'] ?? $row['department'] ?? $row['evaluator_department'] ?? ''));
         $slotKey = implode('|', [
             $dateKey,
             $timeKey,
@@ -235,6 +319,7 @@ try {
         $expected_observer_names = [];
         $group_eval_ids = [];
         $pending_count = 0;
+        $slot_closed = false;
         
         foreach ($evals_for_date as $eval) {
             $eval_id = (int)($eval['id'] ?? 0);
@@ -261,6 +346,9 @@ try {
                 }
             } else {
                 $pending_count++;
+                if ($is_schedule_past_cutoff($eval)) {
+                    $slot_closed = true;
+                }
             }
         }
 
@@ -303,7 +391,15 @@ try {
         // Create merged card that shows date and observer count
         $merged_eval = $base;
         $merged_eval['observation_date'] = $dateKey;
-        $merged_eval['status'] = $has_observer_unbalanced ? 'observer_unbalanced' : (($expected_count > 0 && $completed_count >= $expected_count) ? 'completed' : ($has_completed ? 'completed' : 'pending'));
+        if ($has_observer_unbalanced) {
+            $merged_eval['status'] = 'observer_unbalanced';
+        } elseif (($expected_count > 0 && $completed_count >= $expected_count) || $has_completed) {
+            $merged_eval['status'] = 'completed';
+        } elseif ($slot_closed) {
+            $merged_eval['status'] = 'closed';
+        } else {
+            $merged_eval['status'] = 'pending';
+        }
         $merged_eval['evaluator_names'] = [];
         $merged_eval['evaluator_count'] = $expected_count;
         $merged_eval['completed_count'] = $completed_count;
@@ -425,6 +521,7 @@ if (empty($display_evaluations)) {
         }
         .badge-pending { background: #fff3cd; color: #856404; }
         .badge-completed { background: #d4edda; color: #155724; }
+        .badge-closed { background: #f8d7da; color: #842029; }
     </style>
 </head>
 <body>
@@ -612,19 +709,24 @@ if (empty($display_evaluations)) {
 
                 <?php if(count($display_evaluations) > 0): ?>
                     <?php foreach($display_evaluations as $eval): ?>
+                    <?php $evalStatus = strtolower(trim((string)($eval['status'] ?? ''))); ?>
                     <div class="evaluation-card">
                         <div class="row align-items-center">
                             <div class="col-md-8">
                                 <h6 class="card-title">
                                     <i class="fas fa-calendar me-2"></i>Observation Date: <?php echo date('F d, Y', strtotime($eval['observation_date'])); ?>
                                     <span class="ms-2">
-                                        <?php if($eval['status'] === 'completed'): ?>
+                                        <?php if($evalStatus === 'completed'): ?>
                                             <span class="badge-status badge-completed">
                                                 <i class="fas fa-check-circle me-1"></i>Completed
                                             </span>
-                                        <?php elseif($eval['status'] === 'observer_unbalanced'): ?>
+                                        <?php elseif($evalStatus === 'observer_unbalanced'): ?>
                                             <span class="badge bg-danger">
                                                 <i class="fas fa-exclamation-triangle me-1"></i>Observer Imbalance
+                                            </span>
+                                        <?php elseif($evalStatus === 'closed'): ?>
+                                            <span class="badge-status badge-closed">
+                                                <i class="fas fa-times-circle me-1"></i>Closed
                                             </span>
                                         <?php else: ?>
                                             <span class="badge-status badge-pending">
@@ -636,8 +738,10 @@ if (empty($display_evaluations)) {
                                 <p class="text-muted mb-2">
                                     <i class="fas fa-users me-2"></i>
                                     <?php 
-                                        if ($eval['status'] === 'observer_unbalanced') {
+                                        if ($evalStatus === 'observer_unbalanced') {
                                             echo 'Evaluation cannot proceed until another observer is assigned.';
+                                        } elseif ($evalStatus === 'closed') {
+                                            echo 'Schedule ended with no completed evaluation form.';
                                         } elseif ($eval['completed_count'] > 0) {
                                             echo $eval['completed_count'] . ' of ' . $eval['evaluator_count'] . ' evaluations completed';
                                         } else {
@@ -648,10 +752,14 @@ if (empty($display_evaluations)) {
                                 
                             </div>
                             <div class="col-md-4 text-md-end">
-                                <?php if($eval['status'] === 'completed' && !empty($eval['observation_date'])): ?>
+                                <?php if($evalStatus === 'completed' && !empty($eval['observation_date'])): ?>
                                 <a href="view-evaluation.php?eval_id=<?php echo (int)($eval['_anchor_eval_id'] ?? $eval['id'] ?? 0); ?>" class="btn-view">
                                     <i class="fas fa-eye me-2"></i>View 
                                 </a>
+                                <?php elseif($evalStatus === 'closed'): ?>
+                                <span class="text-muted">
+                                    <i class="fas fa-calendar-times me-2"></i>Schedule Ended
+                                </span>
                                 <?php else: ?>
                                 <span class="text-muted">
                                     <i class="fas fa-hourglass-half me-2"></i>Awaiting Completion

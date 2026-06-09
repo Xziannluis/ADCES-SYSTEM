@@ -162,6 +162,7 @@ if ($formType !== 'peac' && $formType !== 'both') {
 $can_evaluate = false;
 $schedule_message = '';
 $schedule_alert_class = 'alert-warning';
+$closed_schedule_reset_after_seconds = 30 * 60;
 
 if (!empty($scheduleRaw)) {
     $schedTs = strtotime($scheduleRaw);
@@ -176,8 +177,13 @@ if (!empty($scheduleRaw)) {
         $schedule_message = "Scheduled for " . date('M d, Y g:i A', $schedTs) . ". You can evaluate at or after this time.";
         $schedule_alert_class = 'alert-warning';
     } elseif ($schedEndTs !== false && $now > $schedEndTs) {
-        $schedule_message = "The evaluation deadline has passed. No further changes are allowed.";
-        $schedule_alert_class = 'alert-danger';
+        if ($now >= ($schedEndTs + $closed_schedule_reset_after_seconds)) {
+            $schedule_message = "No schedule set for this teacher.";
+            $schedule_alert_class = 'alert-warning';
+        } else {
+            $schedule_message = "The evaluation deadline has passed. No further changes are allowed.";
+            $schedule_alert_class = 'alert-danger';
+        }
     } else {
         $can_evaluate = true;
     }

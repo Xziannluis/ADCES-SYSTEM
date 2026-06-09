@@ -206,6 +206,22 @@ $report_department = $is_teacher_report ? '' : $raw_department;
 $evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', '', null, $report_scope_observer_id);
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
+$format_subject_class_schedule = static function($subject): string {
+    $subject = trim((string)$subject);
+    if ($subject === '') {
+        return 'N/A';
+    }
+
+    $clean = preg_replace(
+        '/\s+(?:\d{1,2}:\d{2}\s*(?:AM|PM)\s*(?:-\s*\d{1,2}:\d{2}\s*(?:AM|PM)?)?|\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*(?:AM|PM))\s*$/i',
+        '',
+        $subject
+    );
+    $clean = trim((string)$clean);
+
+    return $clean !== '' ? $clean : 'N/A';
+};
+
 if ($selected_evaluation_id > 0 && !empty($evaluations)) {
     $selectedEvaluation = null;
     foreach ($evaluations as $evaluationRow) {
@@ -266,6 +282,10 @@ $format_day_time = static function(array $eval): string {
     }
     if ($end === '' && $teacherSchedEnd !== '' && strtotime($teacherSchedEnd) !== false) {
         $end = date('g:i A', strtotime($teacherSchedEnd));
+    }
+    if (preg_match('/(\d{1,2}:\d{2}\s*(?:AM|PM))(?:\s*-\s*(\d{1,2}:\d{2}\s*(?:AM|PM)))?/i', $subjectObserved, $m)) {
+        if ($start === '' && !empty($m[1])) $start = strtoupper(trim($m[1]));
+        if ($end === '' && !empty($m[2])) $end = strtoupper(trim($m[2]));
     }
     if ($start !== '' && $end !== '') return $day . '<br>' . $start . ' - ' . $end;
     if ($start !== '') return $day . '<br>' . $start;
@@ -721,7 +741,7 @@ foreach ($evaluations as $evaluationRow) {
                     <td><?php echo date('M. j, Y', strtotime($eval['observation_date'])); ?></td>
                     <td><?php echo htmlspecialchars($eval['teacher_name']); ?></td>
                     <td>
-                        <?php echo htmlspecialchars($eval['subject_observed']); ?>
+                        <?php echo htmlspecialchars($format_subject_class_schedule($eval['subject_observed'] ?? '')); ?>
                         <br><small><?php echo $format_day_time($eval); ?></small>
                         <?php if (!empty($eval['observation_type']) && strtolower($eval['observation_type']) !== 'formal'): ?>
                             <br><small><?php echo htmlspecialchars($eval['observation_type']); ?> Observation</small>

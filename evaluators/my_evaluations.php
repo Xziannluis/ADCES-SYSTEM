@@ -39,9 +39,70 @@ if ($teacher_data) {
         $params[':obs_month'] = (int) $filter_month;
     }
 
-    $query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role 
+    $query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role,
+                     COALESCE(
+                        (
+                            SELECT NULLIF(ts.scheduled_department, '')
+                            FROM teacher_schedules ts
+                            WHERE ts.evaluation_id = e.id
+                            ORDER BY ts.id DESC
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT NULLIF(ts2.scheduled_department, '')
+                            FROM teacher_schedules ts2
+                            WHERE ts2.teacher_id = e.teacher_id
+                              AND DATE(ts2.schedule_start) = e.observation_date
+                              AND DATE_FORMAT(ts2.schedule_start, '%H:%i') = (
+                                  CASE
+                                      WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                      ELSE LEFT(TRIM(e.observation_time), 5)
+                                  END
+                              )
+                            ORDER BY ts2.id DESC
+                            LIMIT 1
+                        ),
+                        NULLIF(e.department, ''),
+                        NULLIF(u.department, '')
+                     ) AS schedule_department,
+                     COALESCE(
+                        (
+                            SELECT ts.schedule_end
+                            FROM teacher_schedules ts
+                            WHERE ts.evaluation_id = e.id
+                            ORDER BY ts.id DESC
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT ts2.schedule_end
+                            FROM teacher_schedules ts2
+                            WHERE ts2.teacher_id = e.teacher_id
+                              AND DATE(ts2.schedule_start) = e.observation_date
+                              AND DATE_FORMAT(ts2.schedule_start, '%H:%i') = (
+                                  CASE
+                                      WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                      ELSE LEFT(TRIM(e.observation_time), 5)
+                                  END
+                              )
+                            ORDER BY ts2.id DESC
+                            LIMIT 1
+                        ),
+                        CASE
+                            WHEN t.evaluation_schedule IS NOT NULL
+                              AND DATE(t.evaluation_schedule) = e.observation_date
+                              AND DATE_FORMAT(t.evaluation_schedule, '%H:%i') = (
+                                  CASE
+                                      WHEN e.observation_time IS NULL OR TRIM(e.observation_time) = '' THEN '00:00'
+                                      ELSE LEFT(TRIM(e.observation_time), 5)
+                                  END
+                              )
+                            THEN t.evaluation_schedule_end
+                            ELSE NULL
+                        END
+                     ) AS schedule_end_at
               FROM evaluations e
               JOIN users u ON e.evaluator_id = u.id
+              LEFT JOIN teachers t ON t.id = e.teacher_id
               WHERE " . implode(' AND ', $where_clauses) . "
               ORDER BY e.created_at DESC";
     $stmt = $db->prepare($query);
@@ -50,6 +111,14 @@ if ($teacher_data) {
     }
     $stmt->execute();
     $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $resolve_schedule_department = static function($row): string {
+        $dept = trim((string)($row['schedule_department'] ?? ''));
+        if ($dept === '') {
+            $dept = trim((string)($row['department'] ?? ''));
+        }
+        return $dept;
+    };
 
     // 1) Build completed-index for strict and loose slot matching.
     $completedStrict = [];
@@ -66,6 +135,7 @@ if ($teacher_data) {
             (string)($row['semester'] ?? ''),
             (string)($row['observation_date'] ?? ''),
             (string)($row['observation_time'] ?? ''),
+            $resolve_schedule_department($row),
         ]);
         $loose = implode('|', [
             (string)($row['evaluator_id'] ?? ''),
@@ -73,6 +143,7 @@ if ($teacher_data) {
             (string)($row['academic_year'] ?? ''),
             (string)($row['semester'] ?? ''),
             (string)($row['observation_date'] ?? ''),
+            $resolve_schedule_department($row),
         ]);
         $completedStrict[$strict] = true;
         $completedLoose[$loose] = true;
@@ -92,6 +163,7 @@ if ($teacher_data) {
                 (string)($row['semester'] ?? ''),
                 (string)($row['observation_date'] ?? ''),
                 (string)($row['observation_time'] ?? ''),
+                $resolve_schedule_department($row),
             ]);
             $loose = implode('|', [
                 (string)($row['evaluator_id'] ?? ''),
@@ -99,6 +171,7 @@ if ($teacher_data) {
                 (string)($row['academic_year'] ?? ''),
                 (string)($row['semester'] ?? ''),
                 (string)($row['observation_date'] ?? ''),
+                $resolve_schedule_department($row),
             ]);
             if (isset($completedStrict[$strict]) || isset($completedLoose[$loose])) {
                 continue;
@@ -119,6 +192,7 @@ if ($teacher_data) {
             (string)($row['semester'] ?? ''),
             (string)($row['observation_date'] ?? ''),
             (string)($row['observation_time'] ?? ''),
+            $resolve_schedule_department($row),
         ]);
 
         if (!isset($slotMap[$slotKey])) {
@@ -167,6 +241,29 @@ if ($teacher_data) {
         return trim((string)$value);
     };
 
+    $is_schedule_past_cutoff = static function($row): bool {
+        $cutoffRaw = trim((string)($row['schedule_end_at'] ?? ''));
+        if ($cutoffRaw === '') {
+            $obsDate = trim((string)($row['observation_date'] ?? ''));
+            $obsTime = trim((string)($row['observation_time'] ?? ''));
+            if ($obsDate !== '' && $obsTime !== '') {
+                $cutoffRaw = $obsDate . ' ' . $obsTime;
+            }
+        }
+        if ($cutoffRaw === '') {
+            return false;
+        }
+        try {
+            $tz = new DateTimeZone('Asia/Manila');
+            $cutoffAt = new DateTime($cutoffRaw, $tz);
+            $cutoffAt->setTimezone($tz);
+            $nowAt = new DateTime('now', $tz);
+            return $nowAt > $cutoffAt;
+        } catch (Exception $e) {
+            return false;
+        }
+    };
+
     // 4) Collapse to one card per schedule slot and summarize form completion.
     $grouped = [];
     foreach ($evaluations as $row) {
@@ -176,21 +273,27 @@ if ($teacher_data) {
             $normalize_schedule_date($row['observation_date'] ?? ''),
             $normalize_schedule_time($row['observation_time'] ?? ''),
             $normalize_subject_slot($row['subject_observed'] ?? ''),
+            $resolve_schedule_department($row),
         ]);
         $ft = strtolower(trim((string)($row['evaluation_form_type'] ?? 'iso')));
         if (!in_array($ft, ['iso', 'peac'], true)) $ft = 'iso';
         $isCompleted = (strtolower(trim((string)($row['status'] ?? ''))) === 'completed');
         $isSigned = !empty($row['rater_signature']);
+        $isPastCutoff = (!$isCompleted && $is_schedule_past_cutoff($row));
 
         if (!isset($grouped[$groupKey])) {
             $grouped[$groupKey] = [
                 'row' => $row,
                 'forms' => ['iso' => false, 'peac' => false],
                 'has_completed' => false,
+                'is_closed' => false,
                 'completed_count' => 0,
                 'signed_count' => 0,
                 'unsigned_eval_id' => 0
             ];
+        }
+        if ($isPastCutoff) {
+            $grouped[$groupKey]['is_closed'] = true;
         }
 
         if ($isCompleted) {
@@ -228,6 +331,8 @@ if ($teacher_data) {
         }
         if (!empty($g['has_completed'])) {
             $row['status'] = 'completed';
+        } elseif (!empty($g['is_closed'])) {
+            $row['status'] = 'closed';
         }
         $row['completed_count'] = (int)($g['completed_count'] ?? 0);
         $row['signed_count'] = (int)($g['signed_count'] ?? 0);
@@ -317,6 +422,7 @@ if ($teacher_data) {
         }
         .badge-pending { background: #fff3cd; color: #856404; }
         .badge-completed { background: #d4edda; color: #155724; }
+        .badge-closed { background: #f8d7da; color: #842029; }
         .signature-canvas {
             border: 2px solid #dee2e6;
             border-radius: 4px;
@@ -470,6 +576,7 @@ if ($teacher_data) {
 
                 <?php if(count($evaluations) > 0): ?>
                     <?php foreach($evaluations as $eval): ?>
+                    <?php $evalStatus = strtolower(trim((string)($eval['status'] ?? ''))); ?>
                     <div class="evaluation-card">
                         <div class="row align-items-center">
                             <div class="col-md-8">
@@ -480,9 +587,13 @@ if ($teacher_data) {
                                         echo $obsDate !== '' ? date('F d, Y', strtotime($obsDate)) : 'Not specified';
                                     ?>
                                     <span class="ms-2">
-                                        <?php if($eval['status'] === 'completed'): ?>
+                                        <?php if($evalStatus === 'completed'): ?>
                                             <span class="badge-status badge-completed">
                                                 <i class="fas fa-check-circle me-1"></i>Completed
+                                            </span>
+                                        <?php elseif($evalStatus === 'closed'): ?>
+                                            <span class="badge-status badge-closed">
+                                                <i class="fas fa-times-circle me-1"></i>Closed
                                             </span>
                                         <?php else: ?>
                                             <span class="badge-status badge-pending">
@@ -501,7 +612,7 @@ if ($teacher_data) {
                                 </p>
                             </div>
                             <div class="col-md-4 text-md-end">
-                                <?php if($eval['status'] === 'completed'): ?>
+                                <?php if($evalStatus === 'completed'): ?>
                                     <?php $hasSigned = !empty($eval['has_signed']); ?>
                                     <div class="d-flex gap-2 justify-content-md-end align-items-center flex-wrap">
                                         <a href="view_my_evaluation.php?eval_id=<?php echo $eval['id']; ?>" class="btn-view">
@@ -518,6 +629,10 @@ if ($teacher_data) {
                                         </span>
                                         <?php endif; ?>
                                     </div>
+                                <?php elseif($evalStatus === 'closed'): ?>
+                                <span class="text-muted">
+                                    <i class="fas fa-calendar-times me-2"></i>Schedule Ended
+                                </span>
                                 <?php else: ?>
                                 <span class="text-muted">
                                     <i class="fas fa-hourglass-half me-2"></i>Awaiting Completion

@@ -312,6 +312,22 @@ $exclude_self = ($scoped_evaluator_id === null) ? $_SESSION['user_id'] : null;
 $evaluationsStmt = $evaluation->getEvaluationsForReport($scoped_evaluator_id, $academic_year, $semester, $teacher_id, $report_department, null, '', $form_type_filter, $exclude_self, $report_scope_observer_id);
 $evaluations = $evaluationsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
+$format_subject_class_schedule = static function($subject): string {
+    $subject = trim((string)$subject);
+    if ($subject === '') {
+        return 'N/A';
+    }
+
+    $clean = preg_replace(
+        '/\s+(?:\d{1,2}:\d{2}\s*(?:AM|PM)\s*(?:-\s*\d{1,2}:\d{2}\s*(?:AM|PM)?)?|\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*(?:AM|PM))\s*$/i',
+        '',
+        $subject
+    );
+    $clean = trim((string)$clean);
+
+    return $clean !== '' ? $clean : 'N/A';
+};
+
 $format_day_time = static function(array $eval): string {
     $obsDate = trim((string)($eval['observation_date'] ?? ''));
     if ($obsDate === '') return '';
@@ -1027,18 +1043,27 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                         <i class="fas fa-user-friends me-2"></i>Teacher Observed: <?php echo htmlspecialchars((string)($eval['teacher_name'] ?? 'N/A')); ?>
                                     </p>
                                     <p class="report-card-subtitle">
-                                        <i class="fas fa-book me-2"></i>Subject/Class Schedule: <?php echo htmlspecialchars((string)($eval['subject_observed'] ?? 'N/A')); ?>
+                                        <i class="fas fa-book me-2"></i>Subject/Class Schedule: <?php echo htmlspecialchars($format_subject_class_schedule($eval['subject_observed'] ?? '')); ?>
                                         <?php
                                             $card_start_raw = trim((string)($eval['observation_start_time'] ?? ''));
                                             $card_end_raw = trim((string)($eval['observation_end_time'] ?? ''));
                                             if ($card_start_raw === '') {
                                                 $card_start_raw = trim((string)($eval['observation_time'] ?? ''));
                                             }
+                                            $card_subject_raw = trim((string)($eval['subject_observed'] ?? ''));
                                             $card_time_text = '';
                                             if ($card_start_raw !== '' && $card_end_raw !== '') {
                                                 $card_time_text = date('g:i A', strtotime($card_start_raw)) . ' - ' . date('g:i A', strtotime($card_end_raw));
                                             } elseif ($card_start_raw !== '') {
                                                 $card_time_text = date('g:i A', strtotime($card_start_raw));
+                                            }
+                                            if (preg_match('/(\d{1,2}:\d{2}\s*(?:AM|PM))(?:\s*-\s*(\d{1,2}:\d{2}\s*(?:AM|PM)))?/i', $card_subject_raw, $m)) {
+                                                if ($card_time_text === '' && !empty($m[1])) {
+                                                    $card_time_text = strtoupper(trim($m[1]));
+                                                }
+                                                if (!empty($m[2]) && strpos($card_time_text, ' - ') === false) {
+                                                    $card_time_text .= ' - ' . strtoupper(trim($m[2]));
+                                                }
                                             }
                                             if ($card_time_text !== '') {
                                                 echo ' (' . htmlspecialchars($card_time_text) . ')';
@@ -1056,7 +1081,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                         data-observation-date="<?php echo htmlspecialchars(date('m-d-y', strtotime((string)$eval['observation_date']))); ?>"
                                         data-day-time="<?php echo htmlspecialchars(strip_tags((string)$format_day_time($eval))); ?>"
                                         data-subject-area="<?php echo htmlspecialchars((string)($eval['subject_area'] ?? '')); ?>"
-                                        data-subject="<?php echo htmlspecialchars((string)($eval['subject_observed'] ?? '')); ?>"
+                                        data-subject="<?php echo htmlspecialchars($format_subject_class_schedule($eval['subject_observed'] ?? '')); ?>"
                                         data-room="<?php echo htmlspecialchars((string)($eval['observation_room'] ?? '')); ?>"
                                         data-signature="<?php echo htmlspecialchars($tsig); ?>"
                                         data-teacher-id="<?php echo (int)($eval['teacher_id'] ?? 0); ?>"
@@ -1163,7 +1188,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                         <?php echo htmlspecialchars((string)($eval['evaluator_name'] ?? 'N/A')); ?>
                                     </td>
                                     <td>
-                                        <?php echo htmlspecialchars($eval['subject_observed']); ?><br>
+                                        <?php echo htmlspecialchars($format_subject_class_schedule($eval['subject_observed'] ?? '')); ?><br>
                                         <small class="text-muted"><?php echo $format_day_time($eval); ?></small><br>
                                         <?php if (!empty($eval['observation_type']) && strtolower($eval['observation_type']) !== 'formal'): ?>
                                             <small class="text-muted"><?php echo htmlspecialchars($eval['observation_type']); ?> Observation</small>
@@ -1186,7 +1211,7 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                                             data-observation-date="<?php echo htmlspecialchars(date('m-d-y', strtotime((string)$eval['observation_date']))); ?>"
                                             data-day-time="<?php echo htmlspecialchars(strip_tags((string)$format_day_time($eval))); ?>"
                                             data-subject-area="<?php echo htmlspecialchars((string)($eval['subject_area'] ?? '')); ?>"
-                                            data-subject="<?php echo htmlspecialchars((string)($eval['subject_observed'] ?? '')); ?>"
+                                            data-subject="<?php echo htmlspecialchars($format_subject_class_schedule($eval['subject_observed'] ?? '')); ?>"
                                             data-room="<?php echo htmlspecialchars((string)($eval['observation_room'] ?? '')); ?>"
                                             data-signature="<?php echo htmlspecialchars($tsig); ?>"
                                             data-teacher-id="<?php echo (int)($eval['teacher_id'] ?? 0); ?>"
