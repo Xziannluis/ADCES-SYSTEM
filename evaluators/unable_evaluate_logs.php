@@ -5,7 +5,7 @@ if (!empty($_GET['embedded'])) {
     header('X-Frame-Options: SAMEORIGIN');
 }
 
-$allowed_roles = ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'];
+$allowed_roles = ['dean', 'principal'];
 if (!in_array($_SESSION['role'] ?? '', $allowed_roles, true)) {
     header('Location: ../login.php');
     exit();
@@ -41,67 +41,24 @@ try {
 
 $role = $_SESSION['role'] ?? '';
 $sessionDept = trim((string)($_SESSION['department'] ?? ''));
-$isLeader = in_array($role, ['president', 'vice_president'], true);
-$isCoordinator = in_array($role, ['chairperson', 'subject_coordinator', 'grade_level_coordinator'], true);
 $embedded = !empty($_GET['embedded']);
 
-$allowedDepartments = [];
-if ($isLeader) {
-    try {
-        $deptStmt = $db->query("
-            SELECT DISTINCT dept FROM (
-                SELECT department AS dept FROM teachers WHERE department IS NOT NULL AND department <> ''
-                UNION
-                SELECT scheduled_department AS dept FROM teachers WHERE scheduled_department IS NOT NULL AND scheduled_department <> ''
-                UNION
-                SELECT department AS dept FROM evaluations WHERE department IS NOT NULL AND department <> ''
-                UNION
-                SELECT department AS dept FROM observer_unavailable_slots WHERE department IS NOT NULL AND department <> ''
-            ) d
-            ORDER BY dept
-        ");
-        $allowedDepartments = $deptStmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
-    } catch (Exception $e) {}
-} elseif ($isCoordinator) {
-    $allowedDepartments = resolveEvaluatorPrograms($db, (int)($_SESSION['user_id'] ?? 0), $sessionDept);
-    if ($sessionDept !== '' && !in_array($sessionDept, $allowedDepartments, true)) {
-        $allowedDepartments[] = $sessionDept;
-    }
-} elseif ($sessionDept !== '') {
-    $allowedDepartments = [$sessionDept];
-}
+$allowedDepartments = $sessionDept !== '' ? [$sessionDept] : [];
 $allowedDepartments = array_values(array_unique(array_filter($allowedDepartments)));
 
-$department = trim((string)($_GET['department'] ?? ''));
+$department = $sessionDept;
 $academicYear = trim((string)($_GET['academic_year'] ?? ''));
 $semester = trim((string)($_GET['semester'] ?? ''));
 $month = trim((string)($_GET['month'] ?? ''));
 $observer = trim((string)($_GET['observer'] ?? ''));
 
-if (!$isLeader && $department !== '' && !in_array($department, $allowedDepartments, true)) {
-    $department = '';
-}
-
 $where = [];
 $params = [];
+$departmentExpr = "COALESCE(NULLIF(ous.department, ''), NULLIF(e.department, ''), NULLIF(t.scheduled_department, ''), t.department)";
 
-if ($isLeader) {
-    if ($department !== '') {
-        $where[] = "COALESCE(NULLIF(ous.department, ''), NULLIF(e.department, ''), NULLIF(t.scheduled_department, ''), t.department) = :department";
-        $params[':department'] = $department;
-    }
-} elseif (!empty($allowedDepartments)) {
-    $deptPlaceholders = [];
-    foreach ($allowedDepartments as $idx => $dept) {
-        $ph = ':dept_' . $idx;
-        $deptPlaceholders[] = $ph;
-        $params[$ph] = $dept;
-    }
-    $where[] = "COALESCE(NULLIF(ous.department, ''), NULLIF(e.department, ''), NULLIF(t.scheduled_department, ''), t.department) IN (" . implode(',', $deptPlaceholders) . ")";
-    if ($department !== '') {
-        $where[] = "COALESCE(NULLIF(ous.department, ''), NULLIF(e.department, ''), NULLIF(t.scheduled_department, ''), t.department) = :department";
-        $params[':department'] = $department;
-    }
+if ($department !== '') {
+    $where[] = "$departmentExpr = :department_scope";
+    $params[':department_scope'] = $department;
 } else {
     $where[] = '1 = 0';
 }
@@ -131,7 +88,7 @@ $logsStmt = $db->prepare("
         t.name AS teacher_name,
         u.name AS observer_name,
         u.role AS observer_role,
-        COALESCE(NULLIF(ous.department, ''), NULLIF(e.department, ''), NULLIF(t.scheduled_department, ''), t.department) AS display_department,
+        $departmentExpr AS display_department,
         COALESCE(NULLIF(e.subject_observed, ''), NULLIF(ts.subject, '')) AS subject_observed,
         COALESCE(NULLIF(e.subject_area, ''), NULLIF(ts.subject_area, '')) AS subject_area,
         COALESCE(NULLIF(e.observation_room, ''), NULLIF(ts.room, '')) AS room,
@@ -154,7 +111,16 @@ $logs = $logsStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
 $years = [];
 try {
-    $yearStmt = $db->query("SELECT DISTINCT academic_year FROM observer_unavailable_slots WHERE academic_year <> '' ORDER BY academic_year DESC");
+    $yearStmt = $db->prepare("
+        SELECT DISTINCT ous.academic_year
+        FROM observer_unavailable_slots ous
+        JOIN teachers t ON t.id = ous.teacher_id
+        LEFT JOIN evaluations e ON e.id = ous.eval_id
+        WHERE ous.academic_year <> ''
+          AND $departmentExpr = :department_scope
+        ORDER BY ous.academic_year DESC
+    ");
+    $yearStmt->execute([':department_scope' => $department]);
     $years = $yearStmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
 } catch (Exception $e) {}
 
@@ -426,13 +392,14 @@ $teacherCount = count(array_unique(array_map(static fn($row) => (string)($row['t
                     <?php endif; ?>
                     <div class="col-md-2">
                         <label class="form-label">Department</label>
-                        <select name="department" class="form-select">
-                            <?php if ($isLeader): ?>
-                            <option value="">All Departments</option>
-                            <?php endif; ?>
+                        <input type="hidden" name="department" value="<?php echo h($department); ?>">
+                        <select class="form-select" disabled>
                             <?php foreach ($allowedDepartments as $dept): ?>
-                                <option value="<?php echo h($dept); ?>" <?php echo $department === $dept ? 'selected' : ''; ?>><?php echo h($dept); ?></option>
+                                <option value="<?php echo h($dept); ?>" selected><?php echo h($dept); ?></option>
                             <?php endforeach; ?>
+                            <?php if (empty($allowedDepartments)): ?>
+                                <option value="">No department assigned</option>
+                            <?php endif; ?>
                         </select>
                     </div>
                     <div class="col-md-2">

@@ -920,9 +920,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $_SESSION['error'] = 'No valid schedule selected.';
         } else {
             $removed_count = 0;
-            $src_stmt = $db->prepare("SELECT id, teacher_id, department, academic_year, semester, observation_date, observation_time, evaluation_form_type
-                                      FROM evaluations
-                                      WHERE id = :eid
+            $src_stmt = $db->prepare("SELECT e.id, e.teacher_id, e.department, e.academic_year, e.semester,
+                                             e.observation_date, e.observation_time, e.evaluation_form_type,
+                                             COALESCE(NULLIF(e.department, ''), NULLIF(ts.scheduled_department, ''), NULLIF(t.scheduled_department, ''), t.department) AS log_department
+                                      FROM evaluations e
+                                      JOIN teachers t ON t.id = e.teacher_id
+                                      LEFT JOIN teacher_schedules ts ON ts.evaluation_id = e.id
+                                      WHERE e.id = :eid
                                       LIMIT 1");
             $teacher_user_stmt = $db->prepare("SELECT t.name, t.user_id, u.email
                                                FROM teachers t
@@ -1040,7 +1044,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     ':sem' => (string)($src['semester'] ?? ''),
                     ':od' => (string)($src['observation_date'] ?? ''),
                     ':ot' => (string)($src['observation_time'] ?? ''),
-                    ':dept' => trim((string)($src['department'] ?? '')),
+                    ':dept' => trim((string)($src['log_department'] ?? $src['department'] ?? '')),
                     ':reason' => $observer_reason
                 ]);
 
@@ -2388,6 +2392,7 @@ $is_leader = in_array($_SESSION['role'], ['president', 'vice_president']);
 $is_observer_only = (($_SESSION['role'] ?? '') === 'president');
 $is_coordinator = in_array($_SESSION['role'], ['chairperson', 'subject_coordinator', 'grade_level_coordinator']);
 $is_observer_role = in_array($_SESSION['role'], ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president']);
+$can_view_unable_logs = in_array($_SESSION['role'] ?? '', ['dean', 'principal'], true);
 
 $all_departments = ['ELEM', 'JHS', 'SHS', 'CCIS', 'CAS', 'CTEAS', 'CBM', 'CTHM', 'CCJE'];
 $session_department = trim((string)($_SESSION['department'] ?? ''));
@@ -4791,7 +4796,6 @@ try {
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
                                     <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars(date('M d, Y g:i A', $ts)); ?>" style="width:20px;height:20px;" title="<?php echo $upcoming_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
-                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($my_teacher_data['evaluation_semester'] ?? '') . ' Semester'); ?></td>
                                 <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars($focus_display); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo date('M d, Y', $ts); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $my_day_time; ?></td>
@@ -4956,7 +4960,6 @@ try {
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
                                     <input type="checkbox" class="form-check-input sign-item-check" value="<?php echo (int)$ev['id']; ?>" data-schedule-label="Schedule: <?php echo htmlspecialchars(!empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''); ?>" style="width:20px;height:20px;" title="<?php echo $ev_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
-                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($ev['semester'] ?? '') . ' Semester'); ?></td>
                                 <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars($ev_focus_display); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo !empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $ev_day_time; ?></td>
@@ -5129,7 +5132,7 @@ try {
                     <?php endif; ?>
                 </div>
 
-                <?php if (in_array($_SESSION['role'] ?? '', ['dean', 'principal', 'chairperson', 'subject_coordinator', 'grade_level_coordinator', 'president', 'vice_president'], true)): ?>
+                <?php if ($can_view_unable_logs): ?>
                 <div class="logs-toolbar no-print text-start">
                     <button type="button" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#unableLogsModal">
                         <i class="fas fa-clipboard-list me-1"></i>Logs
@@ -5142,17 +5145,16 @@ try {
                     <table class="plan-table">
                         <thead>
                             <tr>
-                                <th style="width: 12%;">Teacher</th>
-                                <th style="width: 6%;">Semester</th>
-                                <th style="width: 12%;">Focus of Observation</th>
+                                <th style="width: 14%;">Teacher</th>
+                                <th style="width: 16%;">Focus of Observation</th>
                                 <th style="width: 8%;">Date</th>
-                                <th style="width: 7%;">Day &amp; Time</th>
-                                <th style="width: 8%;" id="th_subject_area"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Grade Level/Section' : 'Subject Area'; ?></th>
-                                <th style="width: 8%;" id="th_subject"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
+                                <th style="width: 8%;">Day &amp; Time</th>
+                                <th style="width: 9%;" id="th_subject_area"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Grade Level/Section' : 'Subject Area'; ?></th>
+                                <th style="width: 9%;" id="th_subject"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
                                 <th style="width: 5%;">Room</th>
-                                <th style="width: 12%;">Name of Observers</th>
+                                <th style="width: 14%;">Name of Observers</th>
                                 <th style="width: 10%; min-width: 90px;">Teacher's Signature</th>
-                                <th style="width: 12%; min-width: 70px;">Remarks</th>
+                                <th style="width: 9%; min-width: 70px;">Remarks</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -5278,7 +5280,6 @@ try {
                                             <span class="badge bg-warning text-dark ms-1">Reschedule Request</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td class="text-center"><?php $sem = $sd['semester'] ?? ''; echo htmlspecialchars($sem ? $sem . ' Semester' : ''); ?></td>
                                     <td style="font-size:0.8rem;"><?php echo htmlspecialchars($sd['focus'] ?? ''); ?></td>
                                     <td class="text-center">
                                         <?php 
@@ -5708,10 +5709,11 @@ try {
     </div>
     <?php endif; ?>
 
+    <?php if ($can_view_unable_logs): ?>
     <?php
         $unableLogsParams = [
             'embedded' => 1,
-            'department' => $raw_department,
+            'department' => $_SESSION['department'] ?? $raw_department,
             'academic_year' => $academic_year,
             'semester' => $semester,
             'v' => time(),
@@ -5734,6 +5736,7 @@ try {
             </div>
         </div>
     </div>
+    <?php endif; ?>
 
 <script>
 // Available departments for current user based on their role
