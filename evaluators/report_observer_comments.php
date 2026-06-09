@@ -142,6 +142,7 @@ $stmt->execute([
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
 $items = [];
+$ratingValues = [];
 $observerNo = 1;
 foreach ($rows as $r) {
     $eid = (int)($r['id'] ?? 0);
@@ -171,9 +172,14 @@ foreach ($rows as $r) {
     if (trim((string)($r['recommendations'] ?? '')) !== '') $recs[] = trim((string)$r['recommendations']);
     if (trim((string)($r['agreement'] ?? '')) !== '') $agreements[] = trim((string)$r['agreement']);
 
+    $rating = isset($r['overall_avg']) ? (float)$r['overall_avg'] : 0.0;
+    if ($rating > 0) {
+        $ratingValues[] = $rating;
+    }
+
     $items[] = [
         'observer' => trim((string)($r['observer_name'] ?? '')) !== '' ? trim((string)$r['observer_name']) : ('Observer ' . $observerNo),
-        'rating' => isset($r['overall_avg']) ? number_format((float)$r['overall_avg'], 1) : '',
+        'rating' => $rating > 0 ? number_format($rating, 1) : '',
         'strengths' => array_values(array_unique($strengths)),
         'improvements' => array_values(array_unique($improvements)),
         'recommendations' => array_values(array_unique($recs)),
@@ -182,4 +188,10 @@ foreach ($rows as $r) {
     $observerNo++;
 }
 
-echo json_encode(['ok' => true, 'items' => $items]);
+$overallRating = !empty($ratingValues) ? array_sum($ratingValues) / count($ratingValues) : null;
+
+echo json_encode([
+    'ok' => true,
+    'items' => $items,
+    'overall_rating' => $overallRating !== null ? number_format($overallRating, 1) : '',
+]);

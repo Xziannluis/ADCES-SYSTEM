@@ -1063,15 +1063,14 @@ try {
         <table class="plan-table">
             <thead>
                 <tr>
-                    <th style="width: 11%;">Teacher</th>
-                    <th style="width: 6%;">Semester</th>
-                    <th style="width: 12%;">Focus of Observation</th>
+                    <th style="width: 12%;">Teacher</th>
+                    <th style="width: 14%;">Focus of Observation</th>
                     <th style="width: 8%;">Date</th>
                     <th style="width: 8%;">Day &amp; Time</th>
                     <th style="width: 10%;"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Grade Level/Section' : 'Subject Area'; ?></th>
                     <th style="width: 11%;"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
                     <th style="width: 7%;">Room</th>
-                    <th style="width: 13%;">Name of Observers</th>
+                    <th style="width: 14%;">Name of Observers</th>
                     <th style="width: 7%;">Teacher's Signature</th>
                     <th style="width: 7%;">Remarks</th>
                 </tr>
@@ -1082,7 +1081,6 @@ try {
                     <?php $rk = $t['_row_key'] ?? $t['id']; $tid = $t['id']; $sd = $schedule_data[$rk] ?? []; $is_done = !empty($eval_data[$rk]['done']); ?>
                     <tr>
                         <td><?php echo $counter++ . '. ' . htmlspecialchars($t['name']); ?></td>
-                        <td class="text-center"><?php $sem = $sd['semester'] ?? ''; echo htmlspecialchars($sem ? $sem . ' Semester' : ''); ?></td>
                         <td style="font-size:9px;"><?php echo htmlspecialchars($sd['focus'] ?? ''); ?></td>
                         <td class="text-center">
                             <?php 
@@ -1116,7 +1114,7 @@ try {
                     </tr>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <tr><td colspan="11" class="no-data">No teachers found for the selected filters.</td></tr>
+                    <tr><td colspan="10" class="no-data">No teachers found for the selected filters.</td></tr>
                 <?php endif; ?>
             </tbody>
         </table>

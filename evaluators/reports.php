@@ -342,6 +342,7 @@ foreach ($evaluations as $row) {
         (string)($row['observation_time'] ?? ''),
         (string)($row['subject_observed'] ?? ''),
         (string)($row['evaluation_form_type'] ?? ''),
+        (string)($row['department'] ?? ''),
     ]);
     $currentId = (int)($row['id'] ?? 0);
     if (!isset($deduped[$key]) || $currentId > (int)($deduped[$key]['id'] ?? 0)) {
@@ -1396,6 +1397,11 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
             document.getElementById('previewRoom').textContent = btn.dataset.room || 'N/A';
 
             const commentsWrap = document.getElementById('previewObserverComments');
+            const overallRatingEl = document.getElementById('previewOverallRating');
+            if (overallRatingEl) {
+                overallRatingEl.textContent = '';
+                overallRatingEl.style.display = 'none';
+            }
             commentsWrap.innerHTML = '<div class="text-muted">Loading observer comments...</div>';
             const teacherId = btn.dataset.teacherId || '';
             const obsDateRaw = btn.dataset.observationDateRaw || '';
@@ -1405,10 +1411,18 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                 .then(res => {
                     if (!res || !res.ok || !Array.isArray(res.items) || res.items.length === 0) {
                         commentsWrap.innerHTML = '<div class="text-muted">No observer comments found for this schedule.</div>';
+                        if (overallRatingEl) {
+                            overallRatingEl.textContent = '';
+                            overallRatingEl.style.display = 'none';
+                        }
                         if (currentPreviewData) currentPreviewData.comments = [];
                         return;
                     }
                     if (currentPreviewData) currentPreviewData.comments = res.items;
+                    if (overallRatingEl) {
+                        overallRatingEl.textContent = res.overall_rating ? ('Overall Rating: ' + res.overall_rating) : '';
+                        overallRatingEl.style.display = res.overall_rating ? '' : 'none';
+                    }
                     let html = '';
                     res.items.forEach(item => {
                         const renderList = (arr, emptyTxt) => {
@@ -1427,6 +1441,10 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                 })
                 .catch(() => {
                     commentsWrap.innerHTML = '<div class="text-danger">Unable to load observer comments.</div>';
+                    if (overallRatingEl) {
+                        overallRatingEl.textContent = '';
+                        overallRatingEl.style.display = 'none';
+                    }
                     if (currentPreviewData) currentPreviewData.comments = [];
                 });
 
@@ -1652,7 +1670,10 @@ $stats = $evaluation->getDepartmentStats($is_leader ? ($raw_department ?: '%') :
                         </table>
                     </div>
                     <div class="mt-3">
-                        <div class="fw-semibold mb-2">Observer Comments</div>
+                        <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap mb-2">
+                            <div class="fw-semibold">Observer Comments</div>
+                            <div id="previewOverallRating" class="badge bg-primary" style="display:none;"></div>
+                        </div>
                         <div id="previewObserverComments" class="bg-light border rounded p-2"></div>
                     </div>
                     <div class="mt-3">

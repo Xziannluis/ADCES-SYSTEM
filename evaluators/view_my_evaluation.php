@@ -75,6 +75,7 @@ $anchor_time = $normalize_schedule_time($evaluation['observation_time'] ?? '');
 $anchor_subject = $normalize_subject_slot($evaluation['subject_observed'] ?? '');
 $anchor_academic_year = (string)($evaluation['academic_year'] ?? '');
 $anchor_semester = (string)($evaluation['semester'] ?? '');
+$anchor_department = (string)($evaluation['department'] ?? '');
 
 $schedule_query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, u.department as evaluator_department,
                           t.name as teacher_name, t.evaluation_schedule, t.evaluation_schedule_end
@@ -83,16 +84,18 @@ $schedule_query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_rol
                    JOIN teachers t ON e.teacher_id = t.id
                    WHERE e.teacher_id = :teacher_id
                      AND e.status = 'completed'
-                     AND DATE(e.observation_date) = :observation_date
-                     AND COALESCE(e.academic_year, '') = :academic_year
-                     AND COALESCE(e.semester, '') = :semester
-                   ORDER BY e.created_at ASC, e.id ASC";
+                      AND DATE(e.observation_date) = :observation_date
+                      AND COALESCE(e.academic_year, '') = :academic_year
+                      AND COALESCE(e.semester, '') = :semester
+                      AND COALESCE(e.department, '') = :department
+                    ORDER BY e.created_at ASC, e.id ASC";
 $schedule_stmt = $db->prepare($schedule_query);
 $schedule_stmt->execute([
     ':teacher_id' => (int)$my_teacher['id'],
     ':observation_date' => $anchor_date,
     ':academic_year' => $anchor_academic_year,
     ':semester' => $anchor_semester,
+    ':department' => $anchor_department,
 ]);
 $schedule_candidates = $schedule_stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -218,19 +221,19 @@ $observation_date = $all_evaluations[0]['observation_date'] ?? $evaluation['obse
                         $schedule_text .= ' (' . h($time) . ')';
                     }
 
-                    $evaluator_departments = [];
+                    $schedule_departments = [];
                     foreach ($all_evaluations_data as $entry) {
-                        $evaluator_department = trim((string)($entry['eval']['evaluator_department'] ?? ''));
-                        if ($evaluator_department !== '') {
-                            $evaluator_departments[] = $evaluator_department;
+                        $schedule_department = trim((string)($entry['eval']['department'] ?? ''));
+                        if ($schedule_department !== '') {
+                            $schedule_departments[] = $schedule_department;
                         }
                     }
-                    $evaluator_departments = array_values(array_unique($evaluator_departments));
+                    $schedule_departments = array_values(array_unique($schedule_departments));
                 ?>
 
                 <div class="report-summary">
                     <div class="report-item"><strong>Date:</strong> <?php echo date('F j, Y', strtotime($observation_date)); ?></div>
-                    <div class="report-item"><strong>Department:</strong> <?php echo !empty($evaluator_departments) ? h(implode(', ', $evaluator_departments)) : 'N/A'; ?></div>
+                    <div class="report-item"><strong>Department:</strong> <?php echo !empty($schedule_departments) ? h(implode(', ', $schedule_departments)) : 'N/A'; ?></div>
                     <div class="report-item"><strong>Subject/Class Schedule:</strong> <?php echo $schedule_text; ?></div>
                 </div>
 

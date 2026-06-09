@@ -221,6 +221,7 @@ if ($selected_evaluation_id > 0 && !empty($evaluations)) {
         $selectedTeacherId = (int)($selectedEvaluation['teacher_id'] ?? 0);
         $selectedAcademicYear = trim((string)($selectedEvaluation['academic_year'] ?? ''));
         $selectedSemester = trim((string)($selectedEvaluation['semester'] ?? ''));
+        $selectedDepartment = trim((string)($selectedEvaluation['department'] ?? ''));
         $selectedDate = date('Y-m-d', strtotime((string)($selectedEvaluation['observation_date'] ?? '')));
         $selectedTime = trim((string)($selectedEvaluation['observation_time'] ?? ''));
 
@@ -228,6 +229,7 @@ if ($selected_evaluation_id > 0 && !empty($evaluations)) {
             $selectedTeacherId,
             $selectedAcademicYear,
             $selectedSemester,
+            $selectedDepartment,
             $selectedDate,
             $selectedTime
         ): bool {
@@ -235,6 +237,7 @@ if ($selected_evaluation_id > 0 && !empty($evaluations)) {
             return (int)($evaluationRow['teacher_id'] ?? 0) === $selectedTeacherId
                 && trim((string)($evaluationRow['academic_year'] ?? '')) === $selectedAcademicYear
                 && trim((string)($evaluationRow['semester'] ?? '')) === $selectedSemester
+                && trim((string)($evaluationRow['department'] ?? '')) === $selectedDepartment
                 && $rowDate === $selectedDate
                 && trim((string)($evaluationRow['observation_time'] ?? '')) === $selectedTime;
         }));
@@ -269,16 +272,56 @@ $format_day_time = static function(array $eval): string {
     return $day;
 };
 
-// Keep all evaluator entries in print output so each observer's
-// comments and rating appear in separate rows.
+// Group evaluator entries by schedule for print output. The preview keeps
+// individual observer ratings; the printed report shows the schedule's
+// overall rating while merging observer comments into one row.
+$groupedEvaluations = [];
+foreach ($evaluations as $evaluationRow) {
+    $rowDateRaw = trim((string)($evaluationRow['observation_date'] ?? ''));
+    $rowDate = $rowDateRaw !== '' && strtotime($rowDateRaw) !== false ? date('Y-m-d', strtotime($rowDateRaw)) : $rowDateRaw;
+    $rowTimeRaw = trim((string)($evaluationRow['observation_time'] ?? ''));
+    $rowTime = $rowTimeRaw !== '' && strtotime($rowTimeRaw) !== false ? date('H:i', strtotime($rowTimeRaw)) : $rowTimeRaw;
+    $groupKey = implode('|', [
+        (string)($evaluationRow['teacher_id'] ?? ''),
+        trim((string)($evaluationRow['academic_year'] ?? '')),
+        trim((string)($evaluationRow['semester'] ?? '')),
+        $rowDate,
+        $rowTime,
+        trim((string)($evaluationRow['department'] ?? '')),
+    ]);
+
+    if (!isset($groupedEvaluations[$groupKey])) {
+        $groupedEvaluations[$groupKey] = $evaluationRow;
+        $groupedEvaluations[$groupKey]['_aggregate_rows'] = [];
+        $groupedEvaluations[$groupKey]['_rating_values'] = [];
+    }
+
+    $groupedEvaluations[$groupKey]['_aggregate_rows'][] = $evaluationRow;
+    $ratingValue = isset($evaluationRow['overall_avg']) ? (float)$evaluationRow['overall_avg'] : 0.0;
+    if ($ratingValue > 0) {
+        $groupedEvaluations[$groupKey]['_rating_values'][] = $ratingValue;
+    }
+}
+
+foreach ($groupedEvaluations as &$groupedEvaluation) {
+    $ratingValues = $groupedEvaluation['_rating_values'] ?? [];
+    if (!empty($ratingValues)) {
+        $groupedEvaluation['overall_avg'] = array_sum($ratingValues) / count($ratingValues);
+    }
+}
+unset($groupedEvaluation);
+
+$evaluations = array_values($groupedEvaluations);
 
 $report_ack_sig_map = [];
 try {
     if (!empty($evaluations)) {
         $evalIds = [];
         foreach ($evaluations as $er) {
-            $eid = (int)($er['id'] ?? 0);
-            if ($eid > 0) $evalIds[$eid] = true;
+            foreach (($er['_aggregate_rows'] ?? [$er]) as $sourceEval) {
+                $eid = (int)($sourceEval['id'] ?? 0);
+                if ($eid > 0) $evalIds[$eid] = true;
+            }
         }
         $evalIds = array_keys($evalIds);
         if (!empty($evalIds)) {
@@ -297,10 +340,12 @@ try {
 
 $deanPrintEvaluation = null;
 foreach ($evaluations as $evaluationRow) {
-    $role = strtolower(trim((string)($evaluationRow['evaluator_role'] ?? '')));
-    if ($role === 'dean') {
-        $deanPrintEvaluation = $evaluationRow;
-        break;
+    foreach (($evaluationRow['_aggregate_rows'] ?? [$evaluationRow]) as $sourceEval) {
+        $role = strtolower(trim((string)($sourceEval['evaluator_role'] ?? '')));
+        if ($role === 'dean') {
+            $deanPrintEvaluation = $sourceEval;
+            break 2;
+        }
     }
 }
 ?>
@@ -612,7 +657,7 @@ foreach ($evaluations as $evaluationRow) {
                 <th>Areas for Improvement</th>
                 <th>Recommendation/s</th>
                 <th>Agreement</th>
-                <th>Ratings</th>
+                <th>Overall Ratings</th>
             </tr>
         </thead>
         <tbody>
@@ -628,35 +673,49 @@ foreach ($evaluations as $evaluationRow) {
                     default: $rating_text = 'Needs Improvement'; break;
                 }
 
-                $evaluation_details = $evaluation->getEvaluationDetails($eval['id']);
                 $strengths = [];
                 $areas_for_improvement = [];
                 $recommendations = [];
                 $agreements = [];
 
-                while($detail = $evaluation_details->fetch(PDO::FETCH_ASSOC)) {
-                    if (!empty($detail['comments'])) {
-                        $comment = htmlspecialchars($detail['comments']);
-                        if (stripos($comment, 'strength') !== false || stripos($comment, 'good') !== false || stripos($comment, 'excellent') !== false) {
-                            $strengths[] = $comment;
-                        } elseif (stripos($comment, 'improve') !== false || stripos($comment, 'better') !== false || stripos($comment, 'suggestion') !== false) {
-                            $areas_for_improvement[] = $comment;
-                        } elseif (stripos($comment, 'recommend') !== false) {
-                            $recommendations[] = $comment;
-                        } elseif (stripos($comment, 'agree') !== false || stripos($comment, 'acknowledge') !== false) {
-                            $agreements[] = $comment;
-                        } else {
-                            $strengths[] = $comment;
+                foreach (($eval['_aggregate_rows'] ?? [$eval]) as $sourceEval) {
+                    $evaluation_details = $evaluation->getEvaluationDetails($sourceEval['id']);
+
+                    while($detail = $evaluation_details->fetch(PDO::FETCH_ASSOC)) {
+                        if (!empty($detail['comments'])) {
+                            $comment = htmlspecialchars($detail['comments']);
+                            if (stripos($comment, 'strength') !== false || stripos($comment, 'good') !== false || stripos($comment, 'excellent') !== false) {
+                                $strengths[] = $comment;
+                            } elseif (stripos($comment, 'improve') !== false || stripos($comment, 'better') !== false || stripos($comment, 'suggestion') !== false) {
+                                $areas_for_improvement[] = $comment;
+                            } elseif (stripos($comment, 'recommend') !== false) {
+                                $recommendations[] = $comment;
+                            } elseif (stripos($comment, 'agree') !== false || stripos($comment, 'acknowledge') !== false) {
+                                $agreements[] = $comment;
+                            } else {
+                                $strengths[] = $comment;
+                            }
                         }
+                    }
+
+                    if (!empty($sourceEval['strengths'])) {
+                        $strengths[] = htmlspecialchars($sourceEval['strengths']);
+                    }
+                    if (!empty($sourceEval['improvement_areas'])) {
+                        $areas_for_improvement[] = htmlspecialchars($sourceEval['improvement_areas']);
+                    }
+                    if (!empty($sourceEval['recommendations'])) {
+                        $recommendations[] = htmlspecialchars($sourceEval['recommendations']);
+                    }
+                    if (!empty($sourceEval['agreement'])) {
+                        $agreements[] = htmlspecialchars($sourceEval['agreement']);
                     }
                 }
 
-                if (!empty($eval['strengths'])) {
-                    $strengths[] = htmlspecialchars($eval['strengths']);
-                }
-                if (!empty($eval['improvement_areas'])) {
-                    $areas_for_improvement[] = htmlspecialchars($eval['improvement_areas']);
-                }
+                $strengths = array_values(array_unique($strengths));
+                $areas_for_improvement = array_values(array_unique($areas_for_improvement));
+                $recommendations = array_values(array_unique($recommendations));
+                $agreements = array_values(array_unique($agreements));
                 ?>
                 <tr>
                     <td><?php echo date('M. j, Y', strtotime($eval['observation_date'])); ?></td>
@@ -690,9 +749,6 @@ foreach ($evaluations as $evaluationRow) {
                         <div class="observation-notes">
                             <?php
                             $all_recommendations = $recommendations;
-                            if (!empty($eval['recommendations'])) {
-                                $all_recommendations[] = htmlspecialchars($eval['recommendations']);
-                            }
                             ?>
                             <?php if(!empty($all_recommendations)): ?>
                                 <ul><?php foreach($all_recommendations as $r): ?><li><?php echo $r; ?></li><?php endforeach; ?></ul>
@@ -703,9 +759,7 @@ foreach ($evaluations as $evaluationRow) {
                     </td>
                     <td>
                         <div class="observation-notes">
-                            <?php if(!empty($eval['agreement'])): ?>
-                                <ul><li><?php echo htmlspecialchars($eval['agreement']); ?></li></ul>
-                            <?php elseif(!empty($agreements)): ?>
+                            <?php if(!empty($agreements)): ?>
                                 <ul><?php foreach($agreements as $ag): ?><li><?php echo $ag; ?></li><?php endforeach; ?></ul>
                             <?php else: ?>
                                 <em>No specific agreements recorded.</em>

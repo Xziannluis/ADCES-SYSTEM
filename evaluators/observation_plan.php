@@ -4758,14 +4758,13 @@ try {
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:3%;">
                                     <i class="fas fa-check-square"></i>
                                 </th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:7%;">Semester</th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:19%;">Focus of Observation</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:21%;">Focus of Observation</th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:7%;">Date</th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:8%;">Day &amp; Time</th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:8%;"><?php echo $is_basiced_dept ? 'Grade Level/Section' : 'Subject Area'; ?></th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:7%;"><?php echo $is_basiced_dept ? 'Subject of Instruction' : 'Subject'; ?></th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:5%;">Room</th>
-                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:18%;">Observers</th>
+                                <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:20%;">Observers</th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:8%;">Teacher's Signature</th>
                                 <th style="background:#2c3e50;color:#fff;padding:10px;border:1px solid #dee2e6;width:10%;">Remarks</th>
                             </tr>
@@ -4791,7 +4790,6 @@ try {
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
                                     <input type="checkbox" class="form-check-input sign-item-check" value="upcoming" data-schedule-label="Upcoming: <?php echo htmlspecialchars(date('M d, Y g:i A', $ts)); ?>" style="width:20px;height:20px;" title="<?php echo $upcoming_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
-                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($my_teacher_data['evaluation_semester'] ?? '') . ' Semester'); ?></td>
                                 <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars($focus_display); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo date('M d, Y', $ts); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $my_day_time; ?></td>
@@ -4956,7 +4954,6 @@ try {
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;">
                                     <input type="checkbox" class="form-check-input sign-item-check" value="<?php echo (int)$ev['id']; ?>" data-schedule-label="Schedule: <?php echo htmlspecialchars(!empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''); ?>" style="width:20px;height:20px;" title="<?php echo $ev_signed ? 'Signed schedule (can still be rescheduled)' : 'Select schedule'; ?>">
                                 </td>
-                                <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo htmlspecialchars(($ev['semester'] ?? '') . ' Semester'); ?></td>
                                 <td class="myobs-focus-cell" style="padding:10px;border:1px solid #dee2e6;font-size:0.85rem;"><?php echo htmlspecialchars($ev_focus_display); ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo !empty($ev['observation_date']) ? date('M d, Y', strtotime($ev['observation_date'])) : ''; ?></td>
                                 <td class="text-center" style="padding:10px;border:1px solid #dee2e6;"><?php echo $ev_day_time; ?></td>
@@ -5142,15 +5139,14 @@ try {
                     <table class="plan-table">
                         <thead>
                             <tr>
-                                <th style="width: 12%;">Teacher</th>
-                                <th style="width: 6%;">Semester</th>
-                                <th style="width: 12%;">Focus of Observation</th>
+                                <th style="width: 13%;">Teacher</th>
+                                <th style="width: 14%;">Focus of Observation</th>
                                 <th style="width: 8%;">Date</th>
                                 <th style="width: 7%;">Day &amp; Time</th>
                                 <th style="width: 8%;" id="th_subject_area"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Grade Level/Section' : 'Subject Area'; ?></th>
                                 <th style="width: 8%;" id="th_subject"><?php echo in_array($raw_department, ['JHS', 'ELEM']) ? 'Subject of Instruction' : 'Subject'; ?></th>
                                 <th style="width: 5%;">Room</th>
-                                <th style="width: 12%;">Name of Observers</th>
+                                <th style="width: 14%;">Name of Observers</th>
                                 <th style="width: 10%; min-width: 90px;">Teacher's Signature</th>
                                 <th style="width: 12%; min-width: 70px;">Remarks</th>
                             </tr>
@@ -5278,7 +5274,6 @@ try {
                                             <span class="badge bg-warning text-dark ms-1">Reschedule Request</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td class="text-center"><?php $sem = $sd['semester'] ?? ''; echo htmlspecialchars($sem ? $sem . ' Semester' : ''); ?></td>
                                     <td style="font-size:0.8rem;"><?php echo htmlspecialchars($sd['focus'] ?? ''); ?></td>
                                     <td class="text-center">
                                         <?php 
@@ -6723,9 +6718,9 @@ function openRequestObserverModal() {
     var row = cb.closest('tr');
     var cells = row ? row.querySelectorAll('td') : [];
     var teacherText = cells.length > 0 ? cells[0].textContent.replace(/\s+/g, ' ').trim() : 'Selected teacher';
-    var dateText = cells.length > 3 ? cells[3].textContent.replace(/\s+/g, ' ').trim() : '';
-    var timeText = cells.length > 4 ? cells[4].textContent.replace(/\s+/g, ' ').trim() : '';
-    var subjectText = cells.length > 6 ? cells[6].textContent.replace(/\s+/g, ' ').trim() : '';
+    var dateText = cells.length > 2 ? cells[2].textContent.replace(/\s+/g, ' ').trim() : '';
+    var timeText = cells.length > 3 ? cells[3].textContent.replace(/\s+/g, ' ').trim() : '';
+    var subjectText = cells.length > 5 ? cells[5].textContent.replace(/\s+/g, ' ').trim() : '';
 
     var evalInput = document.getElementById('requestObserverEvalId');
     var teacherLabel = document.getElementById('requestObserverTeacherLabel');

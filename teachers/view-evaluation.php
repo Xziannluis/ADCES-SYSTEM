@@ -11,36 +11,104 @@ require_once '../config/database.php';
 
 $db = (new Database())->getConnection();
 
-// Get all evaluations for this teacher grouped by observation date
-if(!isset($_GET['date'])) {
+// View one exact schedule group. New links pass eval_id; date remains as a
+// fallback for old links.
+if(!isset($_GET['eval_id']) && !isset($_GET['date'])) {
     $_SESSION['error'] = "Invalid request.";
     header("Location: dashboard.php");
     exit();
 }
 
-$obs_date = trim($_GET['date']);
+$normalize_schedule_date = static function($value): string {
+    $value = trim((string)$value);
+    if ($value === '') return '';
+    $ts = strtotime($value);
+    return $ts ? date('Y-m-d', $ts) : $value;
+};
 
-// Get all evaluations for this teacher on this date
-$query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, u.department as evaluator_department, t.name as teacher_name, 
-                 t.evaluation_schedule, t.evaluation_schedule_end
-          FROM evaluations e
-          JOIN users u ON e.evaluator_id = u.id
-          JOIN teachers t ON e.teacher_id = t.id
-          WHERE DATE(e.observation_date) = :obs_date AND e.teacher_id = :teacher_id
-            AND e.status = 'completed'
-          ORDER BY e.created_at ASC, e.id ASC";
+$normalize_schedule_time = static function($value): string {
+    $value = trim((string)$value);
+    if ($value === '') return '';
+    $ts = strtotime($value);
+    if ($ts) return date('H:i', $ts);
+    if (preg_match('/^(\d{1,2}):(\d{2})/', $value, $m)) {
+        return sprintf('%02d:%02d', (int)$m[1], (int)$m[2]);
+    }
+    return $value;
+};
 
-$stmt = $db->prepare($query);
-$stmt->bindParam(':obs_date', $obs_date);
-$stmt->bindParam(':teacher_id', $_SESSION['teacher_id']);
-$stmt->execute();
+$normalize_subject_slot = static function($value): string {
+    $value = strtolower(trim((string)$value));
+    if ($value === '') return '';
+    $value = preg_replace('/\s+\d{1,2}:\d{2}\s*(am|pm)(?:\s*-\s*(?:\d{1,2}:\d{2}\s*(am|pm))?)?\s*$/i', '', $value);
+    return trim((string)$value);
+};
 
-$all_evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$base_query = "SELECT e.*, u.name as evaluator_name, u.role as evaluator_role, u.department as evaluator_department,
+                      t.name as teacher_name, t.evaluation_schedule, t.evaluation_schedule_end
+               FROM evaluations e
+               JOIN users u ON e.evaluator_id = u.id
+               JOIN teachers t ON e.teacher_id = t.id
+               WHERE e.teacher_id = :teacher_id
+                 AND e.status = 'completed'";
 
-if(empty($all_evaluations)) {
+if (!empty($_GET['eval_id'])) {
+    $anchor_query = $base_query . " AND e.id = :eval_id LIMIT 1";
+    $anchor_stmt = $db->prepare($anchor_query);
+    $anchor_stmt->execute([
+        ':teacher_id' => (int)$_SESSION['teacher_id'],
+        ':eval_id' => (int)$_GET['eval_id'],
+    ]);
+} else {
+    $anchor_query = $base_query . " AND DATE(e.observation_date) = :obs_date ORDER BY e.created_at ASC, e.id ASC LIMIT 1";
+    $anchor_stmt = $db->prepare($anchor_query);
+    $anchor_stmt->execute([
+        ':teacher_id' => (int)$_SESSION['teacher_id'],
+        ':obs_date' => $normalize_schedule_date($_GET['date'] ?? ''),
+    ]);
+}
+
+$anchor_evaluation = $anchor_stmt->fetch(PDO::FETCH_ASSOC);
+
+if(empty($anchor_evaluation)) {
     $_SESSION['error'] = "No evaluations found for this date.";
     header("Location: dashboard.php");
     exit();
+}
+
+$anchor_date = $normalize_schedule_date($anchor_evaluation['observation_date'] ?? '');
+$anchor_time = $normalize_schedule_time($anchor_evaluation['observation_time'] ?? '');
+$anchor_subject = $normalize_subject_slot($anchor_evaluation['subject_observed'] ?? '');
+$anchor_academic_year = (string)($anchor_evaluation['academic_year'] ?? '');
+$anchor_semester = (string)($anchor_evaluation['semester'] ?? '');
+$anchor_department = (string)($anchor_evaluation['department'] ?? '');
+
+$schedule_query = $base_query . "
+                 AND DATE(e.observation_date) = :observation_date
+                 AND COALESCE(e.academic_year, '') = :academic_year
+                 AND COALESCE(e.semester, '') = :semester
+                 AND COALESCE(e.department, '') = :department
+               ORDER BY e.created_at ASC, e.id ASC";
+$schedule_stmt = $db->prepare($schedule_query);
+$schedule_stmt->execute([
+    ':teacher_id' => (int)$_SESSION['teacher_id'],
+    ':observation_date' => $anchor_date,
+    ':academic_year' => $anchor_academic_year,
+    ':semester' => $anchor_semester,
+    ':department' => $anchor_department,
+]);
+$schedule_candidates = $schedule_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$all_evaluations = [];
+foreach ($schedule_candidates as $candidate) {
+    $candidate_time = $normalize_schedule_time($candidate['observation_time'] ?? '');
+    $candidate_subject = $normalize_subject_slot($candidate['subject_observed'] ?? '');
+    if ($candidate_time === $anchor_time && ($anchor_subject === '' || $candidate_subject === $anchor_subject)) {
+        $all_evaluations[] = $candidate;
+    }
+}
+if (empty($all_evaluations)) {
+    $all_evaluations[] = $anchor_evaluation;
 }
 
 // Get teacher name (same for all rows)
@@ -212,22 +280,22 @@ foreach ($all_evaluations as $eval) {
                         }
 
                         $observer_names = [];
-                        $evaluator_departments = [];
+                        $schedule_departments = [];
                         foreach ($all_evaluations_data as $entry) {
                             $observer_name = trim((string)($entry['eval']['evaluator_name'] ?? ''));
                             if ($observer_name !== '') {
                                 $observer_names[] = $observer_name;
                             }
-                            $evaluator_department = trim((string)($entry['eval']['evaluator_department'] ?? ''));
-                            if ($evaluator_department !== '') {
-                                $evaluator_departments[] = $evaluator_department;
+                            $schedule_department = trim((string)($entry['eval']['department'] ?? ''));
+                            if ($schedule_department !== '') {
+                                $schedule_departments[] = $schedule_department;
                             }
                         }
                         $observer_names = array_values(array_unique($observer_names));
-                        $evaluator_departments = array_values(array_unique($evaluator_departments));
+                        $schedule_departments = array_values(array_unique($schedule_departments));
                         ?>
                         <div class="report-item"><strong>Date:</strong> <?php echo date('F j, Y', strtotime($observation_date)); ?></div>
-                        <div class="report-item"><strong>Department:</strong> <?php echo !empty($evaluator_departments) ? htmlspecialchars(implode(', ', $evaluator_departments)) : 'N/A'; ?></div>
+                        <div class="report-item"><strong>Department:</strong> <?php echo !empty($schedule_departments) ? htmlspecialchars(implode(', ', $schedule_departments)) : 'N/A'; ?></div>
                         <div class="report-item"><strong>Subject/Class Schedule:</strong> <?php echo $schedule_text; ?></div>
                     </div>
 

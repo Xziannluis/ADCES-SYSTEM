@@ -177,30 +177,52 @@ $normalize_subject_slot = static function(string $subject): string {
     return trim((string)$s);
 };
 
-// Group evaluations by observation date (merge multiple evaluators into one card per date)
+$normalize_schedule_time = static function($value): string {
+    $value = trim((string)$value);
+    if ($value === '') return '';
+    $ts = strtotime($value);
+    if ($ts) return date('H:i', $ts);
+    if (preg_match('/^(\d{1,2}):(\d{2})/', $value, $m)) {
+        return sprintf('%02d:%02d', (int)$m[1], (int)$m[2]);
+    }
+    return $value;
+};
+
+// Group evaluations by schedule slot. Different departments on the same date
+// must stay as separate cards for multi-department teachers.
 $display_evaluations = [];
 try {
-    $date_groups = [];
+    $slot_groups = [];
     
-    // Group all evaluations by observation_date
     foreach ($evaluations as $row) {
         $obs_date = (string)($row['observation_date'] ?? '');
         if ($obs_date === '') continue;
         
         $dateKey = date('Y-m-d', strtotime($obs_date));
+        $timeKey = $normalize_schedule_time($row['observation_time'] ?? '');
+        $subjectKey = $normalize_subject_slot((string)($row['subject_observed'] ?? ''));
+        $departmentKey = trim((string)($row['department'] ?? $row['evaluator_department'] ?? ''));
+        $slotKey = implode('|', [
+            $dateKey,
+            $timeKey,
+            $subjectKey,
+            trim((string)($row['academic_year'] ?? '')),
+            trim((string)($row['semester'] ?? '')),
+            $departmentKey,
+        ]);
         
-        if (!isset($date_groups[$dateKey])) {
-            $date_groups[$dateKey] = [];
+        if (!isset($slot_groups[$slotKey])) {
+            $slot_groups[$slotKey] = [];
         }
-        $date_groups[$dateKey][] = $row;
+        $slot_groups[$slotKey][] = $row;
     }
     
-    // For each date, create one merged card showing the date and all evaluators
-    foreach ($date_groups as $dateKey => $evals_for_date) {
+    foreach ($slot_groups as $slotKey => $evals_for_date) {
         if (empty($evals_for_date)) continue;
         
         // Use the first evaluation as the base for the card
         $base = $evals_for_date[0];
+        $dateKey = date('Y-m-d', strtotime((string)($base['observation_date'] ?? '')));
         
         // Check completion for this date. The expected observer count should
         // include evaluator rows plus assigned observers that appear in the
@@ -285,6 +307,7 @@ try {
         $merged_eval['evaluator_names'] = [];
         $merged_eval['evaluator_count'] = $expected_count;
         $merged_eval['completed_count'] = $completed_count;
+        $merged_eval['_anchor_eval_id'] = (int)($base['id'] ?? 0);
         
         // Collect all expected observer names
         foreach ($expected_observer_names as $name) {
@@ -626,7 +649,7 @@ if (empty($display_evaluations)) {
                             </div>
                             <div class="col-md-4 text-md-end">
                                 <?php if($eval['status'] === 'completed' && !empty($eval['observation_date'])): ?>
-                                <a href="view-evaluation.php?date=<?php echo urlencode(date('Y-m-d', strtotime($eval['observation_date']))); ?>" class="btn-view">
+                                <a href="view-evaluation.php?eval_id=<?php echo (int)($eval['_anchor_eval_id'] ?? $eval['id'] ?? 0); ?>" class="btn-view">
                                     <i class="fas fa-eye me-2"></i>View 
                                 </a>
                                 <?php else: ?>
