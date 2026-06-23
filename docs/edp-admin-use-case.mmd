@@ -1,0 +1,58 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Arial", "primaryColor": "#fff7ed", "primaryBorderColor": "#c2410c", "primaryTextColor": "#1f2937", "lineColor": "#475569", "tertiaryColor": "#f8fafc"}}}%%
+flowchart LR
+    edp["EDP Admin"]
+
+    subgraph system["ADCES System - EDP Administration"]
+        login(("Login"))
+        changePassword(("Change Password"))
+        forgotPassword(("Forgot Password"))
+
+        manageUsers(("Manage Users"))
+        manageTeachers(("Manage Teachers"))
+        manageEvaluators(("Manage Evaluators"))
+        activateEvaluators(("Activate / Deactivate Evaluators"))
+        activateTeachers(("Activate / Deactivate Teachers"))
+        uploadTeacherPhoto(("Upload Teacher Photo"))
+
+        configureForm(("Configure Form Settings"))
+        assignCoordinators(("Assign Coordinators"))
+        assignTeachers(("Assign Teachers to Evaluators"))
+        viewStats(("View Department Statistics"))
+    end
+
+    email["Email Service"]
+    teacherRecords["Teacher Records"]
+    evaluatorRecords["Evaluator Records"]
+    formRecords["Evaluation Form Settings"]
+
+    edp --> login
+    edp --> changePassword
+    edp --> forgotPassword
+    edp --> manageUsers
+    edp --> manageTeachers
+    edp --> manageEvaluators
+    edp --> activateEvaluators
+    edp --> activateTeachers
+    edp --> uploadTeacherPhoto
+    edp --> configureForm
+    edp --> assignCoordinators
+    edp --> assignTeachers
+    edp --> viewStats
+
+    forgotPassword -.->|uses| email
+    manageTeachers -.->|updates| teacherRecords
+    uploadTeacherPhoto -.->|updates| teacherRecords
+    manageEvaluators -.->|updates| evaluatorRecords
+    activateEvaluators -.->|updates| evaluatorRecords
+    activateTeachers -.->|updates| teacherRecords
+    configureForm -.->|updates| formRecords
+    assignCoordinators -.->|updates| evaluatorRecords
+    assignTeachers -.->|updates| teacherRecords
+
+    classDef actor fill:#ffffff,stroke:#111827,stroke-width:2px,color:#111827;
+    classDef usecase fill:#fff7ed,stroke:#c2410c,stroke-width:1.5px,color:#1f2937;
+    classDef external fill:#eff6ff,stroke:#2563eb,stroke-width:1.4px,color:#1f2937;
+
+    class edp actor;
+    class login,changePassword,forgotPassword,manageUsers,manageTeachers,manageEvaluators,activateEvaluators,activateTeachers,uploadTeacherPhoto,configureForm,assignCoordinators,assignTeachers,viewStats usecase;
+    class email,teacherRecords,evaluatorRecords,formRecords external;
